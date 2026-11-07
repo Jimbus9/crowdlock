@@ -49,6 +49,23 @@ export function transportFor(dmk, TransportBase) {
 }
 
 /**
+ * Give a step that may never answer a time limit. A connection that went stale
+ * (a cable replugged, the phone asleep for hours) can leave the kit waiting
+ * for ever with nothing on screen; this turns that into an error, so the app
+ * can say so and start the kit afresh. `onTimeout` runs once, only on a timeout.
+ */
+export function withTimeout(promise, ms, message, onTimeout) {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try { onTimeout?.(); } catch {}
+      reject(new Error(message));
+    }, ms);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Find a Ledger: the one saved before (same id), or any Ledger plugged in by
  * cable — a cable is unambiguous. Which Ledger it really is gets checked after
  * connecting, by its fingerprint, so the wrong one is refused either way.

@@ -17,7 +17,7 @@ import TransportBase from "@ledgerhq/hw-transport";
 // @ts-ignore — plain modules shared with the tests
 import { NETWORKS } from "./wallet/core.mjs";
 // @ts-ignore
-import { transportFor, findLedger } from "./ledgerLink.mjs";
+import { transportFor, findLedger, withTimeout } from "./ledgerLink.mjs";
 import { loadLedgerStore, saveLedgerStore } from "./storage";
 
 export const LEDGER_PREFIX = "ledger:";
@@ -39,6 +39,16 @@ function dmk() {
   kit ??= new DeviceManagementKitBuilder().addTransport(RNBleTransportFactory).addTransport(RNHidTransportFactory).build();
   return kit;
 }
+// Start the kit afresh next time: after a connection that never answered, its
+// old state is not to be trusted.
+function resetKit() {
+  try { kit?.close?.(); } catch {}
+  kit = null;
+}
+// Finding and opening the Ledger, including the time a person takes to tap
+// Allow on the phone's USB prompt. Signing is not limited: it waits for the
+// person to read and approve on the device.
+const CONNECT_LIMIT_MS = 60000;
 const viaOf = (d: any): "bluetooth" | "cable" => (d.transport === rnHidTransportIdentifier ? "cable" : "bluetooth");
 
 /** Ask Android for Bluetooth. Android 12 and later name it; older ones file it under location. A cable needs neither. */
@@ -72,17 +82,19 @@ export async function withLedger<T>(w: { deviceId: string; device?: any }, netwo
   const store = await loadLedgerStore();
   let session: any;
   try {
-    const device = w.device ?? await findLedger(dmk(), { deviceId: w.deviceId, usb: rnHidTransportIdentifier } as any);
-    session = await ledgerApi.connect({
-      driver: {
-        transport: Promise.resolve({ default: transportFor(dmk(), TransportBase) }),
-        bitcoinApi: Promise.resolve(bitcoinApi),
-        device,
-        app: { name: ledgerAppFor(network), minVersion: MIN_APP },
-      } as any,
-      network: (NETWORKS as any)[network].network,
-      store,
-    } as any);
+    session = await withTimeout((async () => {
+      const device = w.device ?? await findLedger(dmk(), { deviceId: w.deviceId, usb: rnHidTransportIdentifier } as any);
+      return ledgerApi.connect({
+        driver: {
+          transport: Promise.resolve({ default: transportFor(dmk(), TransportBase) }),
+          bitcoinApi: Promise.resolve(bitcoinApi),
+          device,
+          app: { name: ledgerAppFor(network), minVersion: MIN_APP },
+        } as any,
+        network: (NETWORKS as any)[network].network,
+        store,
+      } as any);
+    })(), CONNECT_LIMIT_MS, "timed out", resetKit);
   } catch (e: any) { throw new Error(plain(e, network)); }
   try { return await fn(session); }
   catch (e: any) { throw new Error(plain(e, network)); }

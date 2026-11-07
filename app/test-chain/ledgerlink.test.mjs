@@ -9,7 +9,7 @@ import { Buffer } from "buffer";
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 import * as bitcoinApi from "@ledgerhq/ledger-bitcoin";
 import { networks } from "@bitcoinerlab/descriptors";
-import { transportFor as transportForKit, findLedger } from "../src/ledgerLink.mjs";
+import { transportFor as transportForKit, findLedger, withTimeout } from "../src/ledgerLink.mjs";
 import { createRequire } from "node:module";
 const TransportBase = createRequire(import.meta.url)("@ledgerhq/hw-transport");
 const transportFor = (kit) => transportForKit(kit, TransportBase);
@@ -83,6 +83,21 @@ const connectWith = (kit, store = {}, app = "Bitcoin Test") => ledgerApi.connect
   kit = pretendKit({ devices: [ble("someone-else")] });
   let msg = ""; try { await findLedger(kit, { deviceId: "mine", timeoutMs: 60 }); } catch (e) { msg = e.message; }
   check("No Ledger found says so plainly, and stops looking", /Couldn't find your Ledger/.test(msg) && kit.log.stopped === 1, msg);
+}
+
+{
+  // A connection that never answers (seen on a real phone after hours idle)
+  // must become an error, and the kit must be started afresh, once.
+  let resets = 0, msg = "";
+  try { await withTimeout(new Promise(() => {}), 40, "timed out", () => resets++); } catch (e) { msg = e.message; }
+  check("A connection that never answers becomes an error, and the kit is reset once", msg === "timed out" && resets === 1, msg);
+  resets = 0;
+  const got = await withTimeout(Promise.resolve("connected"), 40, "timed out", () => resets++);
+  check("A connection that answers is untouched, and nothing is reset", got === "connected" && resets === 0);
+  resets = 0; msg = "";
+  try { await withTimeout(Promise.reject(new Error("0x6985")), 40, "timed out", () => resets++); } catch (e) { msg = e.message; }
+  await new Promise((r) => setTimeout(r, 80));
+  check("A refusal passes through as itself, with no reset and no late timeout", msg === "0x6985" && resets === 0, msg);
 }
 
 console.log(failures === 0 ? "\nThe adapter carries the library's Ledger conversation faithfully over Ledger's maintained kit." : `\n${failures} check(s) failed.`);
