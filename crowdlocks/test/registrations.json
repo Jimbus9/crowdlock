@@ -28,6 +28,12 @@
       "address": "tb1qje6a9mazk4s8l2mxyg6pxt7xhpg6fcamn7n6gd",
       "signature": "Hy5Px7BjzVPL1hmbRk/Q5EQ4msqdFGTAReDa0kiEEOwEftUG3teA0fOhiyG5sAoa2BFvyY8K58aGtcSR6YuRva4=",
       "signed": "2026-11-02"
+    },
+    {
+      "n": 5,
+      "address": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "signature": "HwD2OCPjoOzP/9xm/ZjIfWRwsuGEFl1qlT69uEFimQteIh/2VbQ1tIR+Px+6pf/XLfY88ESyp2ocQ20PnfDB5HI=",
+      "signed": "2026-11-07"
     }
   ],
   "locks": [
