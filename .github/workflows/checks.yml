@@ -56,3 +56,13 @@ jobs:
       - name: The app — type check
         working-directory: app
         run: npx tsc --noEmit -p .
+
+      # The Kop Fund's own repository carries a copy of the reference code
+      # (the checking code its pages and relay inbox run). This fails, naming
+      # the files, when the two drift apart.
+      - uses: actions/checkout@v4
+        with:
+          repository: Jimbus9/the-kop-fund
+          path: the-kop-fund
+      - name: The Kop Fund's copy of the reference code
+        run: node method/check-kop-fund-copy.mjs the-kop-fund
