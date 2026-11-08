@@ -70,23 +70,38 @@ export function withTimeout(promise, ms, message, onTimeout) {
  * cable — a cable is unambiguous. Which Ledger it really is gets checked after
  * connecting, by its fingerprint, so the wrong one is refused either way.
  * Resolves with the kit's device, or rejects after `timeoutMs`.
+ *
+ * It listens on the cable and on Bluetooth separately, with the kit's
+ * `listenToAvailableDevices` (the kit's Bluetooth transport does its scanning
+ * there, not in `startDiscovering`), so Bluetooth being off or not allowed
+ * can't stop a Ledger on a cable being found. When both fail, or time runs
+ * out, the reason is the last error seen, if any.
  */
-export function findLedger(dmk, { deviceId, timeoutMs = 20000, usb = "RN_HID" } = {}) {
+export function findLedger(dmk, { deviceId, timeoutMs = 20000, usb = "RN_HID", ble = "RN_BLE" } = {}) {
   return new Promise((resolve, reject) => {
-    let done = false;
-    let sub = null;
+    let done = false, failed = 0, lastError = null;
+    const subs = [];
     const finish = (fn, v) => {
       if (done) return; done = true;
       clearTimeout(timer);
       // Unsubscribing may have to wait until subscribe() has returned.
-      setTimeout(() => { try { sub?.unsubscribe(); } catch {} }, 0);
+      setTimeout(() => { for (const s of subs) try { s?.unsubscribe(); } catch {} }, 0);
       Promise.resolve(dmk.stopDiscovering()).catch(() => {});
       fn(v);
     };
-    const timer = setTimeout(() => finish(reject, new Error("Couldn't find your Ledger. Keep it unlocked and close to the phone (or plugged in), then try again.")), timeoutMs);
-    sub = dmk.startDiscovering({}).subscribe({
-      next: (d) => { if (d.id === deviceId || d.transport === usb) finish(resolve, d); },
-      error: (e) => finish(reject, e instanceof Error ? e : new Error(String(e?.message ?? e))),
-    });
+    const notFound = () => lastError ?? new Error("Couldn't find your Ledger. Keep it unlocked and close to the phone (or plugged in), then try again.");
+    const timer = setTimeout(() => finish(reject, notFound()), timeoutMs);
+    for (const transport of [usb, ble]) {
+      subs.push(dmk.listenToAvailableDevices({ transport }).subscribe({
+        next: (list) => {
+          const hit = (Array.isArray(list) ? list : [list]).find((d) => d.id === deviceId || d.transport === usb);
+          if (hit) finish(resolve, hit);
+        },
+        error: (e) => {
+          lastError = e instanceof Error ? e : new Error(String(e?.message ?? e?._tag ?? e));
+          if (++failed === 2) finish(reject, notFound());
+        },
+      }));
+    }
   });
 }

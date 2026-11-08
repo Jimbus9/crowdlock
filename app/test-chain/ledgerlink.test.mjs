@@ -19,7 +19,7 @@ const check = (name, ok, detail = "") => { console.log(`${ok ? "PASS" : "FAIL"} 
 
 // A pretend kit and device: answers "which app is open" and "your fingerprint",
 // records every message, and can be told to refuse.
-function pretendKit({ app = "Bitcoin Test", version = "2.4.1", fingerprint = "f00dbabe", refuse = false, devices = [] } = {}) {
+function pretendKit({ app = "Bitcoin Test", version = "2.4.1", fingerprint = "f00dbabe", refuse = false, devices = [], broken = {} } = {}) {
   const log = { sent: [], connected: [], disconnected: [], stopped: 0 };
   const ok = Uint8Array.from([0x90, 0x00]);
   const kit = {
@@ -37,8 +37,15 @@ function pretendKit({ app = "Bitcoin Test", version = "2.4.1", fingerprint = "f0
       if (cla === 0xe1 && ins === 0x05) return { data: Uint8Array.from(Buffer.from(fingerprint, "hex")), statusCode: ok };
       return { data: new Uint8Array(), statusCode: Uint8Array.from([0x6d, 0x00]) };
     },
-    startDiscovering() {
-      return { subscribe: ({ next }) => { const t = devices.map((d, i) => setTimeout(() => next(d), 5 * (i + 1))); return { unsubscribe: () => t.forEach(clearTimeout) }; } };
+    // The kit's Bluetooth transport scans only here (its startDiscovering is
+    // empty), so the pretend kit has no startDiscovering: calling it would throw.
+    listenToAvailableDevices({ transport }) {
+      return { subscribe: ({ next, error }) => {
+        if (broken[transport]) { const t = setTimeout(() => error(new Error(broken[transport])), 5); return { unsubscribe: () => clearTimeout(t) }; }
+        const mine = devices.filter((d) => d.transport === transport);
+        const t = mine.map((_, i) => setTimeout(() => next(mine.slice(0, i + 1)), 5 * (i + 1)));
+        return { unsubscribe: () => t.forEach(clearTimeout) };
+      } };
     },
     async stopDiscovering() { log.stopped++; },
   };
@@ -83,6 +90,13 @@ const connectWith = (kit, store = {}, app = "Bitcoin Test") => ledgerApi.connect
   kit = pretendKit({ devices: [ble("someone-else")] });
   let msg = ""; try { await findLedger(kit, { deviceId: "mine", timeoutMs: 60 }); } catch (e) { msg = e.message; }
   check("No Ledger found says so plainly, and stops looking", /Couldn't find your Ledger/.test(msg) && kit.log.stopped === 1, msg);
+  kit = pretendKit({ devices: [ble("someone-else"), ble("mine")] });
+  check("A Ledger seen only over Bluetooth is found (the kit scans Bluetooth through listenToAvailableDevices)", (await findLedger(kit, { deviceId: "mine" })).transport === "RN_BLE");
+  kit = pretendKit({ devices: [usb], broken: { RN_BLE: "BlePoweredOff" } });
+  check("Bluetooth being off doesn't hide a Ledger on a cable", (await findLedger(kit, { deviceId: "mine" })).id === "usb-7");
+  kit = pretendKit({ broken: { RN_BLE: "BlePoweredOff", RN_HID: "no usb" } });
+  msg = ""; try { await findLedger(kit, { deviceId: "mine", timeoutMs: 500 }); } catch (e) { msg = e.message; }
+  check("When both ways fail, the reason comes through at once", /no usb|BlePoweredOff/.test(msg), msg);
 }
 
 {

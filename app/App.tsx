@@ -181,7 +181,8 @@ function LedgerSetup({ from, go }: { from?: string; go: Go }) {
     stop.current?.();
     stop.current = lookForLedgers(
       (d) => setDevices((old) => (old.some((x) => x.id === d.id) ? old : [...old, d])),
-      (e) => { setError(e.message); setStage("start"); },
+      // A Bluetooth problem is shown but the search carries on, so a cable still works.
+      (e, via) => { setError(e.message); if (via === "cable") setStage("start"); },
     );
   };
 

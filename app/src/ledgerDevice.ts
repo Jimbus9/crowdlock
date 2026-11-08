@@ -63,12 +63,17 @@ export async function askForBluetooth(): Promise<boolean> {
 }
 
 /** Look for Ledgers nearby or plugged in. Calls `found` for each; returns a function that stops looking. */
-export function lookForLedgers(found: (d: FoundLedger) => void, failed: (e: Error) => void): () => void {
-  const sub = dmk().startDiscovering({}).subscribe({
-    next: (d: any) => found({ id: d.id, name: d.name || d.deviceModel?.name || "Ledger", via: viaOf(d), device: d }),
-    error: (e: any) => failed(new Error(plain(e))),
-  });
-  return () => { try { sub.unsubscribe(); } catch {} dmk().stopDiscovering().catch(() => {}); };
+export function lookForLedgers(found: (d: FoundLedger) => void, failed: (e: Error, via: "bluetooth" | "cable") => void): () => void {
+  // The kit's Bluetooth transport scans only through listenToAvailableDevices
+  // (its startDiscovering is empty), and each way is listened to on its own so
+  // a problem with one (Bluetooth off, not allowed) doesn't hide the other.
+  const subs = [rnHidTransportIdentifier, rnBleTransportIdentifier].map((transport) =>
+    dmk().listenToAvailableDevices({ transport }).subscribe({
+      next: (list: any) => (Array.isArray(list) ? list : [list]).forEach((d: any) =>
+        found({ id: d.id, name: d.name || d.deviceModel?.name || "Ledger", via: viaOf(d), device: d })),
+      error: (e: any) => failed(new Error(plain(e)), transport === rnHidTransportIdentifier ? "cable" : "bluetooth"),
+    }));
+  return () => { for (const s of subs) { try { s.unsubscribe(); } catch {} } dmk().stopDiscovering().catch(() => {}); };
 }
 
 /**
@@ -83,7 +88,7 @@ export async function withLedger<T>(w: { deviceId: string; device?: any }, netwo
   let session: any;
   try {
     session = await withTimeout((async () => {
-      const device = w.device ?? await findLedger(dmk(), { deviceId: w.deviceId, usb: rnHidTransportIdentifier } as any);
+      const device = w.device ?? await findLedger(dmk(), { deviceId: w.deviceId, usb: rnHidTransportIdentifier, ble: rnBleTransportIdentifier } as any);
       return ledgerApi.connect({
         driver: {
           transport: Promise.resolve({ default: transportFor(dmk(), TransportBase) }),
@@ -113,6 +118,7 @@ export function plain(e: any, network = "testnet4"): string {
   if (/Open the .* app|0x6e01|0x6d02|0x6511|0x6e00|CLA_NOT_SUPPORTED|app.*not open/i.test(m)) return `Open the ${app} app on your Ledger and try again.`;
   if (/upgrade/i.test(m)) return `Update the ${app} app on your Ledger (in Ledger Live), then try again.`;
   if (/locked|0x5515|0x6b0c|DeviceLocked/i.test(m)) return "Unlock your Ledger with its PIN and try again.";
+  if (/Permissions not granted|BlePermissionsNotGranted|Unauthorized/i.test(m)) return "Allow Crowdlock's Nearby devices permission in your phone's settings (Apps → Crowdlock → Permissions), then try again — or plug the Ledger in with a USB cable.";
   if (/BluetoothRequired|PoweredOff|bluetooth.*off|BleNotSupported/i.test(m)) return "Turn on Bluetooth and try again — or plug the Ledger in with a USB cable.";
   if (/Couldn't find your Ledger/i.test(m)) return m;
   if (/timeout|timed out|disconnected|Disconnected|not found|no device|NoAccessibleDevice|OpeningConnection/i.test(m)) return "Couldn't reach the Ledger. Keep it unlocked and close to the phone (or plugged in), then try again.";
