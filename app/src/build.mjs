@@ -6,7 +6,7 @@
 
 /** The Crowdlocks this build starts with. Anything else, the fan adds. */
 export const STARTING_LIST = [
-  "https://jimbus9.github.io/fanfund/crowdlocks/kop-fund.json",
+  "https://jimbus9.github.io/the-kop-fund/crowdlocks/kop-fund.json",
   "https://jimbus9.github.io/fanfund/crowdlocks/kop-fund-testnet4.json",
 ];
 

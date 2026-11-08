@@ -34,17 +34,5 @@
     "registrations": "registrations.json",
     "destinations": "destinations.json"
   },
-  "chain_api": "https://mempool.space/api",
-  "relays": [
-    "wss://relay.damus.io",
-    "wss://nos.lol",
-    "wss://relay.primal.net",
-    "wss://nostr.mom",
-    "wss://offchain.pub"
-  ],
-  "spare_relays": [
-    "wss://relay.snort.social",
-    "wss://nostr-pub.wellorder.net",
-    "wss://relay.nostr.bg"
-  ]
+  "chain_api": "https://mempool.space/api"
 }
