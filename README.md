@@ -51,9 +51,7 @@ The public pages at https://jimbus9.github.io/fanfund/, and the services behind 
 | A mock-up of the register, with invented figures | `mock/` |
 | Styling | `style.css` |
 | GitHub Pages setting (stops Pages mangling the files) | `.nojekyll` |
-| Which folders Pages does not publish | `.assetsignore` |
 | The relay inbox's schedule, run by GitHub | `.github/workflows/relay-inbox.yml` |
-| The old join and lock endpoint, being retired (worker, not used by the relays) | `worker.js`, `wrangler.jsonc`, `DEPLOYING-THE-JOIN-ENDPOINT.md` |
 
 ## 4. The Crowdlock app
 
@@ -80,7 +78,7 @@ The code moved under `method/` so the four layers are visible from the top. Only
 | `anchor/` | `method/anchor/` | Yes |
 | `relay/` | `method/relay/` | Yes (and still not published by Pages) |
 
-Not moved, so their URLs did not change: `join/`, `lock/`, `crowdlocks/`, `spec/`, `mock/`, `worker.js`, and the founder template's own paths (`relay/`, `js/` in a founder's repository are unchanged).
+Not moved, so their URLs did not change: `join/`, `lock/`, `crowdlocks/`, `spec/`, `mock/`, and the founder template's own paths (`relay/`, `js/` in a founder's repository are unchanged).
 
 What might be broken from the move, and where to look:
 

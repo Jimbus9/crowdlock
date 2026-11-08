@@ -126,8 +126,8 @@ Fund's is `crowdlocks/kop-fund.json`: copy it and change the values.
 | `register` | Your registrations and destinations files | `registrations.json`, `destinations.json` |
 | `chain_api` | Where the register reads balances from. Anybody can swap in their own | mempool.space |
 | `disclaimer` | Optional. Shown on your register page | Not affiliated with Liverpool FC |
-| `join_endpoint` | Optional. An https address that accepts signed registrations, so clients and apps can submit without GitHub. It can refuse but never forge; the pull request route stays open | The Kop Fund's Cloudflare Worker |
-| `lock_endpoint` | Optional. The same for locks: an https address that checks a lock's terms against the chain and publishes it. Can refuse but never invent a lock; the pull request route stays open | The Kop Fund's Cloudflare Worker |
+| `join_endpoint` | Optional. An https address that accepts signed registrations, so clients and apps can submit without GitHub. It can refuse but never forge; the pull request route stays open | — (The Kop Fund no longer runs one; members join through the relays) |
+| `lock_endpoint` | Optional. The same for locks: an https address that checks a lock's terms against the chain and publishes it. Can refuse but never invent a lock; the pull request route stays open | — (The Kop Fund no longer runs one; members join through the relays) |
 | `relays` | Optional. Public Nostr relays where members post signed registrations and locks, for the Crowdlock's own repository to collect every two minutes — no endpoint, account or key in the path | — |
 | `spare_relays` | Optional. Published in advance; one replaces a live relay that has been silent for 7 days, in a commit saying so | — |
 
