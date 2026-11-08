@@ -36,7 +36,7 @@ import bs58check from "bs58check";
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
-import { messageHash } from "../../../method/js/verify.mjs";
+import { messageHash, verifyMembership } from "../../../method/js/verify.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
 export const NETWORKS = {
@@ -269,7 +269,7 @@ export async function waitingBalance(chain, address) {
  * Refuses rather than build anything that would lose money to fees, strand
  * money as dust, or send to an address on the wrong network.
  */
-export async function buildSend({ account, chain, to, amount, feeRate }) {
+export async function buildSend({ account, chain, to, amount, feeRate, policies = [] }) {
   const net = account.network;
   if (!Number.isFinite(feeRate) || feeRate < 1 || feeRate > 1000) {
     throw new Error("fee rate must be between 1 and 1000 sats per vbyte");
@@ -326,7 +326,7 @@ export async function buildSend({ account, chain, to, amount, feeRate }) {
   dest.updatePsbtAsOutput({ psbt, value: sent });
   if (change > 0n) account.output.updatePsbtAsOutput({ psbt, value: change });
 
-  await signWith(account, psbt);
+  await signWith(account, psbt, policies);
   for (const finalize of finalizers) finalize({ psbt });
 
   const tx = psbt.extractTransaction();
@@ -432,7 +432,13 @@ export async function buildLock({ account, chain, lock, feeRate, amount = "all" 
   // A Ledger can only take a lock home if it can recognise it, so it never
   // locks money into one it couldn't open: the co-signer's xpub must be there.
   if (account.kind === "ledger") cosignerExpression(account, lock.cosignerPubkey, lock.cosignerXpub);
-  return buildSend({ account, chain, to: lock.address, amount, feeRate });
+  // And it is asked to approve the lock's rules now, before any money moves
+  // (once; it remembers), so a Ledger that would refuse them says so here and
+  // not when the date comes, a year on. Taking it home later finds it approved.
+  const policies = account.kind === "ledger"
+    ? [{ descriptor: lockDescriptor(account, check.cosignerPubkey, lock.locktime, lock.cosignerXpub), name: lockPolicyName(lock.locktime) }]
+    : [];
+  return buildSend({ account, chain, to: lock.address, amount, feeRate, policies });
 }
 
 /**
@@ -563,7 +569,13 @@ export async function relock({ account, chain, lock, newLock, feeRate, medianTim
     waitIndexes.push(psbt.inputCount - 1);
   }
   dest.updatePsbtAsOutput({ psbt, value: sent });
-  await signWith(account, psbt, [{ descriptor: oldDescriptor, name: lockPolicyName(lock.locktime) }]);
+  // The new lock's rules are approved now too, so the device has read them
+  // long before it has to take that lock home.
+  const policies = [{ descriptor: oldDescriptor, name: lockPolicyName(lock.locktime) }];
+  if (account.kind === "ledger") {
+    policies.push({ descriptor: lockDescriptor(account, next.cosignerPubkey, newLock.locktime, newLock.cosignerXpub), name: lockPolicyName(newLock.locktime) });
+  }
+  await signWith(account, psbt, policies);
   for (const finalize of finalizers) finalize({ psbt });
   for (const i of waitIndexes) psbt.finalizeInput(i);
   const tx = psbt.extractTransaction();
@@ -647,6 +659,31 @@ export function ledgerOriginPath(network = "mainnet") {
 /** Read a Ledger's account once: its key expression, from the device. */
 export async function readLedgerAccount(session, network = "mainnet") {
   return ledgerApi.keyExpression({ session, originPath: ledgerOriginPath(network), keyPath: "/0/0" });
+}
+
+/**
+ * "Check my Ledger": prove the device in hand is the one this wallet uses and
+ * that it can still sign. In one connection (which already checks the right
+ * Bitcoin app is open and the same Ledger, by fingerprint) it re-reads the
+ * account and compares it with the saved one, then has the device sign a
+ * harmless dated message, shown on its screen, and verifies that signature
+ * with the same code the register uses. Nothing is sent anywhere.
+ * `network` is the network's name (as in NETWORKS).
+ */
+export async function checkLedgerKey({ account, network, now = new Date() }) {
+  if (account.kind !== "ledger") throw new Error("this wallet's key is not on a Ledger");
+  const statement = `Crowdlock key check ${now.toISOString().slice(0, 10)}`;
+  return account.useLedger(async (session) => {
+    const keyExpression = await readLedgerAccount(session, network);
+    if (keyExpression !== account.keyExpression) {
+      return { ok: false, reason: "This Ledger gives a different account from the one this wallet uses." };
+    }
+    const sig = await ledgerApi.signMessage({ descriptor: `wpkh(${account.keyExpression})`, session, message: statement });
+    const signature = typeof sig === "string" ? sig : toBase64(sig);
+    const r = verifyMembership({ address: account.address, signature, message: statement, hrp: account.network.bech32 });
+    if (!r.valid) return { ok: false, reason: `The signature didn't check out (${r.reason}).` };
+    return { ok: true, fingerprint: account.fingerprint, address: account.address, statement };
+  });
 }
 
 /**

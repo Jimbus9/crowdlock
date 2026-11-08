@@ -18,19 +18,23 @@ export function fakeLedger(words, network) {
   const root = BIP32.fromSeed(mnemonicToSeedSync(words), network);
   const fingerprint = Buffer.from(root.fingerprint).toString("hex");
   const registered = new Map(); // hmac hex -> { name, template, keys }
-  const log = { registered: [], signed: [], messages: [] };
+  const log = { registered: [], signed: [], messages: [], order: [] };
+  const options = { refuseRegistration: false }; // a Ledger whose owner presses Reject
   const id = (p) => createHash("sha256").update(JSON.stringify([p.name, p.descriptorTemplate, p.keys])).digest();
 
   const client = {
     async getMasterFingerprint() { return fingerprint; },
     async getExtendedPubkey(path) { return root.derivePath(path).neutered().toBase58(); },
     async registerWallet(policy) {
+      if (options.refuseRegistration) throw new Error("Ledger device: Condition of use not satisfied (denied by the user?) (0x6985)");
+      log.order.push("register");
       const hmac = randomBytes(32);
       registered.set(hmac.toString("hex"), { name: policy.name, template: policy.descriptorTemplate, keys: [...policy.keys] });
       log.registered.push({ name: policy.name, template: policy.descriptorTemplate, keys: [...policy.keys] });
       return [id(policy), hmac];
     },
     async signPsbt(psbtBase64, policy, hmac) {
+      log.order.push("sign");
       const custom = hmac !== null && hmac !== undefined;
       if (custom) {
         const r = registered.get(Buffer.from(hmac).toString("hex"));
@@ -64,5 +68,5 @@ export function fakeLedger(words, network) {
       return Buffer.concat([Buffer.from([31 + recoveryId]), Buffer.from(signature)]).toString("base64");
     },
   };
-  return { client, fingerprint, log };
+  return { client, fingerprint, log, options };
 }

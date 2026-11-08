@@ -340,7 +340,7 @@ rule("MILESTONE 4: A LEDGER WALLET — JOIN, LOCK, TAKE IT HOME, LOCK AGAIN");
   const { BIP32 } = await import("@bitcoinerlab/descriptors");
   const { mnemonicToSeedSync } = await import("@scure/bip39");
   const {
-    readLedgerAccount, ledgerAccountFrom, signStatementWith, lockPolicyName, keyFromXpub, xpubForNetwork,
+    readLedgerAccount, ledgerAccountFrom, signStatementWith, lockPolicyName, keyFromXpub, xpubForNetwork, checkLedgerKey,
   } = await import("../src/wallet/core.mjs");
 
   const ledgerWords = newWords();
@@ -371,7 +371,20 @@ rule("MILESTONE 4: A LEDGER WALLET — JOIN, LOCK, TAKE IT HOME, LOCK AGAIN");
     ledLock.address === lockAddress({ ownerPubkey: led.publicKey, cosignerPubkey: coKey, locktime: LT }, "rb"));
   await refuses("A Ledger won't lock money into a lock it couldn't take home (no co-signer xpub)",
     () => buildLock({ account: led, chain, lock: { ...ledLock, cosignerXpub: undefined }, feeRate: 2, amount: 250_000n }), "xpub");
+  // A Ledger whose owner rejects the lock's rules: nothing is signed, so
+  // nothing can be sent. (A different date, so it is a rule it hasn't approved.)
+  const ledLockOther = { ...lockFor({ account: led, cosignerPubkey: coKey, locktime: LT + 86400 }), cosignerXpub: coXpub };
+  const signedBefore = device.log.signed.length;
+  device.options.refuseRegistration = true;
+  await refuses("A Ledger that refuses the lock's rules stops the lock before anything is signed",
+    () => buildLock({ account: led, chain, lock: ledLockOther, feeRate: 2, amount: 250_000n }), "denied");
+  device.options.refuseRegistration = false;
+  check("…and nothing was signed", device.log.signed.length === signedBefore);
+
   const sentIn = await buildLock({ account: led, chain, lock: ledLock, feeRate: 2, amount: 250_000n });
+  check("Locking asks the device to approve the lock's rules first, then signs the payment",
+    device.log.registered.length === 1 && device.log.registered[0].name === lockPolicyName(LT)
+      && device.log.order.join() === "register,sign", device.log.order.join());
   await chain.broadcast(sentIn.hex);
   await rpc("generatetoaddress", [1, miner.address]);
   const ledState = async (l) => lockState({ chain, lock: l, medianTime: await chain.medianTime() });
@@ -394,10 +407,13 @@ rule("MILESTONE 4: A LEDGER WALLET — JOIN, LOCK, TAKE IT HOME, LOCK AGAIN");
   const renewTx = await relock({ account: led, chain, lock: ledLock, newLock: ledRenewed, feeRate: 2, medianTime: await chain.medianTime(), addWaiting: true });
   await chain.broadcast(renewTx.hex);
   await rpc("generatetoaddress", [1, miner.address]);
-  const reg = device.log.registered.at(-1);
-  check("The device is asked to approve the lock's rules once, by name, in the form a Ledger accepts",
-    reg?.template === `wsh(and_v(v:pk(@0/**),or_i(after(${LT}),pk(@1/**))))` && reg.name === lockPolicyName(LT)
-      && reg.keys[1] === xpubForNetwork(coXpub, net.network), reg?.name);
+  const reg0 = device.log.registered[0], reg = device.log.registered.at(-1);
+  check("The device approved the lock's rules once, by name, in the form a Ledger accepts",
+    reg0?.template === `wsh(and_v(v:pk(@0/**),or_i(after(${LT}),pk(@1/**))))` && reg0.name === lockPolicyName(LT)
+      && reg0.keys[1] === xpubForNetwork(coXpub, net.network), reg0?.name);
+  check("Locking it again has the device approve the new lock's rules too (old ones were already approved)",
+    device.log.registered.length === 2 && reg.name === lockPolicyName(ledRenewed.locktime)
+      && reg.template === `wsh(and_v(v:pk(@0/**),or_i(after(${ledRenewed.locktime}),pk(@1/**))))`, `${device.log.registered.length} approvals`);
   check("The Ledger locks it again, old lock and waiting money together, and the network accepts it",
     (await ledState(ledRenewed)).confirmed === lockedBefore + waitingBefore - renewTx.fee && (await ledState(ledLock)).state === "withdrawn");
 
@@ -411,6 +427,18 @@ rule("MILESTONE 4: A LEDGER WALLET — JOIN, LOCK, TAKE IT HOME, LOCK AGAIN");
     (await ledState(ledRenewed)).state === "withdrawn" && (await waitingBalance(chain, led.address)).confirmed === homeTx.sent,
     `${homeTx.sent} sats home`);
   check("…one connection to the device for the whole transaction", connections === before + 1);
+  check("Taking it home asks the device for no new approval: it approved those rules when the lock was made", device.log.registered.length === 2);
+
+  // "Check my Ledger"
+  const kc = await checkLedgerKey({ account: led, network: "regtest", now: new Date("2026-11-08T10:00:00Z") });
+  check("Check my Ledger: same account, and it signs a dated message that verifies",
+    kc.ok === true && kc.statement === "Crowdlock key check 2026-11-08" && kc.address === led.address
+      && device.log.messages.at(-1)?.text === "Crowdlock key check 2026-11-08", JSON.stringify(kc));
+  const other = fakeLedger(newWords(), net.network);
+  const otherSession = { client: other.client, bitcoinApi, network: net.network, store: {} };
+  const kcWrong = await checkLedgerKey({ account: { ...led, useLedger: async (fn) => fn(otherSession) }, network: "regtest" });
+  check("Check my Ledger: a different Ledger's account is reported, and nothing is signed", kcWrong.ok === false && /different account/.test(kcWrong.reason ?? "") && other.log.messages.length === 0, kcWrong.reason);
+  await refuses("Check my Ledger: refuses a wallet that isn't on a Ledger", () => checkLedgerKey({ account: miner, network: "regtest" }), "not on a Ledger");
   check("The key never left the device: the wallet can't sign by itself", (() => { try { led.signer(); return false; } catch { return true; } })());
 }
 

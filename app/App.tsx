@@ -26,7 +26,7 @@ import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
 import {
   newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend, signStatement,
-  lockFor, lockDate, buildLock, lockState, takeHome, relock, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
+  lockFor, lockDate, buildLock, lockState, takeHome, relock, checkLedgerKey, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
   isPublicKey, keyFromXpub, xpubForKey, ledgerAccountFrom, readLedgerAccount, signStatementWith,
 } from "./src/wallet/core.mjs";
 import {
@@ -345,6 +345,20 @@ function Home({ words, go }: { words: string; go: Go }) {
   const [balance, setBalance] = useState<{ confirmed: bigint; arriving: bigint } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [keyCheck, setKeyCheck] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // "Check my Ledger": the same Ledger, the same account, and it can still sign.
+  const checkKey = async () => {
+    setChecking(true); setKeyCheck(null);
+    try {
+      const r = await checkLedgerKey({ account, network: NETWORK });
+      setKeyCheck(r.ok
+        ? { ok: true, text: `Your Ledger is working. It's the same Ledger (${r.fingerprint}), it gave the same address, and it signed "${r.statement}", which checks out.` }
+        : { ok: false, text: r.reason ?? "The check failed." });
+    } catch (e: any) { setKeyCheck({ ok: false, text: String(e.message ?? e) }); }
+    setChecking(false);
+  };
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -392,6 +406,11 @@ function Home({ words, go }: { words: string; go: Go }) {
       <Button label="Add a Crowdlock" kind="plain" onPress={() => go({ name: "addCrowdlock", words })} />
       <Button label="Start a Crowdlock" kind="plain" onPress={() => go({ name: "startCrowdlock", words })} />
       <Button label="Make a co-signer key" kind="plain" onPress={() => go({ name: "cosignerKey", words })} />
+      {account.kind === "ledger" && <>
+        <Button label={checking ? "Look at your Ledger…" : "Check my Ledger"} kind="plain" disabled={checking} onPress={checkKey} />
+        {keyCheck && <Text style={keyCheck.ok ? s.good : s.error}>{keyCheck.text}</Text>}
+        <Text style={s.note}>Checks it's the same Ledger, gives the same address, and can still sign. It signs a harmless dated message you approve on its screen; nothing is sent.</Text>
+      </>}
       {account.kind !== "ledger" && <Button label="Use a Ledger instead" kind="plain" onPress={() => go({ name: "ledgerSetup", from: words })} />}
       <Button label="Remove wallet from this phone" kind="danger" onPress={remove} />
     </View>
@@ -772,7 +791,8 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
     Alert.alert(
       `Lock ${chosen.amount === "all" ? `everything waiting (${btc(waiting.confirmed)})` : btc(chosen.shown)} until ${when(locktime)}?`,
       (chosen.amount === "all" ? "The network fee comes out of it. " : "The network fee is paid from what stays waiting. ")
-        + "Until that date it can only leave the lock into a purchase you sign for yourself. After it, you can take it home whenever you like. This cannot be undone.",
+        + "Until that date it can only leave the lock into a purchase you sign for yourself. After it, you can take it home whenever you like. This cannot be undone."
+        + (account.kind === "ledger" ? " Your Ledger will first ask you to approve the lock's rules, then the payment: if it refuses the rules, nothing is sent." : ""),
       [
         { text: "Cancel", style: "cancel" },
         { text: "Lock it", onPress: async () => {
@@ -828,7 +848,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
         { text: "Lock it again", onPress: async () => {
           setBusy(row.address); setMessage(null);
           try {
-            const newLock = lockFor({ account, cosignerPubkey: cosigner, locktime });
+            const newLock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner) };
             const tx = await relock({
               account, chain, lock: { ...row, cosignerXpub: xpubForKey(c.crowdlock, row.cosignerPubkey) }, newLock, addWaiting: extra > 0n,
               feeRate: await chain.feeRate(), medianTime: await chain.medianTime(),
