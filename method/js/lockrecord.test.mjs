@@ -76,7 +76,7 @@ rule();
 console.log("WHAT THE ENDPOINT ACCEPTS");
 rule();
 
-const kop = JSON.parse(readFileSync(new URL("../../crowdlocks/kop-fund.json", import.meta.url), "utf8"));
+const kop = JSON.parse(readFileSync(new URL("../fixtures/the-kop-fund/crowdlocks/kop-fund.json", import.meta.url), "utf8"));
 const crowdlock = { ...kop, cosigner_keys: [COSIGNER] };
 const member = memberAddressForOwnerKey(OWNER, "bc");
 const register = {

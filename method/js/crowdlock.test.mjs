@@ -12,6 +12,10 @@ import {
 const root = new URL("../../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
 const json = (p) => JSON.parse(read(p));
+// The Kop Fund's frozen copy (method/fixtures/the-kop-fund): a real mainnet Crowdlock.
+const fix = new URL("../fixtures/the-kop-fund/", import.meta.url);
+const readFix = (p) => readFileSync(new URL(p, fix), "utf8");
+const jsonFix = (p) => JSON.parse(readFix(p));
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -52,12 +56,20 @@ for (const slug of index.crowdlocks) {
   } catch (e) { f = { ok: false, problems: [`a register file is missing or unreadable: ${e.message}`] }; }
   check(`${c.name}: its register files agree with it`, f.ok, f.problems.join("; "));
 }
+{
+  const c = jsonFix("crowdlocks/kop-fund.json");
+  all.push(c);
+  const r = checkCrowdlock(c, { declarationText: readFix(c.declaration.file) });
+  check(`${c.name}: file is complete and its declaration hashes correctly`, r.ok, r.problems.join("; "));
+  const f = checkRegisterFiles(c, { registrations: jsonFix(c.register.registrations), destinations: jsonFix(c.register.destinations) });
+  check(`${c.name}: its register files agree with it`, f.ok, f.problems.join("; "));
+}
 const sep = checkSeparate(all);
 check("No two Crowdlocks share a declaration or a co-signer", sep.ok, sep.problems.join("; "));
 
 // The Kop Fund's statement must come out byte for byte as it always has,
 // or every signature ever made would stop verifying.
-const kop = json("crowdlocks/kop-fund.json");
+const kop = jsonFix("crowdlocks/kop-fund.json");
 check("The Kop Fund's signing statement is unchanged",
   membershipStatement(kop) ===
     "I agree to the Supporters' Declaration v1 (sha256:3a0a0bca96ec2161d98ff9da05ae885d6b8d68e55ed412bc85dcc7fb16209b96) and join as a member.");
@@ -71,7 +83,7 @@ rule();
 console.log("WHAT MUST BE REFUSED");
 rule();
 
-const decl = read(kop.declaration.file);
+const decl = readFix(kop.declaration.file);
 const K = (b) => "02" + b.repeat(32); // a well-formed compressed key
 const mirror = (k) => "03" + k.slice(2);
 
@@ -122,7 +134,7 @@ refuses("An unknown network",
 refuses("A register file naming another declaration",
   checkRegisterFiles(kop, { registrations: { declaration: { sha256: "f".repeat(64) } } }), "different declaration");
 refuses("A destinations list from another Crowdlock",
-  checkRegisterFiles(kop, { destinations: { ...json("destinations.json"), instance: "e".repeat(64) } }), "different Crowdlock");
+  checkRegisterFiles(kop, { destinations: { ...jsonFix("destinations.json"), instance: "e".repeat(64) } }), "different Crowdlock");
 
 const woods = {
   ...kop, name: "A woodland",

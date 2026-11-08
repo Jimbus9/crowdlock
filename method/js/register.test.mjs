@@ -23,7 +23,8 @@ import { verifyMembership } from "./verify.mjs";
 import { checkRegisterFiles, membershipStatement } from "./crowdlock.mjs";
 import { lockAddress, hrpFor } from "./lockrecord.mjs";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// The Kop Fund's frozen copy (method/fixtures/the-kop-fund), not a live register.
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "the-kop-fund");
 const read = (p) => JSON.parse(readFileSync(join(root, p), "utf8"));
 
 let failures = 0;

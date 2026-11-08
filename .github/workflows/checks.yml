@@ -13,7 +13,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - "registrations.json"
       - "crowdlocks/test/registrations.json"
       - "method/relay/health.json"
       - "method/relay/announced.json"

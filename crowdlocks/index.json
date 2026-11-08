@@ -1,5 +1,5 @@
 {
   "format": 1,
-  "note": "Every Crowdlock this site knows about, by the name of its file in this folder. To add one, write its file and add its name here. The first is shown by default.",
-  "crowdlocks": ["kop-fund"]
+  "note": "Every Crowdlock this site knows about, by the name of its file in this folder. This repository holds only the test Crowdlock; The Kop Fund has its own repository.",
+  "crowdlocks": ["kop-fund-testnet4"]
 }

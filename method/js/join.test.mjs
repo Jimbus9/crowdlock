@@ -18,7 +18,8 @@ import { verifyMembership } from "./verify.mjs";
 import { membershipStatement } from "./crowdlock.mjs";
 
 const ECPair = ECPairFactory(ecc);
-const R = fileURLToPath(new URL("../../", import.meta.url));
+// The Kop Fund's frozen copy (method/fixtures/the-kop-fund): a real mainnet Crowdlock.
+const R = fileURLToPath(new URL("../fixtures/the-kop-fund/", import.meta.url));
 
 let failures = 0;
 const check = (name, got, want, detail = "") => {

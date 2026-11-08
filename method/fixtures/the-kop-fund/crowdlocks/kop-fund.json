@@ -2,7 +2,7 @@
   "format": 1,
   "name": "The Kop Fund",
   "about": "Supporters buying a stake in Liverpool Football Club.",
-  "site": "https://jimbus9.github.io/fanfund/join/",
+  "site": "https://jimbus9.github.io/the-kop-fund/join/",
   "disclaimer": "An independent initiative by supporters of Liverpool Football Club. Not affiliated with, endorsed by or connected to Liverpool Football Club, its owners, or any official supporters' organisation.",
   "declaration": {
     "title": "Supporters' Declaration",
@@ -34,5 +34,17 @@
     "registrations": "registrations.json",
     "destinations": "destinations.json"
   },
-  "chain_api": "https://mempool.space/api"
+  "chain_api": "https://mempool.space/api",
+  "relays": [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+    "wss://nostr.mom",
+    "wss://offchain.pub"
+  ],
+  "spare_relays": [
+    "wss://relay.snort.social",
+    "wss://nostr-pub.wellorder.net",
+    "wss://relay.nostr.bg"
+  ]
 }

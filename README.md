@@ -1,13 +1,12 @@
-# Crowdlock, and The Kop Fund
+# Crowdlock — the method, and the app
 
-This repository holds four things that are easy to mix up. This page says which is which and where it lives.
+This repository holds the **method** (rules, reference code and tests) and the **Crowdlock app**. **The Kop Fund no longer lives here**: since 8 November 2026 it has its own repository, https://github.com/Jimbus9/the-kop-fund (site https://jimbus9.github.io/the-kop-fund/), so that its maintainers can be given access to the fund alone.
 
 1. **Crowdlock** — the method. A set of published rules for a fund that nobody pools money into: fans lock their own bitcoin, and a purchase is funded by each fan signing their own locked money into it. Anyone can copy it.
-2. **The Kop Fund** — one Crowdlock: a fund of Liverpool supporters buying a stake in Liverpool Football Club. It is the first instance of the method, and the only one run from this repository.
-3. **The Kop Fund's website** — the public pages for The Kop Fund, and the small services that run beside them.
-4. **The Crowdlock app** — a phone wallet that follows the method. It works with any Crowdlock, and any founder can start one.
+2. **The Crowdlock app** — a phone wallet that follows the method. It works with any Crowdlock, and any founder can start one.
+3. **A test Crowdlock** on testnet4, kept here for testing the app and the method.
 
-If you are new, read `spec/declaration-v1.txt` (what The Kop Fund is for), then `spec/running-your-own.md` (what the method is).
+If you are new, read `spec/running-your-own.md` (what the method is), and for the fund itself `spec/declaration-v1.txt`.
 
 ## 1. Crowdlock (the method)
 
@@ -25,33 +24,17 @@ General to any Crowdlock. Nothing in these files names Liverpool.
 | The relay inbox: collecting records from Nostr relays | `method/relay/` (copied into every founder's repository as `relay/`) |
 | The licence: code MIT, documents CC BY 4.0 | `LICENSE`, `spec/LICENSE` |
 
-## 2. The Kop Fund (this instance)
-
-Values and documents that belong only to The Kop Fund.
+## 2. The test Crowdlock and the tests' copy of The Kop Fund
 
 | What | Where |
 | --- | --- |
-| The declaration, the one document that cannot change | `spec/declaration-v1.txt` and its Bitcoin timestamp `spec/declaration-v1.txt.ots` |
-| Its parameters: name, minimum, lock lengths, relays, the site | `crowdlocks/kop-fund.json` (listed in `crowdlocks/index.json`) |
-| Its test instance on testnet4, with its own throwaway declaration | `crowdlocks/kop-fund-testnet4.json`, `crowdlocks/test/` |
-| The register: members and locks | `registrations.json` |
-| The destinations list: where money may be sent | `destinations.json` |
-| The relay inbox's own state: which relays are silent, which Crowdlocks were announced | `method/relay/health.json`, `method/relay/announced.json`, `method/relay/VERSION` |
+| The test Crowdlock on testnet4, with its own throwaway declaration | `crowdlocks/kop-fund-testnet4.json`, `crowdlocks/test/` (listed in `crowdlocks/index.json`) |
+| The relay inbox that serves it, run by GitHub | `.github/workflows/relay-inbox.yml` |
+| The relay inbox's own state | `method/relay/health.json`, `method/relay/announced.json`, `method/relay/VERSION` |
+| A **frozen** copy of The Kop Fund's Crowdlock file, register, destinations and declaration, used by the tests as a real mainnet Crowdlock. Not the live register | `method/fixtures/the-kop-fund/` |
+| The declaration The Kop Fund's members sign, with its Bitcoin timestamp | `spec/declaration-v1.txt`, `spec/declaration-v1.txt.ots` |
 
-## 3. The Kop Fund's website
-
-The public pages at https://jimbus9.github.io/fanfund/, and the services behind them.
-
-| What | Where |
-| --- | --- |
-| Front page | `index.html` |
-| The pages: Why, How it works, The society, Risks, The register, The documents | `why/`, `how/`, `society/`, `risk/`, `register/`, `spec/index.html` |
-| Join: wallet-by-wallet signing and checking, then posting to the relays | `join/` |
-| Lock: works out a lock address from public records and publishes it — testnet only until a way home is proved (`method/js/lockplan.mjs`) | `lock/` |
-| A mock-up of the register, with invented figures | `mock/` |
-| Styling | `style.css` |
-| GitHub Pages setting (stops Pages mangling the files) | `.nojekyll` |
-| The relay inbox's schedule, run by GitHub | `.github/workflows/relay-inbox.yml` |
+The live fund — its Crowdlock file, register, pages, anchoring and maintainers — is in https://github.com/Jimbus9/the-kop-fund.
 
 ## 4. The Crowdlock app
 
@@ -68,7 +51,7 @@ Everything under `app/`, built by `.github/workflows/app.yml`.
 
 ## Where things moved (2 November 2026 regroup)
 
-The code moved under `method/` so the four layers are visible from the top. Only the folders listed here moved; The Kop Fund's own files, the pages and `spec/` did not.
+The code moved under `method/` so the layers are visible from the top.
 
 | Old path | New path | Public URL changed? |
 | --- | --- | --- |
@@ -78,7 +61,7 @@ The code moved under `method/` so the four layers are visible from the top. Only
 | `anchor/` | `method/anchor/` | Yes |
 | `relay/` | `method/relay/` | Yes (and still not published by Pages) |
 
-Not moved, so their URLs did not change: `join/`, `lock/`, `crowdlocks/`, `spec/`, `mock/`, and the founder template's own paths (`relay/`, `js/` in a founder's repository are unchanged).
+Not moved, so their URLs did not change: `crowdlocks/`, `spec/`, and the founder template's own paths (`relay/`, `js/` in a founder's repository are unchanged).
 
 What might be broken from the move, and where to look:
 
@@ -96,5 +79,6 @@ Each part has its own tests. Install a part's dependencies first, with `npm ci` 
 ## Rules for changes
 
 - Shared code and the six general documents must not name The Kop Fund, except as an example marked as one.
+- Nobody but The Kop Fund's maintainers gets write access to https://github.com/Jimbus9/the-kop-fund, and nobody from it gets access to this repository.
 - Values for one Crowdlock go in its own file, not in code.
 - The declaration can never change. A change would be a new version.

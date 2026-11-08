@@ -15,6 +15,9 @@ import { loadCrowdlock, baseFor, membershipOf, committedTotal, submitJoin, START
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SITE = "https://jimbus9.github.io/fanfund/";
+// The Kop Fund has its own site; the tests serve its frozen copy (method/fixtures/the-kop-fund).
+const KOP_SITE = "https://jimbus9.github.io/the-kop-fund/";
+const KOP_FIX = join(REPO, "method/fixtures/the-kop-fund");
 
 let failures = 0;
 const check = (what, ok, detail = "") => {
@@ -25,10 +28,11 @@ const check = (what, ok, detail = "") => {
 /** A fetch that serves this repository as if it were the live site, with optional tampering. */
 const siteFetch = (tamper = {}) => async (url, init = {}) => {
   const u = String(url);
-  if (!u.startsWith(SITE)) return new Response("not found", { status: 404 });
-  const path = u.slice(SITE.length).split("?")[0];
-  if (tamper[path] !== undefined) return new Response(tamper[path], { status: 200 });
-  try { return new Response(readFileSync(join(REPO, path)), { status: 200 }); }
+  const kopSite = u.startsWith(KOP_SITE);
+  if (!kopSite && !u.startsWith(SITE)) return new Response("not found", { status: 404 });
+  const path = u.slice((kopSite ? KOP_SITE : SITE).length).split("?")[0];
+  if (tamper[(kopSite ? "kop:" : "") + path] !== undefined) return new Response(tamper[(kopSite ? "kop:" : "") + path], { status: 200 });
+  try { return new Response(readFileSync(join(kopSite ? KOP_FIX : REPO, path)), { status: 200 }); }
   catch { return new Response("not found", { status: 404 }); }
 };
 
@@ -37,14 +41,14 @@ console.log("LOADING THE REAL CROWDLOCKS");
 console.log("-".repeat(80));
 
 check("A file in crowdlocks/ reads its paths from the site root",
-  baseFor(`${SITE}crowdlocks/kop-fund.json`) === SITE, baseFor(`${SITE}crowdlocks/kop-fund.json`));
+  baseFor(`${SITE}crowdlocks/kop-fund-testnet4.json`) === SITE, baseFor(`${SITE}crowdlocks/kop-fund-testnet4.json`));
 check("A file anywhere else reads them from its own folder",
   baseFor("https://example.org/club/my-crowdlock.json") === "https://example.org/club/");
 
-const kop = await loadCrowdlock(`${SITE}crowdlocks/kop-fund.json`, siteFetch());
+const kop = await loadCrowdlock(`${KOP_SITE}crowdlocks/kop-fund.json`, siteFetch());
 check("The Kop Fund loads and passes every check", kop.ok, kop.ok ? kop.crowdlock.network : kop.problems.join("; "));
 check("…its statement is byte-for-byte the one member 1 signed",
-  kop.ok && kop.statement === JSON.parse(readFileSync(join(REPO, "registrations.json"), "utf8")).declaration.statement);
+  kop.ok && kop.statement === JSON.parse(readFileSync(join(KOP_FIX, "registrations.json"), "utf8")).declaration.statement);
 check("…and it knows member 1", kop.ok && membershipOf(kop.register, "BC1QX22LEJ8SLM4G6F5L85TTE0PERAHA7KM30LQXW7")?.n === 1);
 
 const test = await loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, siteFetch());
@@ -64,12 +68,12 @@ const refuses = async (what, result, expect) => {
   check(what, ok, r.ok ? "ACCEPTED IT" : r.problems[0].slice(0, 46));
 };
 
-const realDecl = readFileSync(join(REPO, "spec/declaration-v1.txt"), "utf8");
+const realDecl = readFileSync(join(KOP_FIX, "spec/declaration-v1.txt"), "utf8");
 await refuses("A declaration altered by one word",
-  loadCrowdlock(`${SITE}crowdlocks/kop-fund.json`, siteFetch({ "spec/declaration-v1.txt": realDecl.replace("glory", "money") })),
+  loadCrowdlock(`${KOP_SITE}crowdlocks/kop-fund.json`, siteFetch({ "kop:spec/declaration-v1.txt": realDecl.replace("glory", "money") })),
   "hashes to");
 const doctored = JSON.parse(readFileSync(join(REPO, "crowdlocks/kop-fund-testnet4.json"), "utf8"));
-doctored.declaration.sha256 = JSON.parse(readFileSync(join(REPO, "crowdlocks/kop-fund.json"), "utf8")).declaration.sha256;
+doctored.declaration.sha256 = JSON.parse(readFileSync(join(KOP_FIX, "crowdlocks/kop-fund.json"), "utf8")).declaration.sha256;
 await refuses("A Crowdlock file claiming somebody else's fingerprint",
   loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, siteFetch({ "crowdlocks/kop-fund-testnet4.json": JSON.stringify(doctored) })),
   "hashes to");
@@ -272,13 +276,13 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
 }
 
 // Sharing
-const kopUrl = `${SITE}crowdlocks/kop-fund.json`;
+const kopUrl = `${KOP_SITE}crowdlocks/kop-fund.json`;
 const app = openLinkFor(kopUrl);
 check("An app link carries the Crowdlock's file link, and gives it back", app.startsWith("crowdlock://add?url=") && fileUrlFromOpenLink(app) === kopUrl);
 check("An app link to anything but an https file link is ignored",
   fileUrlFromOpenLink("crowdlock://add?url=" + encodeURIComponent("http://x.example/c.json")) === null
     && fileUrlFromOpenLink("https://example.com") === null && fileUrlFromOpenLink("crowdlock://add?url=%E0%A4%A") === null);
-check("Sharing The Kop Fund sends people to its join page", kop.ok && shareLinkFor(kop) === "https://jimbus9.github.io/fanfund/join/");
+check("Sharing The Kop Fund sends people to its join page", kop.ok && shareLinkFor(kop) === "https://jimbus9.github.io/the-kop-fund/join/");
 check("A Crowdlock naming no page is shared as its site", test.ok && shareLinkFor(test) === SITE);
 
 // Finding
