@@ -291,5 +291,18 @@ check("Search matches the name or what it's for", matchesSearch({ name: "The Pub
 
 console.log("-".repeat(80));
 console.log(failures === 0 ? "The app's Crowdlock loader accepts the real files and refuses doctored ones." : `${failures} check(s) failed.`);
+
+{
+  const quiet = async () => ({ ok: true, status: 200, json: async () => ({ halfHourFee: 1 }), text: async () => "" });
+  const busy = async () => ({ ok: true, status: 200, json: async () => ({ halfHourFee: 40 }), text: async () => "" });
+  const down = async () => { throw new TypeError("Network request failed"); };
+  const low = await esploraChain("https://fee-a", quiet, 50).feeRate();
+  const raised = await esploraChain("https://fee-b", quiet, 50, { minFee: 5 }).feeRate();
+  const high = await esploraChain("https://fee-c", busy, 50, { minFee: 5 }).feeRate();
+  const fallback = await esploraChain("https://fee-d", down, 50, { minFee: 5, retries: 0 }).feeRate();
+  console.log(low === 1 && raised === 5 && high === 40 && fallback === 5 ? "PASS  The fee floor lifts a too-low estimate, never lowers a high one" : `FAIL  fee floor ${low} ${raised} ${high} ${fallback}`);
+  if (!(low === 1 && raised === 5 && high === 40 && fallback === 5)) process.exitCode = 1;
+}
+
 console.log("-".repeat(80));
 process.exit(failures === 0 ? 0 : 1);

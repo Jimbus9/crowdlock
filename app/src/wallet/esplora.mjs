@@ -36,7 +36,7 @@ const busy = (status) => status === 429 || status === 503;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = TIMEOUT_MS,
-  { rememberMs = REMEMBER_MS, retries = RETRIES, wait = pause } = {}) {
+  { rememberMs = REMEMBER_MS, retries = RETRIES, wait = pause, minFee = 1 } = {}) {
   const fetchImpl = withTimeout(rawFetch, timeoutMs);
   if (!memories.has(rawFetch)) memories.set(rawFetch, new Map());
   const memory = memories.get(rawFetch);
@@ -85,10 +85,10 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
       const hash = await get("/blocks/tip/hash", "text");
       return (await get(`/block/${hash.trim()}`)).mediantime;
     },
-    /** A fee rate likely to confirm within about half an hour, sats/vbyte. */
+    /** A fee rate likely to confirm within about half an hour, sats/vbyte, never below `minFee` (test networks raise it: their blocks are bursty). */
     async feeRate() {
-      try { const f = await get("/v1/fees/recommended"); return Math.max(1, Math.ceil(f.halfHourFee)); }
-      catch { return 2; }
+      try { const f = await get("/v1/fees/recommended"); return Math.max(minFee, Math.ceil(f.halfHourFee)); }
+      catch { return Math.max(minFee, 2); }
     },
     async broadcast(hex) {
       const res = await fetchImpl(`${baseUrl}/tx`, { method: "POST", body: hex });
