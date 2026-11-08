@@ -60,7 +60,14 @@ jobs:
 
       - name: Build the APK
         working-directory: app/android
-        run: ./gradlew assembleRelease --no-daemon
+        # services.gradle.org sometimes times out; try the whole step again.
+        run: |
+          for try in 1 2 3 4 5 6; do
+            ./gradlew assembleRelease --no-daemon && exit 0
+            echo "Attempt $try failed; waiting before trying again"
+            sleep $((try * 30))
+          done
+          exit 1
 
       - name: Publish it as the app-test release
         env:
