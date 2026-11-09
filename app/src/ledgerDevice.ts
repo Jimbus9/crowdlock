@@ -86,9 +86,12 @@ export function lookForLedgers(found: (d: FoundLedger) => void, failed: (e: Erro
 export async function withLedger<T>(w: { deviceId: string; device?: any }, network: string, fn: (session: any) => Promise<T>): Promise<T> {
   const store = await loadLedgerStore();
   let session: any;
+  // Where it was when it stopped, so "timed out" can say which step stalled.
+  let stage = "looking for the Ledger";
   try {
     session = await withTimeout((async () => {
       const device = w.device ?? await findLedger(dmk(), { deviceId: w.deviceId, usb: rnHidTransportIdentifier, ble: rnBleTransportIdentifier } as any);
+      stage = `talking to the Ledger over ${(device as any)?.transport === rnBleTransportIdentifier ? "Bluetooth" : "the cable"} (checking its app and key)`;
       return ledgerApi.connect({
         driver: {
           transport: Promise.resolve({ default: transportFor(dmk(), TransportBase) }),
@@ -100,7 +103,7 @@ export async function withLedger<T>(w: { deviceId: string; device?: any }, netwo
         store,
       } as any);
     })(), CONNECT_LIMIT_MS, "timed out", resetKit);
-  } catch (e: any) { throw new Error(plain(e, network)); }
+  } catch (e: any) { throw new Error(plain(e, network) + (/timed out|timeout/i.test(String(e?.message ?? e)) ? ` (It stopped while ${stage}.)` : "")); }
   try { return await fn(session); }
   catch (e: any) { throw new Error(plain(e, network)); }
   finally {
