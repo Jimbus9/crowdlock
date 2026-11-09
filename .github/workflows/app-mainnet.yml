@@ -1,0 +1,77 @@
+# Builds the REAL-bitcoin (mainnet) Crowdlock app for Android and publishes it
+# as the "app-mainnet" release. Run by hand only (Actions -> App (real bitcoin)
+# -> Run workflow): nothing builds it by itself. It installs beside the test
+# app under its own package name, so the two never share a wallet.
+#
+# The APK is still signed with Expo's standard development key. A real release
+# needs its own signing key (milestone 7). Until then this is for the founder's
+# own phone only.
+
+name: App (real bitcoin)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to publish the release with the APK
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install the app's libraries
+        working-directory: app
+        run: npm ci
+
+      - name: Install the lock tools' libraries
+        # The app's tests check its signatures against bitcoinjs-message and
+        # its locks against method/lock/lock.mjs, both installed here.
+        working-directory: method/lock
+        run: npm ci
+
+      - name: Test the key module on a private chain
+        working-directory: app/test-chain
+        run: |
+          npm ci --ignore-scripts
+          npm test
+
+      - name: Generate the Android project
+        working-directory: app
+        env:
+          EXPO_PUBLIC_NETWORK: mainnet
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build the APK
+        working-directory: app/android
+        env:
+          EXPO_PUBLIC_NETWORK: mainnet
+        # services.gradle.org sometimes times out; try the whole step again.
+        run: |
+          for try in 1 2 3 4 5 6; do
+            ./gradlew assembleRelease --no-daemon && exit 0
+            echo "Attempt $try failed; waiting before trying again"
+            sleep $((try * 30))
+          done
+          exit 1
+
+      - name: Publish it as the app-mainnet release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/android/app/build/outputs/apk/release/app-release.apk crowdlock-mainnet.apk
+          gh release delete app-mainnet --yes --cleanup-tag || true
+          gh release create app-mainnet crowdlock-mainnet.apk \
+            --title "Crowdlock app — REAL BITCOIN build" \
+            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Install on Android by opening this file on the phone." \
+            --prerelease

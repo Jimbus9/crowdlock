@@ -109,6 +109,7 @@ export default function App() {
       <SafeAreaView style={s.page}>
         <StatusBar style="dark" />
         {IS_TEST_MONEY && <Text style={s.banner}>TEST MONEY · {NETWORK} · not real bitcoin</Text>}
+        {!IS_TEST_MONEY && <Text style={s.bannerReal}>REAL BITCOIN · early build, not yet independently reviewed</Text>}
         <ScrollView contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
           {screen.name === "loading" && <ActivityIndicator style={{ marginTop: 80 }} />}
           {screen.name === "welcome" && <Welcome go={setScreen} />}
@@ -1555,6 +1556,7 @@ function Button({ label, onPress, kind = "main", disabled }: { label: string; on
 const RED = "#C8102E";
 const s = StyleSheet.create({
   page: { flex: 1, backgroundColor: "#fff" },
+  bannerReal: { backgroundColor: "#c8102e", color: "#fff", textAlign: "center", paddingVertical: 6, fontWeight: "700", fontSize: 12 },
   banner: { backgroundColor: "#ffd84d", color: "#222", textAlign: "center", paddingVertical: 6, fontWeight: "700", fontSize: 12 },
   body: { padding: 20, paddingBottom: 60 },
   h1: { fontSize: 26, fontWeight: "800", marginTop: 12, marginBottom: 12, color: "#111" },
