@@ -77,13 +77,13 @@ export function withTimeout(promise, ms, message, onTimeout) {
  * can't stop a Ledger on a cable being found. When both fail, or time runs
  * out, the reason is the last error seen, if any.
  */
-export function findLedger(dmk, { deviceId, timeoutMs = 20000, usb = "RN_HID", ble = "RN_BLE" } = {}) {
+export function findLedger(dmk, { deviceId, timeoutMs = 20000, guessAfterMs = 3000, usb = "RN_HID", ble = "RN_BLE" } = {}) {
   return new Promise((resolve, reject) => {
-    let done = false, failed = 0, lastError = null;
+    let done = false, failed = 0, lastError = null, guess = null;
     const subs = [];
     const finish = (fn, v) => {
       if (done) return; done = true;
-      clearTimeout(timer);
+      clearTimeout(timer); clearTimeout(guess);
       // Unsubscribing may have to wait until subscribe() has returned.
       setTimeout(() => { for (const s of subs) try { s?.unsubscribe(); } catch {} }, 0);
       Promise.resolve(dmk.stopDiscovering()).catch(() => {});
@@ -94,8 +94,13 @@ export function findLedger(dmk, { deviceId, timeoutMs = 20000, usb = "RN_HID", b
     for (const transport of [usb, ble]) {
       subs.push(dmk.listenToAvailableDevices({ transport }).subscribe({
         next: (list) => {
-          const hit = (Array.isArray(list) ? list : [list]).find((d) => d.id === deviceId || d.transport === usb);
-          if (hit) finish(resolve, hit);
+          const all = Array.isArray(list) ? list : [list];
+          const hit = all.find((d) => d.id === deviceId || d.transport === usb);
+          if (hit) return finish(resolve, hit);
+          // A Ledger set up over the cable is remembered under the cable's id, and
+          // shows up over Bluetooth under another. Take the first one seen if the
+          // remembered one doesn't appear shortly; its fingerprint is checked next.
+          if (all[0] && !guess) guess = setTimeout(() => finish(resolve, all[0]), guessAfterMs);
         },
         error: (e) => {
           lastError = e instanceof Error ? e : new Error(String(e?.message ?? e?._tag ?? e));

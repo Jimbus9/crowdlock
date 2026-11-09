@@ -87,6 +87,9 @@ const connectWith = (kit, store = {}, app = "Bitcoin Test") => ledgerApi.connect
   check("Finding the saved Ledger picks it by id, not the first one nearby", (await findLedger(kit, { deviceId: "mine" })).id === "mine");
   kit = pretendKit({ devices: [ble("someone-else"), usb] });
   check("A Ledger plugged in by cable is used even if it was saved over Bluetooth", (await findLedger(kit, { deviceId: "mine" })).id === "usb-7");
+  kit = pretendKit({ devices: [ble("only-one")] });
+  check("A Ledger set up over the cable is still found over Bluetooth, where it has another id",
+    (await findLedger(kit, { deviceId: "usb-old", guessAfterMs: 20 })).id === "only-one");
   kit = pretendKit({ devices: [ble("someone-else")] });
   let msg = ""; try { await findLedger(kit, { deviceId: "mine", timeoutMs: 60 }); } catch (e) { msg = e.message; }
   check("No Ledger found says so plainly, and stops looking", /Couldn't find your Ledger/.test(msg) && kit.log.stopped === 1, msg);
