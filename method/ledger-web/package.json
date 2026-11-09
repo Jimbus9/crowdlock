@@ -1,0 +1,16 @@
+{
+  "name": "crowdlock-ledger-web",
+  "private": true,
+  "type": "module",
+  "description": "Builds the browser bundle that lets the Lock page talk to a Ledger over WebHID. Output goes to the-kop-fund/js/vendor/.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@ledgerhq/device-management-kit": "1.11.0",
+    "@ledgerhq/device-transport-kit-web-hid": "1.2.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
