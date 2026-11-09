@@ -103,7 +103,7 @@ export async function withLedger<T>(w: { deviceId: string; device?: any }, netwo
         store,
       } as any);
     })(), CONNECT_LIMIT_MS, "timed out", resetKit);
-  } catch (e: any) { throw new Error(plain(e, network) + (/timed out|timeout/i.test(String(e?.message ?? e)) ? ` (It stopped while ${stage}.)` : "")); }
+  } catch (e: any) { throw new Error(plain(e, network) + (/timed out|timeout/i.test(String(e?.message ?? e)) ? ` (It stopped while ${stage}.${/Bluetooth/.test(stage) ? " If your phone is asking to pair with the Ledger, accept that first." : ""})` : "")); }
   try { return await fn(session); }
   catch (e: any) { throw new Error(plain(e, network)); }
   finally {
