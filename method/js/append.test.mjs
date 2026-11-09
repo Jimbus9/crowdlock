@@ -1,6 +1,6 @@
 // What the join endpoint will and will not accept.
 //
-// Run:  node worker/append.test.mjs
+// Run:  node method/js/append.test.mjs
 //
 // The endpoint's whole judgement lives in append.mjs, so this is where the
 // endpoint is actually tested. The network shell around it is thin on purpose.
