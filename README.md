@@ -69,12 +69,29 @@ What might be broken from the move, and where to look:
 - Founders' repositories keep the old layout. The app's version and inbox checks try both `relay/` and `method/relay/`, so both kinds of site are recognised.
 - The template is versioned `2026-11-02b` (the inbox code moved). Crowdlocks on the older version show "behind" in the app until they update.
 
-## Tests
+## Running the checks
 
-Each part has its own tests. Install a part's dependencies first, with `npm ci` in that folder.
+**The list of checks that must pass is `.github/workflows/checks.yml`.** It runs on every push; read it rather than a copy of it, because this section can fall behind.
 
-- Method: `method/js/*.test.mjs`, `method/lock/*.test.mjs`, `method/cosigner/cosigner.test.mjs`, `method/anchor/anchor.test.mjs`, `method/relay/inbox.test.mjs`
-- App: `app/test-chain/*.test.mjs`, and `node app/scripts/make-template.mjs --check`
+To run them yourself, install each part's dependencies first with `npm ci` in that folder. A fresh clone has none installed, and a suite that fails with missing modules is not a real failure.
+
+| Folder needing `npm ci` | Then run |
+| --- | --- |
+| `method/lock/` (first: other tests use its libraries) | `node selftest.mjs && node taproot.test.mjs && node commitment.test.mjs` |
+| the repository root | `for t in method/js/*.test.mjs; do node "$t" || break; done` |
+| `method/cosigner/` | `node cosigner.test.mjs` |
+| `method/relay/` | `npm test` |
+| `method/anchor/` | `node anchor.test.mjs` |
+| `app/`, then `app/test-chain/` (use `npm ci --ignore-scripts` there) | in `app/test-chain/`: `npm test`; in `app/`: `npx tsc --noEmit -p .` |
+
+The tests do not bundle the app. After moving or renaming any app file, also run `npx expo export --platform android --output-dir <a folder outside the repository>` in `app/`.
+
+**Two things that turn the checks red when you change shared code:**
+
+- The real fund's repository (`Jimbus9/the-kop-fund`) carries a copy of some of this code. `node method/check-kop-fund-copy.mjs <path to a clone of that repository>` compares the copies byte for byte and names any that differ. Carry the same change across by hand, or put new logic in a new file instead.
+- The same files are packed into the app's founder template. After changing one, run `node app/scripts/make-template.mjs`, raise `TEMPLATE_VERSION` and add a line to `CHANGES`.
+
+The method's tests read a frozen copy of the real fund at `method/fixtures/the-kop-fund/`, never its live files. Do not update the copy when the real register changes.
 
 ## Rules for changes
 
