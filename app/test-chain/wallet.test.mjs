@@ -442,6 +442,135 @@ rule("MILESTONE 4: A LEDGER WALLET — JOIN, LOCK, TAKE IT HOME, LOCK AGAIN");
   check("The key never left the device: the wallet can't sign by itself", (() => { try { led.signer(); return false; } catch { return true; } })());
 }
 
+// ---------------------------------------------------------------------------
+rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
+
+{
+  const { buildCommitment } = await import("../src/wallet/core.mjs");
+  const { BIP32 } = await import("@bitcoinerlab/descriptors");
+  const { mnemonicToSeedSync } = await import("@scure/bip39");
+  const { ECPair } = await import("../../method/lock/lock.mjs");
+  const C = await import("../../method/lock/commitment.mjs");
+  const bitcoinjs = createRequire(new URL("../../method/lock/package.json", import.meta.url))("bitcoinjs-lib");
+
+  // A co-signer key made the standard way, from its own words.
+  const coWords5 = newCosignerWords();
+  const coKey5 = cosignerKeyFromWords(coWords5).publicKey;
+  const coPriv = BIP32.fromSeed(mnemonicToSeedSync(coWords5)).derivePath("m/84'/0'/0'/0/0").privateKey;
+  const coSigner = ECPair.fromPrivateKey(Buffer.from(coPriv));
+  check("The co-signer's words make the key the lock names", Buffer.from(coSigner.publicKey).toString("hex") === coKey5);
+
+  // A destination on an attested list, and a proposal for it.
+  const INSTANCE = "29f943a5bf2c110200cb33d0299b00960b19f10f1942d14699aec154b39316df";
+  const destination = accountFromWords(newWords(), net).address;
+  const attestor = accountFromWords(newWords(), net);
+  const entry0 = { instance: INSTANCE, index: 1, op: "add", address: destination, text: "Test seller", added: "2026-10-01T00:00:00Z", prev: C.ZERO_PREV, firstSeen: "2026-10-01T00:00:00Z" };
+  const entry = { ...entry0, attestations: [{ address: attestor.address, signature: signStatement(attestor, C.attestationStatement(entry0)) }] };
+  const proposal = { instance: INSTANCE, destination, requiresMinor: 100000, currency: "GBP", document: "d".repeat(64), opens: "2026-10-20T00:00:00Z", closes: "2026-11-17T00:00:00Z", settlesBy: "2026-12-01T00:00:00Z" };
+  const pHash = C.proposalHash(proposal);
+  const verifyArgs = (record, utxoValue) => ({
+    record, utxoValue, network: net.network,
+    proposal: { hash: pHash, destination, opensAt: proposal.opens },
+    destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1 },
+  });
+
+  // A fan locks, then commits part of the lock.
+  const fan = accountFromWords(newWords(), net);
+  await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 500_000n, feeRate: 2 })).hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const FT = (await chain.medianTime()) + 30 * 86400;
+  const fanLock = lockFor({ account: fan, cosignerPubkey: coKey5, locktime: FT });
+  const fl = await buildLock({ account: fan, chain, lock: fanLock, feeRate: 2 });
+  await chain.broadcast(fl.hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const [coin] = (await chain.utxos(fanLock.address)).filter((c) => c.confirmed);
+
+  await refuses("A commitment for a lock whose terms don't make its address",
+    () => buildCommitment({ account: fan, chain, lock: { ...fanLock, locktime: FT + 1 }, coin, proposalHash: pHash, destination, amount: 100_000n, feeRate: 2 }), "do not make that address");
+  await refuses("A commitment whose fee would pass the 1% cap",
+    () => buildCommitment({ account: fan, chain, lock: fanLock, coin, proposalHash: pHash, destination, amount: 10_000n, feeRate: 20 }), "more than 1%");
+
+  const part = await buildCommitment({ account: fan, chain, lock: fanLock, coin, proposalHash: pHash, destination, amount: 200_000n, feeRate: 2 });
+  const vPart = C.verifyCommitment(verifyArgs(part.record, coin.value));
+  check("Committing part of a lock: the method's own checker accepts the record", vPart.valid && vPart.committedSats === 200_000, vPart.reason || `${vPart.committedSats} committed, fee ${part.fee}`);
+  check("…the rest goes back into the same lock, and every sat is accounted for",
+    !!part.record.remainder && part.remainder + part.committed + part.fee === BigInt(coin.value), `${part.remainder} back to the lock`);
+  const ptx = bitcoinjs.Transaction.fromHex(part.record.tx);
+  check("…it declares no date and leaves the co-signer's slot empty", ptx.locktime === 0 && ptx.ins[0].witness[0].length === 0 && ptx.ins[0].witness.length === 4);
+
+  // The owner's half alone cannot move anything.
+  let alone;
+  try { await chain.broadcast(part.record.tx); alone = false; } catch (e) { alone = String(e.reason ?? e.message).split(" (")[0]; }
+  check("The owner's half alone is refused by the network: nothing moves", alone !== false, String(alone));
+  check("…the money is still in the lock", (await lockState({ chain, lock: fanLock, medianTime: await chain.medianTime() })).confirmed === BigInt(coin.value));
+
+  // Tampering is caught by the checker.
+  const vWrong = C.verifyCommitment({ ...verifyArgs(part.record, coin.value), proposal: { hash: pHash, destination: fan.address, opensAt: proposal.opens } });
+  check("A commitment checked against another destination is refused", !vWrong.valid, vWrong.reason);
+
+  // Settlement: the co-signer completes it, long before the lock's date.
+  const done = C.completeCommitment({ record: part.record, cosignerKey: coSigner, utxoValue: coin.value, network: net.network });
+  await chain.broadcast(done.hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const paid = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
+  const backIn = (await chain.utxos(fanLock.address)).filter((c) => c.confirmed);
+  check("Completed by the co-signer before the lock's date, the network accepts it: the seller is paid", paid === 200_000n, `${paid} sats to the destination`);
+  check("…and the remainder is still locked, to the same date", backIn.length === 1 && BigInt(backIn[0].value) === part.remainder
+    && (await lockState({ chain, lock: fanLock, medianTime: await chain.medianTime() })).state === "locked");
+
+  // Committing everything in a coin.
+  const [coin2] = (await chain.utxos(fanLock.address)).filter((c) => c.confirmed);
+  const all = await buildCommitment({ account: fan, chain, lock: fanLock, coin: coin2, proposalHash: pHash, destination, amount: "all", feeRate: 2 });
+  const vAll = C.verifyCommitment(verifyArgs(all.record, coin2.value));
+  check("Committing a whole coin: one output, accepted by the checker", vAll.valid && !all.record.remainder && all.committed + all.fee === BigInt(coin2.value), vAll.reason);
+
+  // A proposal that misses its target: nobody co-signs, and the fan's money
+  // is untouched and still goes home on its date, alone.
+  node.network.time.offset = FT - Math.floor(Date.now() / 1000) + 3600;
+  for (let i = 0; i < 12; i++) await rpc("generatetoaddress", [1, miner.address]);
+  const home5 = await takeHome({ account: fan, chain, lock: fanLock, feeRate: 2, medianTime: await chain.medianTime() });
+  await chain.broadcast(home5.hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  check("A commitment nobody completes leaves the money untouched: the fan takes it home on the date", (await lockState({ chain, lock: fanLock, medianTime: await chain.medianTime() })).state === "withdrawn");
+  // A late completion of it can never pay: its coin has gone home. (This node
+  // parks such a transaction as an orphan rather than refusing it, so the
+  // test looks at the result: a block later the seller has nothing more.)
+  try { await chain.broadcast(C.completeCommitment({ record: all.record, cosignerKey: coSigner, utxoValue: coin2.value, network: net.network }).hex); } catch {}
+  await rpc("generatetoaddress", [1, miner.address]);
+  const paidAfter = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
+  const vGone = C.verifyCommitment({ ...verifyArgs(all.record, coin2.value), coinIsUnspent: false });
+  check("…and once it has gone home, that commitment can never pay: the seller got nothing more, and the checker voids it",
+    paidAfter === 200_000n && !vGone.valid && /already been spent/.test(vGone.reason), `${paidAfter} sats; ${vGone.reason}`);
+
+  // The same with a Ledger: it signs its half on the device.
+  const { fakeLedger } = await import("./fake-ledger.mjs");
+  const bitcoinApi = await import("@ledgerhq/ledger-bitcoin");
+  const { readLedgerAccount, ledgerAccountFrom, lockPolicyName } = await import("../src/wallet/core.mjs");
+  const dev5 = fakeLedger(newWords(), net.network);
+  const session5 = { client: dev5.client, bitcoinApi, network: net.network, store: {} };
+  const led5 = ledgerAccountFrom({ keyExpression: await readLedgerAccount(session5, net), network: net, useLedger: async (fn) => fn(session5) });
+  const coXpub5 = cosignerKeyFromWords(coWords5).xpub;
+  await chain.broadcast((await buildSend({ account: miner, chain, to: led5.address, amount: 400_000n, feeRate: 2 })).hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const LT5 = (await chain.medianTime()) + 30 * 86400;
+  const ledLock5 = { ...lockFor({ account: led5, cosignerPubkey: coKey5, locktime: LT5 }), cosignerXpub: coXpub5 };
+  await chain.broadcast((await buildLock({ account: led5, chain, lock: ledLock5, feeRate: 2 })).hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const [lcoin] = (await chain.utxos(ledLock5.address)).filter((c) => c.confirmed);
+  const signedBefore = dev5.log.signed.length;
+  const lc = await buildCommitment({ account: led5, chain, lock: ledLock5, coin: lcoin, proposalHash: pHash, destination, amount: 150_000n, feeRate: 2 });
+  const vL = C.verifyCommitment(verifyArgs(lc.record, lcoin.value));
+  check("A Ledger signs its half on the device, and the checker accepts the record",
+    vL.valid && dev5.log.signed.length === signedBefore + 1, vL.reason || `${vL.committedSats} committed`);
+  check("…under the lock's rules it approved when the lock was made, with no new approval",
+    dev5.log.registered.length === 1 && dev5.log.registered[0].name === lockPolicyName(LT5), `${dev5.log.registered.length} approvals`);
+  const ldone = C.completeCommitment({ record: lc.record, cosignerKey: coSigner, utxoValue: lcoin.value, network: net.network });
+  await chain.broadcast(ldone.hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const paidL = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
+  check("…the co-signer completes it and the network accepts it", paidL === 350_000n, `${paidL} sats to the destination in all`);
+}
+
 await node.close();
 rule();
 console.log(failures === 0

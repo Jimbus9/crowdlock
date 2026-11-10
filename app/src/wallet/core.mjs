@@ -33,6 +33,7 @@ import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { BIP32, Output, Psbt, signers, networks, keyExpressionBIP32 } from "@bitcoinerlab/descriptors";
 import * as ecc from "@bitcoinerlab/secp256k1";
 import bs58check from "bs58check";
+import { Transaction } from "bitcoinjs-lib";
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
@@ -580,6 +581,105 @@ export async function relock({ account, chain, lock, newLock, feeRate, medianTim
   for (const i of waitIndexes) psbt.finalizeInput(i);
   const tx = psbt.extractTransaction();
   return { hex: tx.toHex(), txid: tx.getId(), fee, sent };
+}
+
+// ---------------------------------------------------------------------------
+// Committing a lock to a purchase (spec/commitment-format.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * The owner's half of a purchase: one coin of one lock, spent down the
+ * purchase branch to the proposal's destination, signed by the owner only.
+ * Nothing is broadcast and nothing moves. Without the co-signer's signature
+ * this transaction can never be valid, so the record can be published freely.
+ *
+ * `coin` is one confirmed coin of the lock ({ txid, vout, value }); a
+ * commitment spends exactly one. `amount` is what reaches the destination
+ * (BigInt sats), or "all": the whole coin less the fee. Committing part of a
+ * coin sends the rest straight back to the same lock — same owner, same
+ * co-signer, same date — which is the one remainder the spec always accepts.
+ *
+ * The library's own signers do the signing (backup words here, or the Ledger
+ * on the device). The library can't finish this transaction, because it is
+ * half of one, so the witness is laid out here in the commitment format's
+ * fixed shape — [co-signer's slot (empty), branch selector (empty, the
+ * purchase branch), owner's signature, script] — exactly as
+ * method/lock/commitment.mjs lays it out and the co-signer later completes.
+ *
+ * @param {{ account: any, chain: any, lock: any, coin: { txid: string, vout: number, value: number }, proposalHash: string, destination: string, amount: bigint | "all", feeRate: number, maxFee?: number }} args
+ * @returns {Promise<{ record: any, fee: bigint, committed: bigint, remainder: bigint }>}
+ */
+export async function buildCommitment({ account, chain, lock, coin, proposalHash, destination, amount, feeRate, maxFee = 0.01 }) {
+  const net = account.network;
+  if (!Number.isFinite(feeRate) || feeRate < 1 || feeRate > 1000) {
+    throw new Error("fee rate must be between 1 and 1000 sats per vbyte");
+  }
+  if (!/^[0-9a-f]{64}$/.test(String(proposalHash ?? ""))) throw new Error("that is not a proposal's hash");
+  const check = lockFor({ account, cosignerPubkey: lock.cosignerPubkey, locktime: lock.locktime });
+  if (check.address !== lock.address) throw new Error("those lock terms do not make that address — refusing");
+
+  // The library describes the input (script, coin, key path). Given both
+  // keys it would still pick the cheaper going-home branch, which needs the
+  // date (method/lock/library-check found this on 28 October), so the
+  // transaction's date is set to none below, before anything is signed: the
+  // owner then signs the purchase spend, which declares no date.
+  const descriptor = lockDescriptor(account, check.cosignerPubkey, lock.locktime, lock.cosignerXpub);
+  const out = new Output({
+    descriptor, network: net,
+    signersPubKeys: [fromHex(account.publicKey), fromHex(check.cosignerPubkey)],
+  });
+  let dest;
+  try { dest = new Output({ descriptor: `addr(${String(destination).trim()})`, network: net }); }
+  catch { throw new Error("the proposal's destination is not an address on this network"); }
+  const back = new Output({ descriptor: lockDescriptor({ ...account, kind: "words" }, check.cosignerPubkey, lock.locktime), network: net });
+
+  const value = BigInt(coin.value);
+  const weightOf = (withRemainder) =>
+    44 + out.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES") + dest.outputWeight() + (withRemainder ? back.outputWeight() : 0);
+  const feeFor = (withRemainder) => BigInt(Math.ceil((weightOf(withRemainder) / 4) * feeRate));
+
+  let committed, remainder, fee;
+  if (amount === "all") {
+    fee = feeFor(false); committed = value - fee; remainder = 0n;
+  } else {
+    committed = BigInt(amount);
+    if (committed <= 0n) throw new Error("commit an amount above nothing");
+    fee = feeFor(true); remainder = value - committed - fee;
+    if (remainder < 0n) throw new Error("that is more than this coin holds, after the fee");
+    // A remainder too small to be worth an output goes to the destination too.
+    if (remainder < DUST_SATS) { fee = feeFor(false); committed = value - fee; remainder = 0n; }
+  }
+  if (committed < DUST_SATS) throw new Error("too little left to commit after the fee");
+  // The spec's own sanity check: verifiers refuse a fee above this share.
+  if (Number(fee) > Number(committed) * maxFee) {
+    throw new Error(`the fee would be more than ${maxFee * 100}% of what is committed — commit more, or wait for lower fees`);
+  }
+
+  const psbt = new Psbt({ network: net });
+  out.updatePsbtAsInput({ psbt, txHex: await chain.txHex(coin.txid), vout: coin.vout });
+  dest.updatePsbtAsOutput({ psbt, value: committed });
+  if (remainder > 0n) back.updatePsbtAsOutput({ psbt, value: remainder });
+  psbt.setLocktime(0);
+  if (psbt.locktime !== 0 || psbt.txInputs.length !== 1) throw new Error("a commitment spends one coin and declares no date — refusing");
+
+  await signWith(account, psbt, [{ descriptor, name: lockPolicyName(lock.locktime) }]);
+
+  const sigs = psbt.data.inputs[0].partialSig ?? [];
+  const mine = sigs.find((p) => toHex(p.pubkey) === account.publicKey);
+  if (!mine || sigs.length !== 1) throw new Error("the wallet did not sign this commitment as expected — refusing");
+  const witnessScript = out.getWitnessScript();
+  if (!witnessScript) throw new Error("the lock's script is missing — refusing");
+
+  const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
+  tx.setWitness(0, [new Uint8Array(0), new Uint8Array(0), mine.signature, witnessScript]);
+
+  const record = {
+    proposal: proposalHash,
+    lock: { address: lock.address, owner_pubkey: account.publicKey, cosigner_pubkey: check.cosignerPubkey, locktime: lock.locktime },
+    tx: tx.toHex(),
+  };
+  if (remainder > 0n) record.remainder = { owner_pubkey: account.publicKey, cosigner_pubkey: check.cosignerPubkey, locktime: lock.locktime };
+  return { record, fee, committed, remainder };
 }
 
 // ---------------------------------------------------------------------------
