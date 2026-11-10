@@ -28,7 +28,11 @@ import {
   newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend, signStatement,
   lockFor, lockDate, buildLock, lockState, takeHome, relock, checkLedgerKey, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
   isPublicKey, keyFromXpub, xpubForKey, ledgerAccountFrom, readLedgerAccount, signStatementWith,
+  buildCommitment, checkCommitment, completeCommitmentWith,
 } from "./src/wallet/core.mjs";
+import {
+  phaseOf, proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
+} from "../method/js/proposals.mjs";
 import {
   isLedgerWallet, readLedgerWallet, ledgerWalletText, ledgerUser, withLedger, lookForLedgers, askForBluetooth, ledgerAppFor,
 } from "./src/ledgerDevice";
@@ -37,6 +41,7 @@ import { buildCrowdlock, declarationSkeleton, slugify, DEFAULT_RELAYS, checkWith
 // @ts-ignore
 import {
   startSignIn, waitForSignIn, whoAmI, createCrowdlockRepo, canWrite, updateCrowdlockRepo, addMaintainer, rememberSignIn, currentSignIn, addCosignerKey,
+  addDestination, publishProposal,
 } from "./src/github.mjs";
 // @ts-ignore
 import template from "./src/template.mjs";
@@ -47,10 +52,10 @@ const createRepo = createCrowdlockRepo as (x: any) => Promise<any>;
 import {
   STARTING_LIST, loadCrowdlock, membershipOf, committedTotal, submitJoin, COUNTING_RULE_URL, poundsPerBtc, shortBtc,
   locksOnRegister, submitLock, newestCosigner, pathInRepo, keyChanges, historyLinkFor, coSignerRecord, openLinkFor, fileUrlFromOpenLink, shareLinkFor, rankFound, matchesSearch,
-  repoFromFileUrl, versionStatus, changesSince, baseFor,
+  repoFromFileUrl, versionStatus, changesSince, baseFor, resolvePath,
 } from "./src/crowdlocks.mjs";
 // @ts-ignore — plain module
-import { postToRelays, announce, fetchAnnouncements } from "./src/relays.mjs";
+import { postToRelays, announce, fetchAnnouncements, postCommitment, fetchCommitments } from "./src/relays.mjs";
 import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
   loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed } from "./src/storage";
@@ -490,7 +495,7 @@ function Send({ words, go }: { words: string; go: Go }) {
 // Crowdlocks
 // ---------------------------------------------------------------------------
 
-type Loaded = { ok: true; url: string; crowdlock: any; declarationText: string; statement: string; register: any }
+type Loaded = { ok: true; url: string; crowdlock: any; declarationText: string; statement: string; register: any; destinations: any; proposals: any[]; proposalProblems: string[] }
   | { ok: false; url: string; problems: string[] };
 
 async function allLinks(): Promise<string[]> {
@@ -675,6 +680,8 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
       </View>}
 
       {me && c.crowdlock.network === NETWORK && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} />}
+
+      {c.crowdlock.network === NETWORK && <Proposals c={c} account={account} member={!!me} />}
 
       <LookAfter c={c} account={account} onChange={load} />
 
@@ -1295,12 +1302,370 @@ function LookAfter({ c, account, onChange }: { c: Extract<Loaded, { ok: true }>;
         {codeView}
         {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
         <CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />
+        {c.crowdlock.network === NETWORK && <Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />}
+        {c.crowdlock.network === NETWORK && <WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
         <Text style={s.label}>Maintainers</Text>
         <MaintainerAdvice />
         <MaintainerForm owner={where.owner} repo={where.repo} />
       </>}
     </View>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Proposals and committing (milestone 5)
+//
+// A proposal is read from the Crowdlock's own proposals file and checked on
+// the phone (method/js/proposals.mjs). Commitments travel on the Crowdlock's
+// relays; every one is checked here before it is counted
+// (checkCommitment, held to the reference checker). Nothing moves until the
+// co-signer completes them, which happens only when the target is met.
+// ---------------------------------------------------------------------------
+
+const PHASE_TEXT: Record<string, string> = {
+  soon: "Not open yet",
+  gathering: "Gathering commitments",
+  settling: "Closed — settling",
+  over: "Over",
+};
+
+function minorDigits(currency: string) {
+  try { return new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2; } catch { return 2; }
+}
+function money(minor: number, currency: string) {
+  const d = minorDigits(currency);
+  return `${(minor / 10 ** d).toFixed(d)} ${currency}`;
+}
+function parseBtc(text: string): bigint | null {
+  const t = text.trim().replace(",", ".");
+  if (!/^\d*\.?\d{0,8}$/.test(t) || t === "" || t === ".") return null;
+  const [w, f = ""] = t.split(".");
+  return BigInt(w || "0") * 100000000n + BigInt((f + "00000000").slice(0, 8));
+}
+const atUtc = (iso: string) => iso.slice(0, 16).replace("T", " ") + " UTC";
+
+type Pile = { count: number; sats: number; mine: { sats: number; record: any }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[] };
+
+async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
+  const items = await fetchCommitments(c.crowdlock, p.hash);
+  const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [] };
+  for (const it of items) {
+    if (it.type === "completed") { pile.completed++; continue; }
+    const v = await checkCommitment({ record: it.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
+    if (!v.valid) { pile.refused.push(v.reason); continue; }
+    pile.count++; pile.sats += v.committedSats;
+    pile.good.push({ record: it.record, at: it.at, sats: v.committedSats });
+    if (v.ownerPubkey === account.publicKey) pile.mine.push({ sats: v.committedSats, record: it.record });
+  }
+  return pile;
+}
+
+function Proposals({ c, account, member }: { c: Extract<Loaded, { ok: true }>; account: any; member: boolean }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const list: any[] = c.proposals ?? [];
+  if (!c.crowdlock.register.proposals && list.length === 0) return null;
+  return (
+    <View>
+      <Text style={s.h2}>Proposals</Text>
+      {(c.proposalProblems ?? []).map((x: string, i: number) => <Text key={i} style={s.error}>{x}</Text>)}
+      {list.length === 0 && <Text style={s.note}>No proposals yet. When one is published, you can commit your locked money to it here. Nothing moves unless it reaches its target.</Text>}
+      {list.slice().reverse().map((p) => (
+        <View key={p.hash} style={s.card}>
+          <Pressable onPress={() => setOpen(open === p.hash ? null : p.hash)}>
+            <Text style={[s.p, { fontWeight: "700" }]}>{p.title}</Text>
+            <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}</Text>
+            <Text style={s.link}>{open === p.hash ? "Hide" : "Read it and see who's committed →"}</Text>
+          </Pressable>
+          {open === p.hash && <ProposalDetail c={c} p={p} account={account} member={member} />}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: true }>; p: any; account: any; member: boolean }) {
+  const [pile, setPile] = useState<Pile | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const phase = phaseOf(p);
+  const refresh = useCallback(() => { setErr(null); readPile(c, p, account).then(setPile).catch((e) => setErr(String(e?.message ?? e))); }, [c, p]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const met = pile ? pile.sats >= p.target.sats : false;
+  return (
+    <View>
+      <Text style={s.declaration}>{p.text}</Text>
+      <Text style={s.label}>Pays</Text>
+      <Text style={s.mono}>{p.destination}</Text>
+      <Text style={s.note}>Needs {money(p.requires, p.currency)}. Target {btc(BigInt(p.target.sats))} at {p.target.rate} ({p.target.at.slice(0, 10)}); the target is restated as the price moves.</Text>
+      <Text style={s.note}>Gathers from {atUtc(p.opens)} to {atUtc(p.closes)}. Settles by {atUtc(p.settles_by)}.</Text>
+      <Text style={s.label}>Committed so far</Text>
+      {err ? <Text style={s.error}>{err}</Text> : !pile ? <ActivityIndicator /> : <>
+        <Text style={s.big}>{btc(BigInt(pile.sats))}</Text>
+        <Text style={s.note}>{pile.count} commitment{pile.count === 1 ? "" : "s"}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}{pile.completed ? ` · ${pile.completed} completed by the co-signer` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats)))} to go.`}</Text>
+        {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
+        {pile.mine.length > 0 && <Text style={s.good}>You've committed {btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
+      </>}
+      <Button label="Refresh" kind="plain" onPress={refresh} />
+      {member && phase === "gathering" && <CommitForm c={c} p={p} account={account} onDone={() => setTimeout(refresh, 3000)} />}
+      {member && phase === "soon" && <Text style={s.note}>You can commit once it opens.</Text>}
+      {pile && (phase === "gathering" || phase === "settling") && <CoSign c={c} p={p} pile={pile} onDone={() => setTimeout(refresh, 3000)} />}
+    </View>
+  );
+}
+
+function CommitForm({ c, p, account, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; account: any; onDone: () => void }) {
+  const [coins, setCoins] = useState<{ lock: any; coin: any }[] | null>(null);
+  const [pick, setPick] = useState<number>(0);
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    (async () => {
+      const out: { lock: any; coin: any }[] = [];
+      const now = Math.floor(Date.now() / 1000);
+      for (const l of locksOnRegister(c.register, account.address)) {
+        if (l.locktime <= now) continue; // lapsed: it goes home instead
+        for (const coin of (await chain.utxos(l.address)).filter((u: any) => u.confirmed)) {
+          out.push({ lock: { ...l, cosignerXpub: xpubForKey(c.crowdlock, l.cosignerPubkey) }, coin });
+        }
+      }
+      out.sort((a, b) => b.coin.value - a.coin.value);
+      setCoins(out);
+    })().catch(() => setCoins([]));
+  }, []);
+  if (!coins) return <ActivityIndicator />;
+  if (coins.length === 0) return <Text style={s.note}>You have no locked money on this Crowdlock's register to commit. Lock some first, above.</Text>;
+  const chosen = coins[Math.min(pick, coins.length - 1)];
+  const sats = amount.trim() ? parseBtc(amount) : null;
+  const problem = amount.trim() && sats === null ? "Write the amount in BTC, like 0.001." : sats !== null && sats > BigInt(chosen.coin.value) ? "That's more than this lock holds." : null;
+  const commit = () => {
+    Alert.alert("Commit to this proposal?",
+      `You'll sign a commitment of ${sats === null ? "all of this lock" : btc(sats)} to "${p.title}", paying ${p.destination.slice(0, 14)}…`
+      + " It stays binding until the proposal closes on " + p.closes.slice(0, 10) + ", and can't be withdrawn."
+      + " Nothing moves unless the proposal reaches its target and the co-signer completes it. If it doesn't, your money stays locked and comes home on its date as usual."
+      + (account.kind === "ledger" ? " Your Ledger will ask you to approve the payment." : ""),
+      [{ text: "Cancel", style: "cancel" }, { text: "Sign the commitment", onPress: async () => {
+        setBusy(true); setMsg(null);
+        try {
+          const feeRate = await chain.feeRate(feeSpeed);
+          const r = await buildCommitment({ account, chain, lock: chosen.lock, coin: chosen.coin, proposalHash: p.hash, destination: p.destination, amount: sats === null ? "all" : sats, feeRate, maxFee: c.crowdlock.max_commitment_fee });
+          const v = await checkCommitment({ record: r.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
+          if (!v.valid) throw new Error(`the commitment didn't pass its own check: ${v.reason}`);
+          const posted = await postCommitment(c.crowdlock, { type: "commitment", proposal: p.hash, record: r.record });
+          setMsg(posted.ok
+            ? { ok: true, text: `Committed ${btc(r.committed)} (fee ${btc(r.fee)} if it settles). Posted to ${posted.accepted} of ${posted.total} relays.${r.remainder > 0n ? ` The other ${btc(r.remainder)} would stay locked to the same date.` : ""}` }
+            : { ok: false, text: "Signed, but no relay took it just now. Check your connection or VPN and try again." });
+          onDone();
+        } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
+        setBusy(false);
+      } }]);
+  };
+  return (
+    <View style={s.panel}>
+      <Text style={s.label}>Commit your locked money</Text>
+      {coins.map((x, i) => (
+        <Pressable key={x.coin.txid + x.coin.vout} onPress={() => setPick(i)}>
+          <Text style={i === pick ? s.good : s.note}>{i === pick ? "● " : "○ "}{btc(BigInt(x.coin.value))}, locked until {new Date(x.lock.locktime * 1000).toISOString().slice(0, 10)}</Text>
+        </Pressable>
+      ))}
+      <TextInput style={s.input} keyboardType="decimal-pad" value={amount} onChangeText={(t) => { setAmount(t); setMsg(null); }} placeholder="Amount in BTC — leave empty for all of it" />
+      {problem && <Text style={s.error}>{problem}</Text>}
+      <FeeChoice />
+      <LedgerHint account={account} />
+      {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+      <Button label={busy ? "Signing…" : "Commit"} disabled={busy || !!problem} onPress={commit} />
+    </View>
+  );
+}
+
+function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; pile: Pile; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [words, setWords] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const met = pile.sats >= p.target.sats;
+  // Settled in submission order, until the target is met and no further.
+  const order = pile.good.slice().sort((a, b) => a.at - b.at);
+  const take: typeof order = [];
+  let sum = 0;
+  for (const g of order) { if (sum >= p.target.sats) break; take.push(g); sum += g.sats; }
+  const complete = () => {
+    Alert.alert("Complete and send?",
+      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`,
+      [{ text: "Cancel", style: "cancel" }, { text: "Complete and send", style: "destructive", onPress: async () => {
+        setBusy(true); setMsg(null);
+        let sent = 0; const failed: string[] = [];
+        for (const g of take) {
+          try {
+            const hex = await completeCommitmentWith({ words, record: g.record, chain });
+            await chain.broadcast(hex);
+            await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
+            sent++;
+          } catch (e: any) { failed.push(String(e.message ?? e)); }
+        }
+        setWords("");
+        setMsg(failed.length
+          ? { ok: sent > 0, text: `Sent ${sent} of ${take.length}. ${failed[0]}` }
+          : { ok: true, text: `Completed and sent all ${sent}. They'll confirm over the next blocks.` });
+        setBusy(false); onDone();
+      } }]);
+  };
+  return (
+    <View>
+      {!open ? <Button label="For the co-signer" kind="plain" onPress={() => setOpen(true)} /> : <View style={s.panel}>
+        <Text style={s.label}>Co-sign this proposal</Text>
+        <Text style={s.note}>Only once the target is met, and only if the proposal and its destination are genuine. Type the co-signer key's words, ideally on a phone that is otherwise offline. They are used once and not saved.</Text>
+        {!met && <Text style={s.error}>The target isn't met yet: {btc(BigInt(pile.sats))} of {btc(BigInt(p.target.sats))}. Nothing should be completed.</Text>}
+        <TextInput style={[s.input, { minHeight: 80, textAlignVertical: "top" }]} multiline autoCapitalize="none" autoCorrect={false} value={words} onChangeText={setWords} placeholder="The co-signer key's 12 words" />
+        {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+        <Button label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={complete} />
+      </View>}
+    </View>
+  );
+}
+
+// For founders and maintainers: approve a destination, and publish a proposal.
+
+function repoPathOf(c: Extract<Loaded, { ok: true }>, path: string) {
+  return pathInRepo(resolvePath(path, baseFor(c.url)));
+}
+
+function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; account: any; owner: string; repo: string; onChange: () => void }) {
+  const { withSignIn, codeView } = useGitHub();
+  const [address, setAddress] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const d = c.destinations ?? { entries: [], attestors: [] };
+  const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
+  const isAttestor = (d.attestors ?? []).includes(account.address);
+  const path = repoPathOf(c, c.crowdlock.register.destinations);
+  const add = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await withSignIn(async (token) => {
+        if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can change it, and the GitHub account you signed in with isn't one of them.");
+        await addDestination({
+          token, owner, repo, path,
+          makeEntry: (file: any) => nextDestination(file, { address, text }),
+          attest: async (entry: any) => ({ address: account.address, signature: await signStatementWith(account, attestationStatement(entry)) }),
+          check: (file: any) => {
+            const ch = chainIsIntact(file.entries);
+            const last = file.entries[file.entries.length - 1];
+            const att = attestationsAreValid(last, { attestors: file.attestors, threshold: file.threshold, hrp });
+            return { ok: ch.ok && att.ok, problems: [ch.reason, att.reason].filter(Boolean) };
+          },
+        });
+        setAddress(""); setText("");
+        setMsg({ ok: true, text: `Added and attested. ${c.crowdlock.destination_wait_days ? `A proposal can use it after ${c.crowdlock.destination_wait_days} days.` : "A proposal can use it straight away (this Crowdlock has no waiting period)."} Its website updates in a minute or two.` });
+        setTimeout(onChange, 90000);
+      });
+    } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
+    setBusy(false);
+  };
+  return <>
+    <Text style={s.label}>Destinations</Text>
+    {(d.entries ?? []).length === 0 ? <Text style={s.note}>None yet. A proposal can only pay an address on this list, attested by this Crowdlock's attestors.</Text>
+      : d.entries.map((e: any) => <Text key={e.index} style={s.note}>{e.index}. {e.op === "revoke" ? "Revoked: " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}, public since {String(e.firstSeen ?? "?").slice(0, 10)}</Text>)}
+    {!isAttestor ? <Text style={s.note}>This wallet isn't one of its attestors, so it can't approve a destination.</Text> : <>
+      <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={address} onChangeText={(t) => { setAddress(t); setMsg(null); }} placeholder="The address a purchase would pay" />
+      <TextInput style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
+      <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature.</Text>
+      {codeView}
+      {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+      <Button label={busy ? "Adding…" : "Add and attest this destination"} disabled={busy || !address.trim() || !text.trim() || /[|\n]/.test(text) || !path} onPress={add} />
+    </>}
+  </>;
+}
+
+function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; owner: string; repo: string; onChange: () => void }) {
+  const { withSignIn, codeView } = useGitHub();
+  const [title, setTitle] = useState("");
+  const [text, setText] = useState("");
+  const [dest, setDest] = useState<string>("");
+  const [price, setPrice] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [days, setDays] = useState(String(Math.min(14, c.crowdlock.gathering_window_max_days)));
+  const [settle, setSettle] = useState(String(Math.min(7, c.crowdlock.settlement_window_max_days)));
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const d = c.destinations ?? { entries: [] };
+  const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
+  const nowIso = () => new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
+  const usable = (d.entries ?? []).filter((e: any) => e.op === "add").filter((e: any) => destinationIsPermitted({
+    address: e.address, entries: d.entries, opensAt: nowIso(), minimumAgeDays: c.crowdlock.destination_wait_days,
+    attestors: d.attestors, threshold: d.threshold, hrp,
+  }).permitted);
+  const draft = (): { p?: any; problem?: string } => {
+    const cur = currency.trim();
+    if (!title.trim()) return { problem: "Give it a title." };
+    if (!text.trim()) return { problem: "Say what is being bought, from whom, and why." };
+    if (!dest) return { problem: "Choose a destination." };
+    if (!/^[A-Z]{3}$/.test(cur)) return { problem: "The currency is its three-letter code in capitals, like GBP, EUR or USD." };
+    const digits = minorDigits(cur);
+    const t = price.trim().replace(",", ".");
+    if (!new RegExp(`^\\d+(\\.\\d{0,${digits}})?$`).test(t)) return { problem: `Write the price in ${cur}, with at most ${digits} decimal places.` };
+    const [w, f = ""] = t.split(".");
+    const minor = Number(w) * 10 ** digits + Number((f + "0".repeat(digits)).slice(0, digits) || "0");
+    const g = Number(days), st = Number(settle);
+    if (!Number.isInteger(g) || g < 1 || g > c.crowdlock.gathering_window_max_days) return { problem: `Gathering is 1 to ${c.crowdlock.gathering_window_max_days} days.` };
+    if (!Number.isInteger(st) || st < 0 || st > c.crowdlock.settlement_window_max_days) return { problem: `Settling is 0 to ${c.crowdlock.settlement_window_max_days} days.` };
+    const sats = parseBtc(target);
+    if (!sats || sats <= 0n) return { problem: "Give the target in BTC — what the price is in bitcoin today." };
+    const opens = nowIso();
+    const closes = new Date(Date.parse(opens) + g * 86400000).toISOString().replace(".000Z", "Z");
+    const settlesBy = new Date(Date.parse(closes) + st * 86400000).toISOString().replace(".000Z", "Z");
+    const p: any = { title: title.trim(), text: text.trim(), destination: dest, requires: minor, currency: cur, opens, closes, settles_by: settlesBy };
+    try { p.hash = proposalHash(fieldsOf(p, c.crowdlock.declaration.sha256)); } catch (e: any) { return { problem: e.message }; }
+    const rate = Number(sats) > 0 ? (minor / 10 ** digits) / (Number(sats) / 1e8) : 0;
+    p.target = { sats: Number(sats), rate: `1 BTC = ${rate.toFixed(digits)} ${cur}`, at: opens };
+    return { p };
+  };
+  const { p: preview, problem } = draft();
+  const proposalsPath = c.crowdlock.register.proposals ?? c.crowdlock.register.destinations.replace(/[^/]*$/, "proposals.json");
+  const publish = () => {
+    const now = draft();
+    if (!now.p) return;
+    Alert.alert("Publish this proposal?", `"${now.p.title}": ${money(now.p.requires, now.p.currency)} to ${now.p.destination.slice(0, 14)}…, gathering until ${now.p.closes.slice(0, 10)}. Once published it can't be changed: its wording and price are fixed by its fingerprint.`,
+      [{ text: "Cancel", style: "cancel" }, { text: "Publish", onPress: async () => {
+        setBusy(true); setMsg(null);
+        try {
+          await withSignIn(async (token) => {
+            if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can publish a proposal for it.");
+            await publishProposal({
+              token, owner, repo, crowdlockPath: pathInRepo(c.url), proposalsPath, proposal: now.p,
+              check: ({ crowdlock, file }: any) => checkProposals(file, crowdlock),
+            });
+            setTitle(""); setText(""); setPrice(""); setTarget("");
+            setMsg({ ok: true, text: "Published. Its website updates in a minute or two — then tap Refresh on the Crowdlock and it appears under Proposals." });
+            setTimeout(onChange, 90000);
+          });
+        } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
+        setBusy(false);
+      } }]);
+  };
+  return <>
+    <Text style={s.label}>Write a proposal</Text>
+    {usable.length === 0 ? <Text style={s.note}>No destination is ready yet. Add and attest one above{c.crowdlock.destination_wait_days ? `, then wait ${c.crowdlock.destination_wait_days} days` : ""}.</Text> : <>
+      <TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="Title" />
+      <TextInput style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline value={text} onChangeText={setText} placeholder="What is being bought, from whom, and why" />
+      {usable.map((e: any) => <Pressable key={e.index} onPress={() => setDest(e.address)}><Text style={dest === e.address ? s.good : s.note}>{dest === e.address ? "● " : "○ "}{e.text} — {e.address.slice(0, 14)}…</Text></Pressable>)}
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <TextInput style={[s.input, { flex: 2 }]} keyboardType="decimal-pad" value={price} onChangeText={setPrice} placeholder="Price" />
+        <TextInput style={[s.input, { flex: 1 }]} autoCapitalize="characters" value={currency} onChangeText={(t) => setCurrency(t.toUpperCase())} placeholder="GBP" maxLength={3} />
+      </View>
+      <TextInput style={s.input} keyboardType="decimal-pad" value={target} onChangeText={setTarget} placeholder="Target in BTC (the price in bitcoin today)" />
+      <Text style={s.note}>Gathers for (days, at most {c.crowdlock.gathering_window_max_days}) and settles for (days, at most {c.crowdlock.settlement_window_max_days}):</Text>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <TextInput style={[s.input, { flex: 1 }]} keyboardType="number-pad" value={days} onChangeText={setDays} />
+        <TextInput style={[s.input, { flex: 1 }]} keyboardType="number-pad" value={settle} onChangeText={setSettle} />
+      </View>
+      {problem ? <Text style={s.note}>{problem}</Text> : <Text style={s.note}>Opens now, closes {preview.closes.slice(0, 10)}, settles by {preview.settles_by.slice(0, 10)}. Fingerprint {preview.hash.slice(0, 12)}…</Text>}
+      {codeView}
+      {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+      <Button label={busy ? "Publishing…" : "Publish this proposal"} disabled={busy || !!problem} onPress={publish} />
+    </>}
+  </>;
 }
 
 // ---------------------------------------------------------------------------

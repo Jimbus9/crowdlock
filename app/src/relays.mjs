@@ -6,7 +6,8 @@
 
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 import { Relay } from "nostr-tools/relay";
-import { recordEventTemplate, announcementTemplate, announcementFromEvent, ANNOUNCE_KIND, ANNOUNCE_TAG } from "../../method/js/inbox.mjs";
+import { recordEventTemplate, announcementTemplate, announcementFromEvent, ANNOUNCE_KIND, ANNOUNCE_TAG, RECORD_KIND } from "../../method/js/inbox.mjs";
+import { commitmentEventTemplate, commitmentFromEvent, PROPOSAL_TAG } from "../../method/js/proposals.mjs";
 
 const TIMEOUT = 12000;
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("no answer")), ms))]);
@@ -70,4 +71,49 @@ export async function fetchAnnouncements(relays, since = Math.floor(Date.now() /
     finally { try { relay?.close(); } catch {} }
   }));
   return [...byUrl.values()].sort((a, b) => b.at - a.at);
+}
+
+/**
+ * Post a commitment, or a completed transaction, to the Crowdlock's relays.
+ * Returns { ok, accepted, total }.
+ */
+export async function postCommitment(crowdlock, item) {
+  const event = finalizeEvent(commitmentEventTemplate(item, crowdlock.declaration.sha256, Math.floor(Date.now() / 1000)), generateSecretKey());
+  const results = await Promise.all((crowdlock.relays ?? []).map(async (url) => {
+    let relay;
+    try { relay = await withTimeout(Relay.connect(url), TIMEOUT); await withTimeout(relay.publish(event), TIMEOUT); return true; }
+    catch { return false; }
+    finally { try { relay?.close(); } catch {} }
+  }));
+  const accepted = results.filter(Boolean).length;
+  return { ok: accepted > 0, accepted, total: results.length };
+}
+
+/**
+ * Every commitment and completed transaction posted for this proposal, from
+ * every relay, each once, oldest first. Says nothing about whether any is
+ * valid: the caller checks each.
+ */
+export async function fetchCommitments(crowdlock, proposalHash, since = 0) {
+  const fingerprint = crowdlock.declaration.sha256;
+  const seen = new Map();
+  await Promise.all((crowdlock.relays ?? []).map(async (u) => {
+    let relay;
+    try {
+      relay = await withTimeout(Relay.connect(u), TIMEOUT);
+      await withTimeout(new Promise((resolve) => {
+        const sub = relay.subscribe([{ kinds: [RECORD_KIND], [`#${PROPOSAL_TAG}`]: [proposalHash], since, limit: 2000 }], {
+          onevent(e) {
+            const item = commitmentFromEvent(e, fingerprint, proposalHash);
+            if (!item) return;
+            const key = item.type === "commitment" ? item.record.tx : item.tx;
+            if (!seen.has(key) || seen.get(key).at > item.at) seen.set(key, item);
+          },
+          oneose() { sub.close(); resolve(); },
+        });
+      }), TIMEOUT);
+    } catch {}
+    finally { try { relay?.close(); } catch {} }
+  }));
+  return [...seen.values()].sort((a, b) => a.at - b.at);
 }

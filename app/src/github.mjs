@@ -236,5 +236,69 @@ export async function addCosignerKey({ token, owner, repo, path, key, xpub = nul
   return { sha, keys: next.cosigner_keys, xpubs: next.cosigner_xpubs ?? [] };
 }
 
+// ---------------------------------------------------------------------------
+// Destinations and proposals (milestone 5). Both read the files from the
+// repository itself, not the website (which can lag), add one thing at the
+// end, check the result and commit. Neither ever edits or removes an entry.
+// ---------------------------------------------------------------------------
+
+async function readJson(gh, owner, repo, path) {
+  try {
+    const got = await gh("GET", `/repos/${owner}/${repo}/contents/${path}`);
+    return JSON.parse(Buffer.from(String(got.content).replace(/\s/g, ""), "base64").toString("utf8"));
+  } catch (e) { if (e.status === 404) return null; throw e; }
+}
+
+/**
+ * Add a destination to a Crowdlock's destinations list, attested by the
+ * signed-in founder's wallet. `makeEntry(file)` returns { entry, firstSeen }
+ * (method/js/proposals.mjs nextDestination); `attest(entry)` returns the
+ * attestation { address, signature } signed by an attestor key; `check(file)`
+ * must pass on the result.
+ */
+export async function addDestination({ token, owner, repo, path, makeEntry, attest, check }, fetchImpl = globalThis.fetch) {
+  const gh = client(token, fetchImpl);
+  const file = await readJson(gh, owner, repo, path);
+  if (!file) throw new Error("This Crowdlock's destinations list isn't in its repository.");
+  const { entry, firstSeen } = makeEntry(file);
+  const attestation = await attest(entry);
+  if (!(file.attestors ?? []).includes(attestation.address)) {
+    throw new Error("This wallet isn't one of this Crowdlock's attestors, so it can't approve a destination. Its attestors are listed in its Crowdlock file.");
+  }
+  const next = { ...file, updated: firstSeen.slice(0, 10), entries: [...(file.entries ?? []), { ...entry, attestations: [attestation], firstSeen }] };
+  const r = check ? check(next) : { ok: true };
+  if (!r.ok) throw new Error(`That would break the destinations list: ${r.problems.join("; ")}`);
+  const sha = await commitFiles(gh, owner, repo, { [path]: JSON.stringify(next, null, 2) + "\n" },
+    `Add destination ${entry.index}: ${entry.text}\n\nAdded and attested from the Crowdlock app. Address ${entry.address}. A proposal may name it once it has been public for this Crowdlock's waiting period.`);
+  return { sha, entry: next.entries.at(-1) };
+}
+
+/**
+ * Publish a proposal: appended to the Crowdlock's proposals file (created if
+ * it has none, and named in the Crowdlock file). `proposal` is complete, with
+ * its hash; `check({ crowdlock, file })` must pass on the result.
+ */
+export async function publishProposal({ token, owner, repo, crowdlockPath, proposalsPath, proposal, check }, fetchImpl = globalThis.fetch) {
+  const gh = client(token, fetchImpl);
+  const c = await readJson(gh, owner, repo, crowdlockPath);
+  if (!c) throw new Error("This Crowdlock's file isn't in its repository.");
+  const files = {};
+  let next = c;
+  if (c.register?.proposals !== proposalsPath) {
+    if (c.register?.proposals) throw new Error("This Crowdlock already names a different proposals file.");
+    next = { ...c, register: { ...c.register, proposals: proposalsPath } };
+    files[crowdlockPath] = JSON.stringify(next, null, 2) + "\n";
+  }
+  const file = (await readJson(gh, owner, repo, proposalsPath)) ?? { format: "crowdlock-proposals/1", instance: c.declaration.sha256, proposals: [] };
+  if (file.proposals.some((p) => p.hash === proposal.hash)) throw new Error("That proposal is already published.");
+  const after = { ...file, proposals: [...file.proposals, proposal] };
+  const r = check ? check({ crowdlock: next, file: after }) : { ok: true };
+  if (!r.ok) throw new Error(`That proposal can't be published: ${r.problems.join("; ")}`);
+  files[proposalsPath] = JSON.stringify(after, null, 2) + "\n";
+  const sha = await commitFiles(gh, owner, repo, files,
+    `Propose: ${proposal.title}\n\nPublished from the Crowdlock app. Proposal ${proposal.hash}: ${proposal.requires} ${proposal.currency} (minor units) to ${proposal.destination}, gathering ${proposal.opens} to ${proposal.closes}, settling by ${proposal.settles_by}.`);
+  return { sha };
+}
+
 export function rememberSignIn(token) { session = { token, until: Date.now() + 60 * 60 * 1000 }; }
 export function currentSignIn() { return session && session.until > Date.now() ? session.token : null; }

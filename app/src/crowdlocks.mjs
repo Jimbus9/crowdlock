@@ -20,6 +20,7 @@
 // A file published anywhere else has its paths read relative to its own folder.
 
 import { checkCrowdlock, checkRegisterFiles, membershipStatement } from "../../method/js/crowdlock.mjs";
+import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain } from "./wallet/esplora.mjs";
 import { earlyReleases } from "../../method/js/release.mjs";
 import { checkCosignerXpubs } from "./wallet/core.mjs";
@@ -53,7 +54,7 @@ export function resolvePath(path, base) {
  * Load a Crowdlock from a link and check it. Never throws: returns
  * { ok: true, url, crowdlock, statement, register } or { ok: false, url, problems }.
  *
- * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, statement: string, register: any }
+ * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, statement: string, register: any, destinations: any, proposals: any[], proposalProblems: string[] }
  *                 | { ok: false, url: string, problems: string[] }>}
  */
 export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
@@ -93,6 +94,19 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
   const agree = checkRegisterFiles(crowdlock, { registrations, destinations });
   if (!agree.ok) return fail(...agree.problems);
 
+  // Proposals, if it publishes any. A proposals file that doesn't check is
+  // reported, not fatal: the Crowdlock itself is still fine to show.
+  let proposals = [], proposalProblems = [];
+  if (crowdlock.register.proposals) {
+    try {
+      const r = await fetchImpl(resolvePath(crowdlock.register.proposals, base), { cache: "no-store" });
+      if (r.ok) {
+        const pc = checkProposals(await r.json(), crowdlock);
+        proposals = pc.proposals; proposalProblems = pc.problems;
+      } else if (r.status !== 404) proposalProblems = [`could not load its proposals: ${r.status}`];
+    } catch (e) { proposalProblems = [`could not load its proposals: ${e.message}`]; }
+  }
+
   return {
     ok: true,
     url: fileUrl,
@@ -101,6 +115,8 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
     statement: membershipStatement(crowdlock),
     register: registrations,
     destinations,
+    proposals,
+    proposalProblems,
   };
 }
 

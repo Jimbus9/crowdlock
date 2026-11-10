@@ -700,7 +700,7 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
  * @returns {Promise<{ valid: boolean, reason: string, committedSats: number, fee: number, ownerPubkey?: string }>}
  */
 export async function checkCommitment({ record, crowdlock, proposal, destinations, chain, network }) {
-  const net = network.network ?? network;
+  const net = typeof network === "string" ? NETWORKS[network].network : (network.network ?? network);
   const hrp = net.bech32;
   const fail = (reason) => ({ valid: false, reason, committedSats: 0, fee: 0 });
   if (record?.proposal !== proposal.hash) return fail("record names a different proposal");
