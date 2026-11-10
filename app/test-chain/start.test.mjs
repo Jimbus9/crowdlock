@@ -42,6 +42,19 @@ r = buildCrowdlock({ ...base, declarationText: filled, title: "Red Lion (2026)" 
 check("A title with brackets is refused", !r.ok && r.problems.some((p) => p.includes("brackets")));
 r = buildCrowdlock({ ...base, declarationText: filled, cosignerPubkey: "not a key" });
 check("Real bitcoin without a proper co-signer key is refused", !r.ok && r.problems.some((p) => p.includes("co-signer")));
+{
+  const own = buildCrowdlock({ ...base, declarationText: filled, waitDays: 3, gatherDays: 5, settleDays: 2 });
+  const rc = own.ok && JSON.parse(own.files["crowdlocks/the-pub-fund.json"]);
+  const tc = own.ok && JSON.parse(own.files["crowdlocks/the-pub-fund-test.json"]);
+  check("The founder's own waiting, gathering and settling limits go into the file (the test copy waits none)",
+    rc && rc.destination_wait_days === 3 && rc.gathering_window_max_days === 5 && rc.settlement_window_max_days === 2
+      && tc.destination_wait_days === 0 && tc.gathering_window_max_days === 5, JSON.stringify(own.problems ?? ""));
+  const dflt = buildCrowdlock({ ...base, declarationText: filled });
+  const dc = JSON.parse(dflt.files["crowdlocks/the-pub-fund.json"]);
+  check("…and left alone, they are the recommended 7, 28 and 14", dc.destination_wait_days === 7 && dc.gathering_window_max_days === 28 && dc.settlement_window_max_days === 14);
+  r = buildCrowdlock({ ...base, declarationText: filled, settleDays: 0 });
+  check("A settling limit of no days is refused", !r.ok && r.problems.some((p) => p.includes("settling")));
+}
 check("Names become safe repository names", slugify("The Pub Fund — Red Lion!") === "the-pub-fund-red-lion" && slugify("") === "crowdlock");
 
 rule("WHAT IT BUILDS, LOADED BY THE APP AS IF PUBLISHED");

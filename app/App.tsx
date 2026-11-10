@@ -1745,6 +1745,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const [text, setText] = useState(declarationSkeleton("OUR DECLARATION"));
   const [minimum, setMinimum] = useState("0.002");
   const [waitDays, setWaitDays] = useState("7");
+  const [gatherDays, setGatherDays] = useState("28");
+  const [settleDays, setSettleDays] = useState("14");
   const [cosigner, setCosigner] = useState("");
   const [testPasted, setTestPasted] = useState("");
   const [problems, setProblems] = useState<string[] | null>(null);
@@ -1768,6 +1770,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
     const minimumSats = /^\d*\.?\d{0,8}$/.test(t) && t !== "" ? Number(BigInt(w || "0") * 100000000n + BigInt((f + "00000000").slice(0, 8))) : NaN;
     return {
       name, about, title, declarationText: text, network, minimumSats, waitDays: /^\d{1,3}$/.test(waitDays.trim()) ? Number(waitDays.trim()) : NaN,
+      gatherDays: /^\d{1,3}$/.test(gatherDays.trim()) ? Number(gatherDays.trim()) : NaN,
+      settleDays: /^\d{1,3}$/.test(settleDays.trim()) ? Number(settleDays.trim()) : NaN,
       cosignerPubkey: keyFromXpub(cosigner) ? cosigner.trim() : cosigner.trim().toLowerCase(), testCosignerPubkey: testPasted.trim() || testCoKey.xpub,
       siteBase, today: new Date().toISOString().slice(0, 10),
     };
@@ -1892,6 +1896,13 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         {!!cosigner.trim() && !isPublicKey(cosigner) && !keyFromXpub(cosigner) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
         {!!keyFromXpub(cosigner) && <Text style={s.note}>That xpub stands for {keyFromXpub(cosigner)!.slice(0, 10)}…, and is published beside it so hardware wallets can lock.</Text>}
       </> : <Text style={s.note}>Test bitcoin has no value: practise everything — joining, locking, taking a lock home — before anything is real.</Text>}
+
+      <Text style={s.label}>Longest a proposal may gather commitments, in days</Text>
+      <TextInput style={s.input} keyboardType="number-pad" value={gatherDays} onChangeText={(t) => { setGatherDays(t); setChecked(null); }} />
+      <Text style={s.note}>We recommend 28, The Kop Fund's choice: long enough to reach supporters who only look now and then. Each proposal picks its own length up to this, and gathering ends as soon as the target is met. A small group with a short deadline can use less.</Text>
+      <Text style={s.label}>Longest settling may take after that, in days</Text>
+      <TextInput style={s.input} keyboardType="number-pad" value={settleDays} onChangeText={(t) => { setSettleDays(t); setChecked(null); }} />
+      <Text style={s.note}>We recommend 14: room for the co-signer to complete and send everything at a sensible pace. A small Crowdlock can settle in hours. Members are bound to a proposal for at most these two together.</Text>
 
       <Text style={s.label}>{network === "mainnet" ? "The test copy's co-signer key" : "Co-signer key"}</Text>
       <Text style={s.note}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so paste a practice co-signer key (made with \"Make a co-signer key\") — its xpub, ideally:" : `Made on this phone from your backup words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Or paste a practice key you made instead:`}</Text>
