@@ -96,7 +96,7 @@ function crowdlockFile({ name, about, disclaimer, title, declFile, declText, net
     ...(cosignerXpub ? { cosigner_xpubs: [cosignerXpub] } : {}),
     gathering_window_max_days: 28,
     settlement_window_max_days: 14,
-    destination_wait_days: 14,
+    destination_wait_days: network === "mainnet" ? 7 : 0, // at least 7 on real bitcoin; none on a test copy
     attestor_keys: [],
     attestor_threshold: 1,
     max_commitment_fee: 0.01,

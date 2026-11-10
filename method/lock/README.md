@@ -163,7 +163,7 @@ builds one, anybody verifies one, and at settlement the co-signer completes it.
 `commitment.test.mjs` runs 40 checks offline. Most of them assert a
 **rejection**, because that is where the value is: a tampered destination, a
 forged owner signature, a destination nobody attested, one that has not waited
-out its fourteen days, a revoked one, a declared locktime, a fee large enough to
+out its waiting period, a revoked one, a declared locktime, a fee large enough to
 suggest a client bug, and two different ways a remainder output could try to
 smuggle coins out of a lock early.
 

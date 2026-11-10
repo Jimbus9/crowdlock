@@ -331,12 +331,12 @@ rejects("Pays somewhere other than the proposal's destination",
   verifyWith({ ...record, tx: toOther.hex }), "the proposal names");
 
 // a destination that is real but too new
-rejects("Pays a destination that has not waited 14 days",
+rejects("Pays a destination that has not waited out its period",
   verifyCommitment({
     record: { ...record, tx: toOther.hex }, destinationEntries: LIST, destinationRules: RULES,
     proposal: { ...PROPOSAL, destination: OTHER },
     utxoValue: utxo.value, network: NETWORK,
-  }), "needs 14");
+  }), "needs 7");
 
 // a destination nobody attested
 const UNLISTED = bitcoin.payments.p2wpkh({ pubkey: ownerPubkey, network: NETWORK }).address;

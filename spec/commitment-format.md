@@ -157,7 +157,7 @@ It builds a commitment, verifies one against a proposal and a destinations list,
 and completes one with the co-signer's signature. The tests cover the ways a
 commitment is supposed to be rejected as well as the way it is supposed to work:
 a tampered destination, a forged owner signature, an unlisted destination, one
-that has not waited out its fourteen days, a revoked one, a declared locktime, an
+that has not waited out its waiting period, a revoked one, a declared locktime, an
 absurd fee, and a remainder output that would smuggle coins out of the lock.
 
 ## Amendments
