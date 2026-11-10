@@ -1379,6 +1379,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const [title, setTitle] = useState("OUR DECLARATION");
   const [text, setText] = useState(declarationSkeleton("OUR DECLARATION"));
   const [minimum, setMinimum] = useState("0.002");
+  const [waitDays, setWaitDays] = useState("7");
   const [cosigner, setCosigner] = useState("");
   const [testPasted, setTestPasted] = useState("");
   const [problems, setProblems] = useState<string[] | null>(null);
@@ -1401,7 +1402,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
     const [w, f = ""] = t.split(".");
     const minimumSats = /^\d*\.?\d{0,8}$/.test(t) && t !== "" ? Number(BigInt(w || "0") * 100000000n + BigInt((f + "00000000").slice(0, 8))) : NaN;
     return {
-      name, about, title, declarationText: text, network, minimumSats,
+      name, about, title, declarationText: text, network, minimumSats, waitDays: /^\d{1,3}$/.test(waitDays.trim()) ? Number(waitDays.trim()) : NaN,
       cosignerPubkey: keyFromXpub(cosigner) ? cosigner.trim() : cosigner.trim().toLowerCase(), testCosignerPubkey: testPasted.trim() || testCoKey.xpub,
       siteBase, today: new Date().toISOString().slice(0, 10),
     };
@@ -1517,6 +1518,9 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       {network === "mainnet" ? <>
         <Text style={s.label}>Minimum lock that counts, in BTC</Text>
         <TextInput style={s.input} keyboardType="decimal-pad" value={minimum} onChangeText={(t) => { setMinimum(t); setChecked(null); }} />
+        <Text style={s.label}>Days a new destination must be public before a proposal can use it</Text>
+        <TextInput style={s.input} keyboardType="number-pad" value={waitDays} onChangeText={(t) => { setWaitDays(t); setChecked(null); }} />
+        <Text style={s.note}>We recommend at least 7, The Kop Fund's choice. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
         <Text style={s.label}>Co-signer's public key</Text>
         <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={cosigner} onChangeText={(t) => { setCosigner(t); setChecked(null); }} placeholder="Its xpub, or its key: 02… or 03…" />
         <Text style={s.note}>The co-signer can't take or keep anyone's money — only refuse to complete a purchase. Make this key with "Make a co-signer key" on Home (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here — or its plain key, though then hardware wallets can't lock until the xpub is added.</Text>

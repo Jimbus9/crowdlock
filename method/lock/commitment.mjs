@@ -31,7 +31,7 @@ const { Transaction, script: bscript } = bitcoin;
 export const MAX_FEE_FRACTION = 0.01;
 
 /** A destination must be publicly visible this long before a proposal opens. */
-export const MINIMUM_AGE_DAYS = 7; // the floor on real bitcoin; each Crowdlock sets its own (destination_wait_days)
+export const MINIMUM_AGE_DAYS = 7; // used only when no Crowdlock is given; each Crowdlock sets its own (destination_wait_days)
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest();
 

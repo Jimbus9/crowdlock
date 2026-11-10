@@ -80,7 +80,7 @@ const emptyDestinations = (c, today) => ({
   minimum_age_days: c.destination_wait_days, threshold: c.attestor_threshold, attestors: [], entries: [],
 });
 
-function crowdlockFile({ name, about, disclaimer, title, declFile, declText, network, minimumSats, cosigner, cosignerXpub = null, regDir, site }) {
+function crowdlockFile({ name, about, disclaimer, title, declFile, declText, network, minimumSats, cosigner, cosignerXpub = null, regDir, site, waitDays }) {
   return {
     format: 1,
     name,
@@ -96,7 +96,7 @@ function crowdlockFile({ name, about, disclaimer, title, declFile, declText, net
     ...(cosignerXpub ? { cosigner_xpubs: [cosignerXpub] } : {}),
     gathering_window_max_days: 28,
     settlement_window_max_days: 14,
-    destination_wait_days: network === "mainnet" ? 7 : 0, // at least 7 on real bitcoin; none on a test copy
+    destination_wait_days: waitDays, // the founder's choice; 7 recommended on real bitcoin, none on the test copy
     attestor_keys: [],
     attestor_threshold: 1,
     max_commitment_fee: 0.01,
@@ -146,6 +146,7 @@ ${links.map((l) => `<h2>${esc(l.label)}</h2>
  *   declarationText      the declaration; must keep NO_RETURNS word for word
  *   network              "mainnet" (with a test copy) or "testnet4" (test copy only)
  *   minimumSats          the real Crowdlock's minimum counted lock
+ *   waitDays             how long a destination must be public before a proposal may name it (founder's choice; 7 recommended)
  *   cosignerPubkey       the real Crowdlock's co-signer (pasted in)
  *   testCosignerPubkey   the test copy's co-signer (made on the phone)
  *   siteBase             https://<owner>.github.io/<repo>/
@@ -153,7 +154,7 @@ ${links.map((l) => `<h2>${esc(l.label)}</h2>
  *
  * Returns { ok, problems } or { ok: true, files, links }.
  */
-export function buildCrowdlock({ name, about, title, declarationText, network, minimumSats, cosignerPubkey, testCosignerPubkey, siteBase, today }) {
+export function buildCrowdlock({ name, about, title, declarationText, network, minimumSats, cosignerPubkey, testCosignerPubkey, siteBase, today, waitDays = 7 }) {
   // Either co-signer may be given as a plain key or as its xpub; an xpub is
   // kept beside the key it stands for, so hardware wallets can lock with it.
   const asKey = (v) => { const k = keyFromXpub(v); return k ? { key: k, xpub: String(v).trim() } : { key: v, xpub: null }; };
@@ -178,6 +179,7 @@ export function buildCrowdlock({ name, about, title, declarationText, network, m
   if (network === "mainnet") {
     need(Number.isInteger(minimumSats) && minimumSats >= 10000, "Set a minimum of at least 0.0001 BTC.");
     need(isPublicKey(cosignerPubkey), "Paste the co-signer's public key: 66 characters, starting 02 or 03, copied whole.");
+    need(Number.isInteger(waitDays) && waitDays >= 0 && waitDays <= 365, "Set the waiting period for a new destination as a whole number of days (we recommend 7).");
   }
   need(isPublicKey(testCosignerPubkey), "The test copy's co-signer key isn't a public key: 66 characters, starting 02 or 03, copied whole.");
   if (problems.length) return { ok: false, problems };
@@ -190,7 +192,7 @@ export function buildCrowdlock({ name, about, title, declarationText, network, m
   if (network === "mainnet") {
     const c = crowdlockFile({
       name, about, disclaimer: "Nobody receives anything financial in return, ever. This is not an investment.",
-      title, declFile: "declaration.txt", declText: text, network, minimumSats, cosigner: cosignerPubkey, cosignerXpub: real.xpub, regDir: "", site: siteBase,
+      title, declFile: "declaration.txt", declText: text, network, minimumSats, cosigner: cosignerPubkey, cosignerXpub: real.xpub, regDir: "", site: siteBase, waitDays,
     });
     files[`crowdlocks/${slug}.json`] = JSON.stringify(c, null, 2) + "\n";
     files["declaration.txt"] = text;
@@ -207,7 +209,7 @@ export function buildCrowdlock({ name, about, title, declarationText, network, m
     name: `${name} — TEST`, about: `A test copy of ${name} on Bitcoin's test network, for practising with test money. Nothing here is real.`,
     disclaimer: "TEST ONLY. Test bitcoin has no value. Joining here does not make you a member of the real one.",
     title: `${title} — test copy`, declFile: "test/declaration.txt", declText: testText, network: "testnet4",
-    minimumSats: 10000, cosigner: testCosignerPubkey, cosignerXpub: test.xpub, regDir: "test/", site: siteBase,
+    minimumSats: 10000, cosigner: testCosignerPubkey, cosignerXpub: test.xpub, regDir: "test/", site: siteBase, waitDays: 0,
   });
   files[`crowdlocks/${slug}-test.json`] = JSON.stringify(t, null, 2) + "\n";
   files["test/declaration.txt"] = testText;
