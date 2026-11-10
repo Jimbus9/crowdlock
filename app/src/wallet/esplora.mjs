@@ -85,10 +85,25 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
       const hash = await get("/blocks/tip/hash", "text");
       return (await get(`/block/${hash.trim()}`)).mediantime;
     },
-    /** A fee rate likely to confirm within about half an hour, sats/vbyte, never below `minFee` (test networks raise it: their blocks are bursty). */
-    async feeRate() {
-      try { const f = await get("/v1/fees/recommended"); return Math.max(minFee, Math.ceil(f.halfHourFee)); }
-      catch { return Math.max(minFee, 2); }
+    /**
+     * The explorer's three recommended rates, sats/vbyte, never below `minFee`
+     * (test networks raise it: their blocks are bursty): slow (about an hour),
+     * normal (about half an hour) and fast (the next block or two). They never
+     * fall out of order.
+     */
+    async feeRates() {
+      let f = null;
+      try { f = await get("/v1/fees/recommended"); } catch {}
+      const at = (v, fallback) => Math.max(minFee, Math.ceil(Number(v) > 0 ? Number(v) : fallback));
+      const slow = at(f?.hourFee, 1);
+      const normal = Math.max(slow, at(f?.halfHourFee, 2));
+      const fast = Math.max(normal, at(f?.fastestFee, 5));
+      return { slow, normal, fast };
+    },
+    /** A fee rate for the chosen speed ("normal" by default: likely within about half an hour). */
+    async feeRate(speed = "normal") {
+      const r = await this.feeRates();
+      return r[speed] ?? r.normal;
     },
     async broadcast(hex) {
       const res = await fetchImpl(`${baseUrl}/tx`, { method: "POST", body: hex });

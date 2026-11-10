@@ -20,6 +20,19 @@ export async function forgetWords(): Promise<void> {
   await SecureStore.deleteItemAsync(KEY);
 }
 
+// How fast the fan wants their transactions to confirm: slow, normal or fast.
+// Only a preference, so it is kept beside the rest, not with the words.
+const FEE_SPEED = "crowdlock.feespeed.v1";
+export type FeeSpeed = "slow" | "normal" | "fast";
+
+export async function loadFeeSpeed(): Promise<FeeSpeed> {
+  try { const v = await SecureStore.getItemAsync(FEE_SPEED); return v === "slow" || v === "fast" ? v : "normal"; } catch { return "normal"; }
+}
+
+export async function saveFeeSpeed(v: FeeSpeed): Promise<void> {
+  try { await SecureStore.setItemAsync(FEE_SPEED, v); } catch {}
+}
+
 // Crowdlocks the fan has added by link, beyond the starting list. Not secret,
 // but kept beside the words so removing the wallet removes them too.
 const ADDED = "crowdlock.added.v1";

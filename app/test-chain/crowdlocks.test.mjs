@@ -306,6 +306,17 @@ console.log(failures === 0 ? "The app's Crowdlock loader accepts the real files 
   const fallback = await esploraChain("https://fee-d", down, 50, { minFee: 5, retries: 0 }).feeRate();
   console.log(low === 1 && raised === 5 && high === 40 && fallback === 5 ? "PASS  The fee floor lifts a too-low estimate, never lowers a high one" : `FAIL  fee floor ${low} ${raised} ${high} ${fallback}`);
   if (!(low === 1 && raised === 5 && high === 40 && fallback === 5)) process.exitCode = 1;
+
+  // Slow / normal / fast: the explorer's three rates, in order, never below the floor.
+  const three = async () => ({ ok: true, status: 200, json: async () => ({ fastestFee: 12, halfHourFee: 6, hourFee: 3, economyFee: 1 }), text: async () => "" });
+  const r3 = await esploraChain("https://fee-e", three, 50).feeRates();
+  const r3f = await esploraChain("https://fee-f", three, 50, { minFee: 5 }).feeRates();
+  const slow = await esploraChain("https://fee-g", three, 50).feeRate("slow");
+  const fast = await esploraChain("https://fee-h", three, 50).feeRate("fast");
+  const dflt = await esploraChain("https://fee-i", three, 50).feeRate();
+  const ok3 = r3.slow === 3 && r3.normal === 6 && r3.fast === 12 && r3f.slow === 5 && r3f.normal === 6 && r3f.fast === 12 && slow === 3 && fast === 12 && dflt === 6;
+  console.log(ok3 ? "PASS  Slow, normal and fast fee rates come from the explorer, in order, above the floor" : `FAIL  three rates ${JSON.stringify([r3, r3f, slow, fast, dflt])}`);
+  if (!ok3) process.exitCode = 1;
 }
 
 console.log("-".repeat(80));

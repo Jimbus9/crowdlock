@@ -53,7 +53,8 @@ import {
 import { postToRelays, announce, fetchAnnouncements } from "./src/relays.mjs";
 import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
-  loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys } from "./src/storage";
+  loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed } from "./src/storage";
+import type { FeeSpeed } from "./src/storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB } from "./src/config";
 
 type Screen =
@@ -91,6 +92,7 @@ export default function App() {
     // Opened by a link: note it, then show the first screen once; "home" picks
     // the link up. A link arriving while the app is open is opened at once if
     // there is a wallet, or waits for one.
+    loadFeeSpeed().then((v) => { feeSpeed = v; });
     Linking.getInitialURL().then((u) => {
       pending.current = fileUrlFromOpenLink(u ?? null);
       loadWords().then((w) => setScreen(w ? { name: "home", words: w } : { name: "welcome" }));
@@ -399,6 +401,7 @@ function Home({ words, go }: { words: string; go: Go }) {
         Want it automatic? Set up a standing order with a service that sends bitcoin to your own wallet, and give it this address.
       </Text>
 
+      <FeeChoice />
       <Button label="Send money out" onPress={() => go({ name: "send", words })} />
 
       <Text style={s.h2}>Crowdlocks</Text>
@@ -432,7 +435,7 @@ function Send({ words, go }: { words: string; go: Go }) {
     setBusy(true); setError(null);
     try {
       const sats = all ? "all" : BigInt(Math.round(Number(amount) * 1e8));
-      const feeRate = await chain.feeRate();
+      const feeRate = await chain.feeRate(feeSpeed);
       setReview(await buildSend({ account, chain, to, amount: sats, feeRate }));
     } catch (e: any) { setError(String(e.message ?? e)); }
     setBusy(false);
@@ -466,6 +469,7 @@ function Send({ words, go }: { words: string; go: Go }) {
       />
       <Button label={all ? "Send a set amount instead" : "Send everything"} kind="plain" onPress={() => { setAll(!all); setReview(null); }} />
 
+      {!review && <FeeChoice />}
       {error && <Text style={s.error}>{error}</Text>}
       {!review && <LedgerHint account={account} />}
       {!review && <Button label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Checking…") : "Review"} disabled={busy || !to} onPress={prepare} />}
@@ -786,13 +790,17 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
     return sats === all ? { amount: "all", shown: all } : { amount: sats, shown: sats };
   })();
 
-  const lockIt = () => {
+  const lockIt = async () => {
     if (!waiting || chosen.problem) return;
     const locktime = lockDate(years);
+    // The fee is shown before anything is approved: a lock is about 141 vbytes.
+    let feeNote = "";
+    try { const r = await chain.feeRate(feeSpeed); feeNote = ` Network fee: ${r} sat/vB (${SPEED_LABEL[feeSpeed]}), about ${Math.ceil(r * 141)} sats.`; } catch {}
     Alert.alert(
       `Lock ${chosen.amount === "all" ? `everything waiting (${btc(waiting.confirmed)})` : btc(chosen.shown)} until ${when(locktime)}?`,
       (chosen.amount === "all" ? "The network fee comes out of it. " : "The network fee is paid from what stays waiting. ")
-        + "Until that date it can only leave the lock into a purchase you sign for yourself. After it, you can take it home whenever you like. This cannot be undone."
+        + feeNote
+        + " Until that date it can only leave the lock into a purchase you sign for yourself. After it, you can take it home whenever you like. This cannot be undone."
         + (account.kind === "ledger" ? " Your Ledger will first ask you to approve the lock's rules, then the payment: if it refuses the rules, nothing is sent." : ""),
       [
         { text: "Cancel", style: "cancel" },
@@ -800,7 +808,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
           setBusy("lock"); setMessage(null);
           try {
             const lock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner) };
-            const feeRate = await chain.feeRate();
+            const feeRate = await chain.feeRate(feeSpeed);
             const tx = await buildLock({ account, chain, lock, feeRate, amount: chosen.amount });
             // The terms are saved before the money moves, and checked saved.
             await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner });
@@ -825,7 +833,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
         { text: "Take it home", onPress: async () => {
           setBusy(row.address); setMessage(null);
           try {
-            const tx = await takeHome({ account, chain, lock: { ...row, cosignerXpub: xpubForKey(c.crowdlock, row.cosignerPubkey) }, feeRate: await chain.feeRate(), medianTime: await chain.medianTime() });
+            const tx = await takeHome({ account, chain, lock: { ...row, cosignerXpub: xpubForKey(c.crowdlock, row.cosignerPubkey) }, feeRate: await chain.feeRate(feeSpeed), medianTime: await chain.medianTime() });
             await chain.broadcast(tx.hex);
             setMessage({ ok: true, text: `${btc(tx.sent)} is on its way back to your waiting balance (fee ${btc(tx.fee)}).` });
             await refresh(); onChange();
@@ -852,7 +860,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
             const newLock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner) };
             const tx = await relock({
               account, chain, lock: { ...row, cosignerXpub: xpubForKey(c.crowdlock, row.cosignerPubkey) }, newLock, addWaiting: extra > 0n,
-              feeRate: await chain.feeRate(), medianTime: await chain.medianTime(),
+              feeRate: await chain.feeRate(feeSpeed), medianTime: await chain.medianTime(),
             });
             await saveLock({ crowdlock: c.url, address: newLock.address, locktime, cosignerPubkey: cosigner });
             await chain.broadcast(tx.hex);
@@ -895,6 +903,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
             ))}
           </View>
           <Text style={s.note}>Unlocks {when(lockDate(years))}.</Text>
+          <FeeChoice />
           {lengths.some((y) => y < 1) && <Text style={s.note}>The test network's clock can run ahead of real time, so a short test lock may unlock early. Real bitcoin's never does.</Text>}
           <Button
             label={busy === "lock" ? "Locking…" : chosen.amount === "all" ? "Lock everything waiting" : `Lock ${btc(chosen.shown)}`}
@@ -1540,6 +1549,35 @@ function btc(sats: bigint) {
   const neg = sats < 0n; const v = neg ? -sats : sats;
   const whole = v / 100000000n; const frac = (v % 100000000n).toString().padStart(8, "0");
   return `${neg ? "-" : ""}${whole}.${frac} BTC`;
+}
+
+// How fast transactions should confirm. Kept here, and saved, so every screen
+// that sends something uses the same choice.
+let feeSpeed: FeeSpeed = "normal";
+const SPEED_LABEL: Record<FeeSpeed, string> = { slow: "Slow", normal: "Normal", fast: "Fast" };
+const SPEED_WHEN: Record<FeeSpeed, string> = { slow: "about an hour", normal: "about half an hour", fast: "the next block or two" };
+
+/** Slow / Normal / Fast, with the network fee rate each means right now. */
+function FeeChoice() {
+  const [speed, setSpeed] = useState<FeeSpeed>(feeSpeed);
+  const [rates, setRates] = useState<{ slow: number; normal: number; fast: number } | null>(null);
+  useEffect(() => { chain.feeRates().then(setRates).catch(() => {}); loadFeeSpeed().then((v) => { feeSpeed = v; setSpeed(v); }); }, []);
+  const pick = (v: FeeSpeed) => { feeSpeed = v; setSpeed(v); saveFeeSpeed(v); };
+  return (
+    <View>
+      <Text style={s.h2}>Fee speed</Text>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        {(["slow", "normal", "fast"] as FeeSpeed[]).map((v) => (
+          <Pressable key={v} onPress={() => pick(v)} style={[s.btn, speed !== v && s.btnPlain, { flex: 1, paddingHorizontal: 4 }]}>
+            <Text style={[s.btnText, speed !== v && s.btnTextPlain, { fontSize: 14 }]}>{SPEED_LABEL[v]}{rates ? `\n${rates[v]} sat/vB` : ""}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={s.note}>
+        {SPEED_LABEL[speed]}: usually confirms in {SPEED_WHEN[speed]}. A higher rate costs more and is quicker; a low one can wait many hours when the network is busy. The fee is shown before you approve a lock or a payment.
+      </Text>
+    </View>
+  );
 }
 
 function Button({ label, onPress, kind = "main", disabled }: { label: string; onPress: () => void; kind?: "main" | "plain" | "danger"; disabled?: boolean }) {
