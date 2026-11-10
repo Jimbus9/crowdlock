@@ -10,6 +10,7 @@
 // The file format is spec/proposal-and-settlement.md, "Publishing a proposal".
 
 import { sha256 } from "./vendor/noble-hashes/sha256.js";
+import { verifyMembership } from "./verify.mjs";
 
 export const PROPOSALS_FORMAT = "crowdlock-proposals/1";
 export const PILE_FORMAT = "crowdlock-commitments/1";
@@ -137,4 +138,126 @@ export function checkPileShape(file, hash) {
     }
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// The destinations list, browser-safe. The same rules as method/lock/
+// commitment.mjs (destinationLine … destinationIsPermitted), held to the same
+// results by proposals.test.mjs. spec/destinations-format.md.
+// ---------------------------------------------------------------------------
+
+
+export const ZERO_PREV = "0".repeat(64);
+
+export function destinationLine({ instance, index, op, address, text, added, prev }) {
+  if (!HEX64.test(instance ?? "")) throw new Error("instance must be a 64-character hex declaration hash");
+  for (const [name, v] of [["text", text], ["address", address]]) {
+    if (/[|\n\r]/.test(v)) throw new Error(`${name} may not contain | or a newline`);
+  }
+  return `${instance}|${index}|${op}|${address}|${text}|${added}|${prev}`;
+}
+
+export function destinationHash(entry) {
+  return hex(sha256(utf8(destinationLine(entry))));
+}
+
+export function attestationStatement(entry) {
+  return `I attest destination entry ${entry.index} (sha256:${destinationHash(entry)}).`;
+}
+
+export function attestationsAreValid(entry, { attestors = [], threshold = 1, hrp = "bc" } = {}) {
+  if (!Number.isInteger(threshold) || threshold < 1) return { ok: false, reason: "the threshold must be a positive whole number", signers: [] };
+  if (attestors.length < threshold) return { ok: false, reason: `the list names ${attestors.length} attestor(s) but requires ${threshold}`, signers: [] };
+  const statement = attestationStatement(entry);
+  const permitted = new Set(attestors);
+  const signers = new Set();
+  for (const a of entry.attestations ?? []) {
+    const address = String(a?.address ?? "").trim();
+    if (!permitted.has(address)) return { ok: false, reason: `entry ${entry.index} is attested by ${address || "nobody"}, who is not a listed attestor`, signers: [...signers] };
+    const r = verifyMembership({ address, signature: String(a?.signature ?? ""), message: statement, hrp });
+    if (!r.valid) return { ok: false, reason: `entry ${entry.index}: ${address}'s attestation does not verify — ${r.reason}`, signers: [...signers] };
+    signers.add(address);
+  }
+  if (signers.size < threshold) return { ok: false, reason: `entry ${entry.index} has ${signers.size} valid attestation(s) from distinct attestors, needs ${threshold}`, signers: [...signers] };
+  return { ok: true, reason: "", signers: [...signers] };
+}
+
+export function chainIsIntact(entries) {
+  let expected = ZERO_PREV;
+  const instance = entries[0]?.instance;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.instance !== instance) return { ok: false, reason: `entry ${e.index} belongs to a different instance` };
+    if (e.index !== i + 1) return { ok: false, reason: `entry at position ${i} has index ${e.index}, expected ${i + 1}` };
+    if (e.prev !== expected) return { ok: false, reason: `entry ${e.index} chains to ${String(e.prev).slice(0, 12)}…, expected ${expected.slice(0, 12)}…` };
+    expected = destinationHash(e);
+  }
+  return { ok: true, reason: "" };
+}
+
+export function destinationIsPermitted({ address, entries, opensAt, minimumAgeDays = 7, attestors = null, threshold = null, hrp = "bc" }) {
+  const chain = chainIsIntact(entries);
+  if (!chain.ok) return { permitted: false, reason: `the list itself is broken: ${chain.reason}` };
+  const mine = entries.filter((e) => e.address === address);
+  const added = mine.filter((e) => e.op === "add").pop();
+  if (!added) return { permitted: false, reason: "not on the published destinations list" };
+  const revoked = mine.filter((e) => e.op === "revoke" && e.index > added.index).pop();
+  if (revoked) return { permitted: false, reason: `revoked by entry ${revoked.index}` };
+  if (attestors !== null || threshold !== null) {
+    const att = attestationsAreValid(added, { attestors: attestors ?? [], threshold: threshold ?? 1, hrp });
+    if (!att.ok) return { permitted: false, reason: att.reason };
+  }
+  if (!added.firstSeen) return { permitted: false, reason: `entry ${added.index} has no recorded first public appearance, so its age cannot be established` };
+  const seen = Date.parse(added.firstSeen), opens = Date.parse(opensAt);
+  if (Number.isNaN(seen) || Number.isNaN(opens)) return { permitted: false, reason: "the entry's first appearance or the proposal's opening is not a readable date" };
+  const ageDays = (opens - seen) / 86_400_000;
+  if (!(ageDays >= minimumAgeDays)) return { permitted: false, reason: `only ${ageDays.toFixed(1)} days old at the proposal's opening, needs ${minimumAgeDays}` };
+  return { permitted: true, reason: "" };
+}
+
+/**
+ * The next entry to add to a destinations list, unsigned. Its attestations
+ * are added by the attestors; `firstSeen` is when it is first published.
+ */
+export function nextDestination(file, { address, text, now = new Date() }) {
+  const entries = file?.entries ?? [];
+  const at = new Date(Math.floor(now.getTime() / 1000) * 1000).toISOString().replace(".000Z", "Z");
+  const entry = {
+    instance: file.instance, index: entries.length + 1, op: "add", address: String(address).trim(), text: String(text).trim(),
+    added: at, prev: entries.length ? destinationHash(entries[entries.length - 1]) : ZERO_PREV,
+  };
+  destinationLine(entry); // refuses a | or a newline
+  return { entry, firstSeen: at };
+}
+
+// ---------------------------------------------------------------------------
+// Commitments on the relays: the same Nostr kind as registrations and locks,
+// tagged with the Crowdlock and the proposal so they can be collected.
+// ---------------------------------------------------------------------------
+
+export const PROPOSAL_TAG = "y";
+const RECORD_KIND = 3713; // method/js/inbox.mjs
+
+/** A commitment (the owner's half) or a completed one (the co-signer's), as a Nostr event template. */
+export function commitmentEventTemplate({ type, proposal, record, tx }, fingerprint, createdAt) {
+  if (type !== "commitment" && type !== "completed") throw new Error("type must be commitment or completed");
+  if (!HEX64.test(proposal)) throw new Error("not a proposal's hash");
+  return {
+    kind: RECORD_KIND, created_at: createdAt,
+    tags: [["x", fingerprint], [PROPOSAL_TAG, proposal], ["t", "crowdlock"]],
+    content: JSON.stringify(type === "commitment" ? { crowdlock: fingerprint, type, proposal, record } : { crowdlock: fingerprint, type, proposal, tx }),
+  };
+}
+
+/** Read one back, or null. Says nothing about whether it is valid. */
+export function commitmentFromEvent(event, fingerprint, proposal) {
+  if (!event || event.kind !== RECORD_KIND || typeof event.content !== "string" || event.content.length > 8000) return null;
+  const tags = Array.isArray(event.tags) ? event.tags : [];
+  if (!tags.some((t) => t[0] === "x" && t[1] === fingerprint) || !tags.some((t) => t[0] === PROPOSAL_TAG && t[1] === proposal)) return null;
+  let c;
+  try { c = JSON.parse(event.content); } catch { return null; }
+  if (!c || c.crowdlock !== fingerprint || c.proposal !== proposal) return null;
+  if (c.type === "commitment" && c.record?.proposal === proposal && typeof c.record?.tx === "string") return { type: "commitment", record: c.record, at: event.created_at };
+  if (c.type === "completed" && typeof c.tx === "string" && /^[0-9a-f]+$/.test(c.tx)) return { type: "completed", tx: c.tx, at: event.created_at };
+  return null;
 }

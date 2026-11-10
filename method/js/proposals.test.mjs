@@ -3,8 +3,12 @@
 import { readFileSync } from "node:fs";
 import {
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
-  PROPOSALS_FORMAT, PILE_FORMAT,
+  PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
+  chainIsIntact, destinationIsPermitted, nextDestination, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
 } from "./proposals.mjs";
+import bitcoinMessage from "../lock/node_modules/bitcoinjs-message/index.js";
+import { ECPair } from "../lock/lock.mjs";
+import * as bitcoin from "../lock/node_modules/bitcoinjs-lib/src/index.js";
 import * as ref from "../lock/commitment.mjs";
 import { checkCrowdlock } from "./crowdlock.mjs";
 
@@ -59,6 +63,44 @@ check("A Crowdlock file may name its proposals file",
   checkCrowdlock({ ...crowdlock, register: { ...crowdlock.register, proposals: "crowdlocks/test/proposals.json" } }).ok);
 check("…but not as anything other than a .json file",
   !checkCrowdlock({ ...crowdlock, register: { ...crowdlock.register, proposals: 7 } }).ok);
+
+// The destinations list: the same answers as the reference code.
+const NET = bitcoin.networks.testnet;
+const key = ECPair.makeRandom({ network: NET }), outsider = ECPair.makeRandom({ network: NET });
+const addrOf = (k) => bitcoin.payments.p2wpkh({ pubkey: Buffer.from(k.publicKey), network: NET }).address;
+const sign = (entry, k) => ({ address: addrOf(k), signature: bitcoinMessage.sign(attestationStatement(entry), Buffer.from(k.privateKey), true, { segwitType: "p2wpkh" }).toString("base64") });
+const dfile = { instance, entries: [] };
+const { entry: d1, firstSeen: s1 } = nextDestination(dfile, { address: addrOf(outsider), text: "Test seller", now: new Date("2026-11-01T12:00:00.123Z") });
+const e1 = { ...d1, attestations: [sign(d1, key)], firstSeen: s1 };
+const { entry: d2 } = nextDestination({ instance, entries: [e1] }, { address: addrOf(key), text: "Second", now: new Date("2026-11-20T00:00:00Z") });
+const e2 = { ...d2, attestations: [sign(d2, outsider)], firstSeen: "2026-11-20T00:00:00Z" };
+const list = [e1, e2];
+const rules = { attestors: [addrOf(key)], threshold: 1, hrp: "tb" };
+check("A new entry chains to the one before it, with whole-second times", d1.prev === ZERO_PREV && d2.prev === ref.destinationHash(e1) && s1 === "2026-11-01T12:00:00Z");
+check("Destination lines, hashes and statements are the reference code's",
+  list.every((e) => destinationLine(e) === ref.destinationLine(e) && destinationHash(e) === ref.destinationHash(e) && attestationStatement(e) === ref.attestationStatement(e)));
+check("Attestations: the same verdicts as the reference code (a real one, an outsider's)",
+  attestationsAreValid(e1, rules).ok === ref.attestationsAreValid(e1, rules).ok && attestationsAreValid(e1, rules).ok
+    && attestationsAreValid(e2, rules).ok === ref.attestationsAreValid(e2, rules).ok && !attestationsAreValid(e2, rules).ok);
+check("The chain: the same verdicts, intact and tampered",
+  chainIsIntact(list).ok && ref.chainIsIntact(list).ok && !chainIsIntact([{ ...e1, text: "x" }, e2]).ok && !ref.chainIsIntact([{ ...e1, text: "x" }, e2]).ok);
+const ask = (address, opensAt, minimumAgeDays) => [destinationIsPermitted({ address, entries: list, opensAt, minimumAgeDays, ...rules }), ref.destinationIsPermitted({ address, entries: list, opensAt, minimumAgeDays, ...rules })];
+const agree = (pair) => pair[0].permitted === pair[1].permitted && pair[0].reason === pair[1].reason;
+check("Permitted or not: the same answer and reason as the reference code, in every case",
+  agree(ask(addrOf(outsider), "2026-11-10T00:00:00Z", 7)) && ask(addrOf(outsider), "2026-11-10T00:00:00Z", 7)[0].permitted
+    && agree(ask(addrOf(outsider), "2026-11-05T00:00:00Z", 7)) && !ask(addrOf(outsider), "2026-11-05T00:00:00Z", 7)[0].permitted
+    && agree(ask(addrOf(outsider), "2026-11-01T12:00:00Z", 0)) && ask(addrOf(outsider), "2026-11-01T12:00:00Z", 0)[0].permitted
+    && agree(ask(addrOf(key), "2026-12-30T00:00:00Z", 7)) && !ask(addrOf(key), "2026-12-30T00:00:00Z", 7)[0].permitted
+    && agree(ask("tb1qnotonthelist", "2026-12-30T00:00:00Z", 7)));
+check("A destination text with a | is refused", throws(() => nextDestination(dfile, { address: addrOf(key), text: "a|b" }), "may not contain"));
+
+// Commitments on the relays.
+const rec = { proposal: hash, lock: { address: "x" }, tx: "00ff" };
+const ev = { ...commitmentEventTemplate({ type: "commitment", proposal: hash, record: rec }, instance, 1800000000) };
+check("A commitment event reads back as the same record", commitmentFromEvent(ev, instance, hash)?.record?.tx === "00ff");
+check("…and not for another proposal or Crowdlock", commitmentFromEvent(ev, instance, "1".repeat(64)) === null && commitmentFromEvent(ev, "2".repeat(64), hash) === null);
+const done = commitmentEventTemplate({ type: "completed", proposal: hash, tx: "abcd" }, instance, 1800000000);
+check("A completed transaction event reads back", commitmentFromEvent(done, instance, hash)?.tx === "abcd");
 
 console.log(failures === 0 ? "Proposals behave as spec/proposal-and-settlement.md describes." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

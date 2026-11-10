@@ -33,11 +33,16 @@ import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { BIP32, Output, Psbt, signers, networks, keyExpressionBIP32 } from "@bitcoinerlab/descriptors";
 import * as ecc from "@bitcoinerlab/secp256k1";
 import bs58check from "bs58check";
-import { Transaction } from "bitcoinjs-lib";
+import { Transaction, script as bscript, address as baddress } from "bitcoinjs-lib";
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
 import { messageHash, verifyMembership } from "../../../method/js/verify.mjs";
+// The lock's script and address, and the destinations list's rules, are the
+// register's own browser-safe code (held to the reference code by its tests).
+import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
+import { destinationIsPermitted } from "../../../method/js/proposals.mjs";
+import { isCosignerOf } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
 export const NETWORKS = {
@@ -680,6 +685,119 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
   };
   if (remainder > 0n) record.remainder = { owner_pubkey: account.publicKey, cosigner_pubkey: check.cosignerPubkey, locktime: lock.locktime };
   return { record, fee, committed, remainder };
+}
+
+/**
+ * Check a commitment, as the co-signer and the proposal page must before
+ * counting or completing it. The same checks, in the same order and with the
+ * same verdicts, as verifyCommitment in method/lock/commitment.mjs — which runs
+ * only in Node — and held to it by the chain tests.
+ *
+ * `proposal` is a checked proposal from method/js/proposals.mjs; `destinations`
+ * the Crowdlock's destinations file. The coin's value, and whether it is still
+ * unspent, come from the chain.
+ *
+ * @returns {Promise<{ valid: boolean, reason: string, committedSats: number, fee: number, ownerPubkey?: string }>}
+ */
+export async function checkCommitment({ record, crowdlock, proposal, destinations, chain, network }) {
+  const net = network.network ?? network;
+  const hrp = net.bech32;
+  const fail = (reason) => ({ valid: false, reason, committedSats: 0, fee: 0 });
+  if (record?.proposal !== proposal.hash) return fail("record names a different proposal");
+  const L = record.lock ?? {};
+  let script, derived;
+  try {
+    const terms = { ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime };
+    script = lockScriptOf(terms); derived = lockAddressOf(terms, hrp);
+  } catch (e) { return fail(`lock fields are not a valid lock: ${e.message}`); }
+  if (derived !== L.address) return fail("lock address does not re-derive from the stated keys and locktime");
+  if (!isCosignerOf(crowdlock, L.cosigner_pubkey)) return fail(`the lock's co-signer is not ${crowdlock.name}'s — this commitment belongs to a different Crowdlock, or to none`);
+
+  let tx;
+  try { tx = Transaction.fromHex(record.tx); } catch (e) { return fail(`transaction will not parse: ${e.message}`); }
+  if (tx.ins.length !== 1) return fail(`${tx.ins.length} inputs, must be exactly 1`);
+  const w = tx.ins[0].witness;
+  if (w.length !== 4) return fail(`witness has ${w.length} items, the purchase branch has 4`);
+  if (w[0].length !== 0) return fail("the co-signer's slot is not empty — this is a completed spend, not a commitment");
+  if (w[1].length !== 0) return fail("branch selector is not empty, so this takes the going-home branch");
+  if (toHex(w[3]) !== toHex(script)) return fail("witness script is not the lock's script");
+
+  // The coin it spends: its value (the signature covers it) and whether it is still there.
+  const txid = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
+  const coin = (await chain.utxos(L.address)).find((u) => u.txid === txid && u.vout === tx.ins[0].index);
+
+  if (coin) {
+    let sigOk = false;
+    try {
+      const decoded = bscript.signature.decode(w[2]);
+      const sighash = tx.hashForWitnessV0(0, script, BigInt(coin.value), Transaction.SIGHASH_ALL);
+      sigOk = decoded.hashType === Transaction.SIGHASH_ALL && ecc.verify(sighash, fromHex(L.owner_pubkey), decoded.signature);
+    } catch { sigOk = false; }
+    if (!sigOk) return fail("the owner's signature does not verify over this transaction");
+  }
+  if (tx.locktime !== 0) return fail(`declares nLockTime ${tx.locktime}, must be 0`);
+
+  if (tx.outs.length < 1 || tx.outs.length > 2) return fail(`${tx.outs.length} outputs, must be 1 or 2`);
+  let out0;
+  try { out0 = baddress.fromOutputScript(tx.outs[0].script, net); } catch { return fail("output 0 is not a recognisable address"); }
+  if (out0 !== proposal.destination) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
+  if (!Array.isArray(destinations?.attestors) || destinations.threshold === undefined) {
+    return fail("no attestor set was supplied, so the destinations list cannot be checked for attestation");
+  }
+  const permitted = destinationIsPermitted({
+    address: out0, entries: destinations.entries ?? [], opensAt: proposal.opens,
+    minimumAgeDays: crowdlock.destination_wait_days, attestors: destinations.attestors, threshold: destinations.threshold, hrp,
+  });
+  if (!permitted.permitted) return fail(`destination not permitted: ${permitted.reason}`);
+
+  const committedSats = Number(tx.outs[0].value);
+  if (tx.outs.length === 2) {
+    const r = record.remainder;
+    if (!r) return fail("has a second output but no remainder lock declared to check it against");
+    let back;
+    try { back = lockAddressOf({ ownerPubkey: r.owner_pubkey, cosignerPubkey: r.cosigner_pubkey, locktime: r.locktime }, hrp); }
+    catch (e) { return fail(`remainder lock is not a valid lock: ${e.message}`); }
+    let out1 = null;
+    try { out1 = baddress.fromOutputScript(tx.outs[1].script, net); } catch {}
+    if (out1 !== back) return fail("output 1 does not pay the declared remainder lock");
+    if (r.owner_pubkey !== L.owner_pubkey) return fail("remainder lock has a different owner — this would move coins out of the owner's hands");
+    if (r.locktime < L.locktime) return fail("remainder lock expires earlier than the lock being spent — an early escape");
+    if (!isCosignerOf(crowdlock, r.cosigner_pubkey)) return fail("remainder lock is co-signed by a different Crowdlock");
+  }
+  if (!coin) return fail("the coin has already been spent, so this commitment is void");
+  const fee = coin.value - tx.outs.reduce((n, o) => n + Number(o.value), 0);
+  if (fee < 0) return fail("outputs exceed the input");
+  if (fee > committedSats * crowdlock.max_commitment_fee) {
+    return fail(`fee of ${fee} sats is more than ${crowdlock.max_commitment_fee * 100}% of the ${committedSats} committed — refusing in case of a client bug`);
+  }
+  return { valid: true, reason: "", committedSats, fee, ownerPubkey: L.owner_pubkey };
+}
+
+/**
+ * The co-signer's half, at settlement: complete a checked commitment with the
+ * co-signer key these words make (m/84'/0'/0'/0/0, as everywhere). The
+ * signature is the library's, over the library's sighash; the witness is laid
+ * out in the commitment format's fixed shape. Returns the finished
+ * transaction's hex, ready to broadcast. The words are not kept.
+ */
+export async function completeCommitmentWith({ words, record, chain }) {
+  const tidy = tidyWords(words);
+  if (!wordsAreValid(tidy)) throw new Error("those are not valid backup words — check the spelling and the order");
+  const node = BIP32.fromSeed(mnemonicToSeedSync(tidy), networks.bitcoin).derivePath(COSIGNER_PATH);
+  if (toHex(node.publicKey) !== String(record.lock.cosigner_pubkey).toLowerCase()) {
+    throw new Error("these words don't make this lock's co-signer key");
+  }
+  const L = record.lock;
+  const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
+  const tx = Transaction.fromHex(record.tx);
+  const txid = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
+  const coin = (await chain.utxos(L.address)).find((u) => u.txid === txid && u.vout === tx.ins[0].index);
+  if (!coin) throw new Error("the coin has already been spent, so this commitment is void");
+  const sighash = tx.hashForWitnessV0(0, script, BigInt(coin.value), Transaction.SIGHASH_ALL);
+  const sig = bscript.signature.encode(node.sign(sighash), Transaction.SIGHASH_ALL);
+  const w = tx.ins[0].witness;
+  tx.setWitness(0, [sig, w[1], w[2], w[3]]);
+  return tx.toHex();
 }
 
 // ---------------------------------------------------------------------------

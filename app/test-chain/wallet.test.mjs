@@ -569,6 +569,50 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   await rpc("generatetoaddress", [1, miner.address]);
   const paidL = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
   check("…the co-signer completes it and the network accepts it", paidL === 350_000n, `${paidL} sats to the destination in all`);
+
+  // The app's own commitment checker gives the reference checker's verdicts.
+  const { checkCommitment, completeCommitmentWith } = await import("../src/wallet/core.mjs");
+  const cl = { name: "Test", cosigner_keys: [coKey5], destination_wait_days: 7, max_commitment_fee: 0.01 };
+  const destFile = { attestors: [attestor.address], threshold: 1, entries: [entry] };
+  const appProposal = { hash: pHash, destination, opens: proposal.opens };
+  await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 300_000n, feeRate: 2 })).hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const FT2 = (await chain.medianTime()) + 30 * 86400;
+  const lock2 = lockFor({ account: fan, cosignerPubkey: coKey5, locktime: FT2 });
+  await chain.broadcast((await buildLock({ account: fan, chain, lock: lock2, feeRate: 2 })).hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const [c3] = (await chain.utxos(lock2.address)).filter((c) => c.confirmed);
+  const good = (await buildCommitment({ account: fan, chain, lock: lock2, coin: c3, proposalHash: pHash, destination, amount: 100_000n, feeRate: 2 })).record;
+  const flip = (hexs, at) => hexs.slice(0, at) + (hexs[at] === "0" ? "1" : "0") + hexs.slice(at + 1);
+  const otherOwner = accountFromWords(newWords(), net);
+  const variants = {
+    "a good one": good,
+    "another proposal's": { ...good, proposal: "e".repeat(64) },
+    "lock terms that don't make its address": { ...good, lock: { ...good.lock, locktime: good.lock.locktime + 1 } },
+    "a tampered transaction": { ...good, tx: flip(good.tx, good.tx.length - 40) },
+    "another owner's key": { ...good, lock: { ...good.lock, owner_pubkey: otherOwner.publicKey, address: lockAddress({ ownerPubkey: otherOwner.publicKey, cosignerPubkey: coKey5, locktime: good.lock.locktime }, "rb") } },
+    "a remainder that expires sooner": { ...good, remainder: { ...good.remainder, locktime: good.lock.locktime - 1 } },
+    "a co-signer from another Crowdlock": { ...good, lock: { ...good.lock, cosigner_pubkey: otherOwner.publicKey } },
+  };
+  let agreeAll = true; const disagree = [];
+  for (const [name, rec] of Object.entries(variants)) {
+    const app = await checkCommitment({ record: rec, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    const refv = C.verifyCommitment({ record: rec, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
+      proposal: { hash: pHash, destination, opensAt: proposal.opens }, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1 } });
+    if (app.valid !== refv.valid || (!app.valid && app.reason !== refv.reason)) { agreeAll = false; disagree.push(`${name}: app "${app.reason}" vs ref "${refv.reason}"`); }
+  }
+  check("The app's commitment checker gives the reference checker's verdict and reason, good and tampered", agreeAll, disagree.join(" | "));
+  const appGood = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+  check("…and counts what a good one commits", appGood.valid && appGood.committedSats === 100_000, appGood.reason);
+
+  await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");
+  const finished = await completeCommitmentWith({ words: coWords5, record: good, chain });
+  await chain.broadcast(finished);
+  await rpc("generatetoaddress", [1, miner.address]);
+  const paid3 = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
+  check("The co-signer's words complete it in the app, and the network accepts it", paid3 === 450_000n, `${paid3} sats to the destination in all`);
+  const afterSpend = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+  check("…after which the same commitment checks as void", !afterSpend.valid && /already been spent/.test(afterSpend.reason), afterSpend.reason);
 }
 
 await node.close();
