@@ -657,7 +657,9 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
   if (committed < DUST_SATS) throw new Error("too little left to commit after the fee");
   // The spec's own sanity check: verifiers refuse a fee above this share.
   if (Number(fee) > Number(committed) * maxFee) {
-    throw new Error(`the fee would be more than ${maxFee * 100}% of what is committed — commit more, or wait for lower fees`);
+    const smallest = BigInt(Math.ceil(Number(fee) / maxFee));
+    const btc = (v) => (Number(v) / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+    throw new Error(`the fee (${fee} sats at ${feeRate} sat/vB) would be more than ${maxFee * 100}% of what is committed. At this fee rate the smallest commitment is about ${btc(smallest)} BTC — commit at least that, or choose a slower fee`);
   }
 
   const psbt = new Psbt({ network: net });
