@@ -28,7 +28,7 @@ import {
   newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend, signStatement,
   lockFor, lockDate, buildLock, lockState, takeHome, relock, checkLedgerKey, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
   isPublicKey, keyFromXpub, xpubForKey, ledgerAccountFrom, readLedgerAccount, signStatementWith,
-  buildCommitment, checkCommitment, completeCommitmentWith, NETWORKS,
+  buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, NETWORKS,
 } from "./src/wallet/core.mjs";
 import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
@@ -1376,15 +1376,27 @@ function parseBtc(text: string): bigint | null {
 }
 const atUtc = (iso: string) => iso.slice(0, 16).replace("T", " ") + " UTC";
 
-type Pile = { count: number; sats: number; mine: { sats: number; record: any }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[] };
+type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number };
 
 async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
   const items = await fetchCommitments(c.crowdlock, p.hash);
-  const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [] };
+  const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0 };
   for (const it of items) {
     if (it.type === "completed") { pile.completed++; continue; }
     const v = await checkCommitment({ record: it.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
-    if (!v.valid) { pile.refused.push(v.reason); continue; }
+    if (!v.valid) {
+      // A commitment whose coin is gone may be one the co-signer completed:
+      // then it was paid, not refused.
+      if (/already been spent/.test(v.reason)) {
+        const paid = await commitmentPaid({ record: it.record, chain });
+        if (paid > 0) {
+          pile.paid += paid; pile.paidCount++;
+          if (it.record.lock?.owner_pubkey === account.publicKey) pile.mine.push({ sats: paid, record: it.record, paid: true });
+          continue;
+        }
+      }
+      pile.refused.push(v.reason); continue;
+    }
     pile.count++; pile.sats += v.committedSats;
     pile.good.push({ record: it.record, at: it.at, sats: v.committedSats });
     if (v.ownerPubkey === account.publicKey) pile.mine.push({ sats: v.committedSats, record: it.record });
@@ -1405,7 +1417,7 @@ function Proposals({ c, account, member }: { c: Extract<Loaded, { ok: true }>; a
         <View key={p.hash} style={s.card}>
           <Pressable onPress={() => setOpen(open === p.hash ? null : p.hash)}>
             <Text style={[s.p, { fontWeight: "700" }]}>{p.title}</Text>
-            <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}</Text>
+            <ProposalStatus c={c} p={p} account={account} />
             <Text style={s.link}>{open === p.hash ? "Hide" : "Read it and see who's committed →"}</Text>
           </Pressable>
           {open === p.hash && <ProposalDetail c={c} p={p} account={account} member={member} />}
@@ -1415,13 +1427,25 @@ function Proposals({ c, account, member }: { c: Extract<Loaded, { ok: true }>; a
   );
 }
 
+/** The one line under a proposal's title: its phase, or that it has been paid. */
+function ProposalStatus({ c, p, account }: { c: Extract<Loaded, { ok: true }>; p: any; account: any }) {
+  const [paid, setPaid] = useState<number | null>(null);
+  useEffect(() => { readPile(c, p, account).then((x) => setPaid(x.paid)).catch(() => setPaid(null)); }, [c, p]);
+  if (paid !== null && paid >= p.target.sats) return <Text style={s.good}>Funded and paid · {btc(BigInt(paid))} sent to the seller · closed</Text>;
+  return <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}{paid ? ` · ${btc(BigInt(paid))} paid so far` : ""}</Text>;
+}
+
 function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: true }>; p: any; account: any; member: boolean }) {
   const [pile, setPile] = useState<Pile | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const phase = phaseOf(p);
+  const timePhase = phaseOf(p);
   const refresh = useCallback(() => { setErr(null); readPile(c, p, account).then(setPile).catch((e) => setErr(String(e?.message ?? e))); }, [c, p]);
   useEffect(() => { refresh(); }, [refresh]);
-  const met = pile ? pile.sats >= p.target.sats : false;
+  // Once the co-signer has paid out the target, the proposal is finished:
+  // nothing more can be committed or completed, whatever its dates say.
+  const funded = !!pile && pile.paid >= p.target.sats;
+  const phase = funded ? "funded" : timePhase;
+  const met = pile ? pile.paid + pile.sats >= p.target.sats : false;
   return (
     <View>
       <Text style={s.declaration}>{p.text}</Text>
@@ -1431,10 +1455,14 @@ function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: tr
       <Text style={s.note}>Gathers from {atUtc(p.opens)} to {atUtc(p.closes)}. Settles by {atUtc(p.settles_by)}.</Text>
       <Text style={s.label}>Committed so far</Text>
       {err ? <Text style={s.error}>{err}</Text> : !pile ? <ActivityIndicator /> : <>
-        <Text style={s.big}>{btc(BigInt(pile.sats))}</Text>
-        <Text style={s.note}>{pile.count} commitment{pile.count === 1 ? "" : "s"}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}{pile.completed ? ` · ${pile.completed} completed by the co-signer` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats)))} to go.`}</Text>
+        {funded ? <>
+          <Text style={s.good}>Funded and paid. {btc(BigInt(pile.paid))} went to the seller in {pile.paidCount} payment{pile.paidCount === 1 ? "" : "s"}, completed by the co-signer and sent. This proposal is closed.</Text>
+        </> : <>
+          <Text style={s.big}>{btc(BigInt(pile.sats + pile.paid))}</Text>
+          <Text style={s.note}>{pile.count} waiting{pile.paidCount ? ` · ${pile.paidCount} paid (${btc(BigInt(pile.paid))})` : ""}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats - pile.paid)))} to go.`}</Text>
+        </>}
         {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
-        {pile.mine.length > 0 && <Text style={s.good}>You've committed {btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
+        {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
       </>}
       <Button label="Refresh" kind="plain" onPress={refresh} />
       {member && phase === "gathering" && <CommitForm c={c} p={p} account={account} onDone={() => setTimeout(refresh, 3000)} />}
@@ -1514,15 +1542,16 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const met = pile.sats >= p.target.sats;
-  // Settled in submission order, until the target is met and no further.
+  const met = pile.sats + pile.paid >= p.target.sats;
+  // Settled in submission order, until the target is met and no further
+  // (counting what has already been paid).
   const order = pile.good.slice().sort((a, b) => a.at - b.at);
   const take: typeof order = [];
-  let sum = 0;
+  let sum = pile.paid;
   for (const g of order) { if (sum >= p.target.sats) break; take.push(g); sum += g.sats; }
   const complete = () => {
     Alert.alert("Complete and send?",
-      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`,
+      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - pile.paid))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`,
       [{ text: "Cancel", style: "cancel" }, { text: "Complete and send", style: "destructive", onPress: async () => {
         setBusy(true); setMsg(null);
         let sent = 0; const failed: string[] = [];

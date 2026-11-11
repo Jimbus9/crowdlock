@@ -613,6 +613,10 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   check("The co-signer's words complete it in the app, and the network accepts it", paid3 === 450_000n, `${paid3} sats to the destination in all`);
   const afterSpend = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
   check("…after which the same commitment checks as void", !afterSpend.valid && /already been spent/.test(afterSpend.reason), afterSpend.reason);
+  const { commitmentPaid } = await import("../src/wallet/core.mjs");
+  check("…and is recognised as paid, for what it paid the seller (so a funded proposal shows as closed)",
+    (await commitmentPaid({ record: good, chain })) === 100_000 && (await commitmentPaid({ record: all.record, chain })) === 0,
+    `${await commitmentPaid({ record: good, chain })} / ${await commitmentPaid({ record: all.record, chain })}`);
 }
 
 await node.close();

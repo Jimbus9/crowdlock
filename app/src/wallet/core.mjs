@@ -776,6 +776,19 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
 }
 
 /**
+ * Has this commitment been paid? A completed commitment has the same txid as
+ * the commitment itself (the txid leaves out the signatures), so if the chain
+ * knows that txid, the co-signer completed it and it was sent. Returns the
+ * sats it paid the destination, or 0.
+ */
+export async function commitmentPaid({ record, chain }) {
+  let tx;
+  try { tx = Transaction.fromHex(record.tx); } catch { return 0; }
+  try { await chain.txHex(tx.getId()); } catch { return 0; }
+  return Number(tx.outs[0].value);
+}
+
+/**
  * The co-signer's half, at settlement: complete a checked commitment with the
  * co-signer key these words make (m/84'/0'/0'/0/0, as everywhere). The
  * signature is the library's, over the library's sighash; the witness is laid
