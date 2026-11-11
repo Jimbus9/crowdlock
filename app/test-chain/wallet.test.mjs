@@ -613,7 +613,13 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   check("The co-signer's words complete it in the app, and the network accepts it", paid3 === 450_000n, `${paid3} sats to the destination in all`);
   const afterSpend = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
   check("…after which the same commitment checks as void", !afterSpend.valid && /already been spent/.test(afterSpend.reason), afterSpend.reason);
-  const { commitmentPaid } = await import("../src/wallet/core.mjs");
+  const { commitmentPaid, signNoticeWith } = await import("../src/wallet/core.mjs");
+  const P = await import("../../method/js/proposals.mjs");
+  const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");
+  const notice = signNoticeWith({ words: coWords5, crowdlock: cl, statement: P.noticeStatement(pHash), network: net });
+  check("The co-signer's words sign a failure notice that checks as genuine",
+    P.noticeIsGenuine(notice, { crowdlock: cl, hash: pHash, hrp: "rb", addressOf: memberAddressForOwnerKey }).ok);
+  await refuses("…and words that aren't the co-signer's are refused", async () => signNoticeWith({ words: newWords(), crowdlock: cl, statement: P.noticeStatement(pHash), network: net }), "co-signer key");
   check("…and is recognised as paid, for what it paid the seller (so a funded proposal shows as closed)",
     (await commitmentPaid({ record: good, chain })) === 100_000 && (await commitmentPaid({ record: all.record, chain })) === 0,
     `${await commitmentPaid({ record: good, chain })} / ${await commitmentPaid({ record: all.record, chain })}`);

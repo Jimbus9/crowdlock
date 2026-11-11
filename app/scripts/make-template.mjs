@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-11";
+export const TEMPLATE_VERSION = "2026-11-11b";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -35,6 +35,7 @@ export const CHANGES = [
   { version: "2026-11-10b", change: "Accepts a Crowdlock file that names a proposals file. No change to how anything works until proposals are published" },
   { version: "2026-11-10c", change: "The destination waiting period is your own choice again, with seven days recommended, rather than a rule of the method" },
   { version: "2026-11-11", change: "Collects commitments to your proposals from the relays into a lasting record in your repository (commitments/), in the order they arrived. Nothing changes until you publish a proposal" },
+  { version: "2026-11-11b", change: "Records what your co-signer does: completed payments, published so anyone can send them, and sent a few at a time; and the co-signer's signed notice when a proposal fails" },
 ];
 
 const FROM_REPO = [

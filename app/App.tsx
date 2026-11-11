@@ -28,12 +28,13 @@ import {
   newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend, signStatement,
   lockFor, lockDate, buildLock, lockState, takeHome, relock, checkLedgerKey, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
   isPublicKey, keyFromXpub, xpubForKey, ledgerAccountFrom, readLedgerAccount, signStatementWith,
-  buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, NETWORKS,
+  buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, signNoticeWith, NETWORKS,
 } from "./src/wallet/core.mjs";
 import { address as bitcoinAddress } from "bitcoinjs-lib";
+import { memberAddressForOwnerKey } from "../method/js/verify.mjs";
 import {
   phaseOf, proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
-  pilePath, checkPileShape,
+  pilePath, checkPileShape, noticeStatement, noticeIsGenuine,
 } from "../method/js/proposals.mjs";
 import {
   isLedgerWallet, readLedgerWallet, ledgerWalletText, ledgerUser, withLedger, lookForLedgers, askForBluetooth, ledgerAppFor,
@@ -1377,19 +1378,23 @@ function parseBtc(text: string): bigint | null {
 }
 const atUtc = (iso: string) => iso.slice(0, 16).replace("T", " ") + " UTC";
 
-type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number };
+type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number; notice: any | null };
 
 async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
   // The repository's pile first — the lasting record, in the order the
   // Crowdlock received them — then anything on the relays it hasn't taken yet.
   const items: any[] = [];
   const inPile = new Set<string>();
+  const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
+  let notice: any = null;
+  const genuine = (n: any) => noticeIsGenuine(n, { crowdlock: c.crowdlock, hash: p.hash, hrp, addressOf: memberAddressForOwnerKey }).ok;
   try {
     const r = await fetch(resolvePath(pilePath(c.crowdlock.register.proposals, p.hash), baseFor(c.url)), { cache: "no-store" });
     if (r.ok) {
       const file = await r.json();
       if (checkPileShape(file, p.hash).ok) {
         for (const x of file.commitments) { items.push({ type: "commitment", record: x.record, at: Date.parse(x.submitted) / 1000 }); inPile.add(x.record.tx); }
+        if (file.notice && genuine(file.notice)) notice = file.notice;
       }
     }
   } catch {}
@@ -1398,9 +1403,10 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
     // Not yet in the repository: ordered after everything that is.
     items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
   }
-  const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0 };
+  const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0, notice };
   for (const it of items) {
     if (it.type === "completed") { pile.completed++; continue; }
+    if (it.type === "notice") { if (!pile.notice && genuine(it.notice)) pile.notice = { ...it.notice, published: new Date(it.at * 1000).toISOString() }; continue; }
     const v = await checkCommitment({ record: it.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
     if (!v.valid) {
       // A commitment whose coin is gone may be one the co-signer completed:
@@ -1462,7 +1468,8 @@ function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: tr
   // Once the co-signer has paid out the target, the proposal is finished:
   // nothing more can be committed or completed, whatever its dates say.
   const funded = !!pile && pile.paid >= p.target.sats;
-  const phase = funded ? "funded" : timePhase;
+  const dead = !!pile?.notice && !funded;
+  const phase = funded ? "funded" : dead ? "dead" : timePhase;
   const met = pile ? pile.paid + pile.sats >= p.target.sats : false;
   return (
     <View>
@@ -1473,7 +1480,10 @@ function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: tr
       <Text style={s.note}>Gathers from {atUtc(p.opens)} to {atUtc(p.closes)}. Settles by {atUtc(p.settles_by)}.</Text>
       <Text style={s.label}>Committed so far</Text>
       {err ? <Text style={s.error}>{err}</Text> : !pile ? <ActivityIndicator /> : <>
-        {funded ? <>
+        {dead ? <>
+          <Text style={s.error}>Declared dead by the co-signer{pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}: it didn't reach its target, and none of its commitments will be completed. Your money stays locked and comes home on its date as usual.</Text>
+          <Text style={s.note}>The notice is signed by the co-signer's key and checked on this phone.</Text>
+        </> : funded ? <>
           <Text style={s.good}>Funded and paid. {btc(BigInt(pile.paid))} went to the seller in {pile.paidCount} payment{pile.paidCount === 1 ? "" : "s"}, completed by the co-signer and sent. This proposal is closed.</Text>
         </> : <>
           <Text style={s.big}>{btc(BigInt(pile.sats + pile.paid))}</Text>
@@ -1486,6 +1496,7 @@ function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: tr
       {member && phase === "gathering" && <CommitForm c={c} p={p} account={account} onDone={() => setTimeout(refresh, 3000)} />}
       {member && phase === "soon" && <Text style={s.note}>You can commit once it opens.</Text>}
       {pile && (phase === "gathering" || phase === "settling") && <CoSign c={c} p={p} pile={pile} onDone={() => setTimeout(refresh, 3000)} />}
+      {pile && (phase === "settling" || phase === "over") && !met && <DeclareDead c={c} p={p} onDone={() => setTimeout(refresh, 3000)} />}
     </View>
   );
 }
@@ -1555,6 +1566,39 @@ function CommitForm({ c, p, account, onDone }: { c: Extract<Loaded, { ok: true }
   );
 }
 
+const SEND_FROM_APP = 25;
+const SEND_PER_PASS_NOTE = "up to 25 every few minutes";
+
+function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [words, setWords] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const declare = () => Alert.alert("Declare this proposal dead?",
+    "This publishes a notice, signed with the co-signer key, that the proposal didn't reach its target and that you will complete none of its commitments. Anyone can check it. It can't be taken back.",
+    [{ text: "Cancel", style: "cancel" }, { text: "Sign and publish", style: "destructive", onPress: async () => {
+      setBusy(true); setMsg(null);
+      try {
+        const notice = signNoticeWith({ words, crowdlock: c.crowdlock, statement: noticeStatement(p.hash), network: NETWORK });
+        const posted = await postCommitment(c.crowdlock, { type: "notice", proposal: p.hash, notice });
+        setWords("");
+        setMsg(posted.ok ? { ok: true, text: `Published to ${posted.accepted} of ${posted.total} relays. The Crowdlock's repository records it on its next pass.` }
+          : { ok: false, text: "Signed, but no relay took it just now. Check your connection and try again." });
+        onDone();
+      } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
+      setBusy(false);
+    } }]);
+  return !open ? <Button label="For the co-signer: declare it dead" kind="plain" onPress={() => setOpen(true)} /> : (
+    <View style={s.panel}>
+      <Text style={s.label}>It closed short of its target</Text>
+      <Text style={s.note}>Nothing has to happen: without your signature no commitment can ever move. Publishing a signed notice tells every member so, publicly, and promises you won't complete any of them. Type the co-signer key's words; they're used once and not saved.</Text>
+      <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
+      {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+      <Button label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !wordsAreValid(tidyWords(words))} onPress={declare} />
+    </View>
+  );
+}
+
 function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; pile: Pile; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [words, setWords] = useState("");
@@ -1572,19 +1616,24 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
       `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - pile.paid))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`,
       [{ text: "Cancel", style: "cancel" }, { text: "Complete and send", style: "destructive", onPress: async () => {
         setBusy(true); setMsg(null);
+        // A handful are sent from here at once. More than that are published
+        // only, for the Crowdlock's repository to send a few at a time
+        // (pacing: thousands at once would push up fees for everyone).
+        const sendHere = take.length <= SEND_FROM_APP;
         let sent = 0; const failed: string[] = [];
         for (const g of take) {
           try {
             const hex = await completeCommitmentWith({ words, record: g.record, chain });
-            await chain.broadcast(hex);
             await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
+            if (sendHere) await chain.broadcast(hex);
             sent++;
           } catch (e: any) { failed.push(String(e.message ?? e)); }
         }
         setWords("");
         setMsg(failed.length
-          ? { ok: sent > 0, text: `Sent ${sent} of ${take.length}. ${failed[0]}` }
-          : { ok: true, text: `Completed and sent all ${sent}. They'll confirm over the next blocks.` });
+          ? { ok: sent > 0, text: `${sendHere ? "Sent" : "Completed"} ${sent} of ${take.length}. ${failed[0]}` }
+          : sendHere ? { ok: true, text: `Completed and sent all ${sent}. They'll confirm over the next blocks.` }
+          : { ok: true, text: `Completed all ${sent} and published them. The Crowdlock's repository sends them ${SEND_PER_PASS_NOTE}, so they reach the network paced rather than all at once.` });
         setBusy(false); onDone();
       } }]);
   };

@@ -37,7 +37,7 @@ import { Transaction, script as bscript, address as baddress } from "bitcoinjs-l
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
-import { messageHash, verifyMembership } from "../../../method/js/verify.mjs";
+import { messageHash, verifyMembership, memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
@@ -773,6 +773,28 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
     return fail(`fee of ${fee} sats is more than ${crowdlock.max_commitment_fee * 100}% of the ${committedSats} committed — refusing in case of a client bug`);
   }
   return { valid: true, reason: "", committedSats, fee, ownerPubkey: L.owner_pubkey };
+}
+
+/**
+ * The co-signer's failure notice, signed with the co-signer key these words
+ * make, for a proposal that did not reach its target. Returns { address,
+ * signature } to publish; checked by noticeIsGenuine in method/js/proposals.mjs.
+ */
+export function signNoticeWith({ words, crowdlock, statement, network }) {
+  const tidy = tidyWords(words);
+  if (!wordsAreValid(tidy)) throw new Error("those are not valid backup words — check the spelling and the order");
+  const node = BIP32.fromSeed(mnemonicToSeedSync(tidy), networks.bitcoin).derivePath(COSIGNER_PATH);
+  const pub = toHex(node.publicKey);
+  if (!(crowdlock.cosigner_keys ?? []).includes(pub)) throw new Error("these words don't make this Crowdlock's co-signer key");
+  const net = typeof network === "string" ? NETWORKS[network].network : (network.network ?? network);
+  const address = memberAddressForOwnerKey(pub, net.bech32);
+  const { signature, recoveryId } = ecc.signRecoverable(messageHash(statement), node.privateKey);
+  const out = new Uint8Array(65);
+  out[0] = 39 + recoveryId; // a native segwit address's signature
+  out.set(signature, 1);
+  const sig = toBase64(out);
+  if (!verifyMembership({ address, signature: sig, message: statement, hrp: net.bech32 }).valid) throw new Error("the notice did not verify — refusing");
+  return { address, signature: sig };
 }
 
 /**

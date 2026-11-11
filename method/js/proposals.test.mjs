@@ -5,8 +5,9 @@ import {
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
   PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
   chainIsIntact, destinationIsPermitted, nextDestination, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
-  applyCommitments, emptyPile, PER_LOCK_LIMIT,
+  applyCommitments, emptyPile, PER_LOCK_LIMIT, applySettlement, dueToSend, noticeStatement, noticeIsGenuine,
 } from "./proposals.mjs";
+import { memberAddressForOwnerKey } from "./verify.mjs";
 import bitcoinMessage from "../lock/node_modules/bitcoinjs-message/index.js";
 import { ECPair } from "../lock/lock.mjs";
 import * as bitcoin from "../lock/node_modules/bitcoinjs-lib/src/index.js";
@@ -124,6 +125,31 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   check(`It keeps at most ${PER_LOCK_LIMIT} per lock, so nobody can flood the file`, r4.pile.commitments.length === PER_LOCK_LIMIT);
   check("A completed transaction posted to the relays is not put in the pile",
     run(emptyPile(hash), [{ id: "x", ...commitmentEventTemplate({ type: "completed", proposal: hash, tx: "ab" }, instance, inWindow) }]).pile.commitments.length === 0);
+}
+
+// What the co-signer does: completions published in the pile, paced, and the notice.
+{
+  const mk = (n, witness) => { const t = new bitcoin.Transaction(); t.addInput(Buffer.alloc(32, n), 0, 0xfffffffe); t.addOutput(Buffer.from("0014" + "11".repeat(20), "hex"), 1000 + n); t.setWitness(0, witness); return t.toHex(); };
+  const half = (n) => mk(n, [Buffer.alloc(0), Buffer.alloc(0), Buffer.from("aa", "hex"), Buffer.from("bb", "hex")]);
+  const full = (n) => mk(n, [Buffer.from("cc", "hex"), Buffer.alloc(0), Buffer.from("aa", "hex"), Buffer.from("bb", "hex")]);
+  const txidOf = (h) => { try { return bitcoin.Transaction.fromHex(h).getId(); } catch { return null; } };
+  const cosignerKey = ECPair.makeRandom({ network: NET });
+  const cl = { ...crowdlock, cosigner_keys: [Buffer.from(cosignerKey.publicKey).toString("hex")] };
+  const pile = { ...emptyPile(hash), commitments: [1, 2, 3].map((n) => ({ submitted: "2026-11-12T09:00:00Z", record: { proposal: hash, lock: {}, tx: half(n) } })) };
+  const args = { crowdlock: cl, hash, hrp: "tb", addressOf: memberAddressForOwnerKey, txidOf, nowIso: "2026-11-12T10:00:00Z" };
+  const done = applySettlement(pile, [{ type: "completed", tx: full(2), at: 5 }, { type: "completed", tx: full(1), at: 6 }, { type: "completed", tx: full(9), at: 7 }, { type: "completed", tx: full(2), at: 8 }], args);
+  check("Completed payments are recorded in the pile, once each, and only if they complete a commitment in it",
+    done.pile.completed.length === 2 && done.outcome.some((o) => !o.added && /completes no commitment/.test(o.reason)));
+  check("They go out oldest commitment first, a few per pass", dueToSend(done.pile, 1, txidOf)[0].txid === txidOf(half(1)) && dueToSend(done.pile, 5, txidOf).length === 2);
+  const sentOne = { ...done.pile, completed: done.pile.completed.map((c, i) => i === 0 ? { ...c, sent: "x" } : c) };
+  check("…and one already sent is not sent again", dueToSend(sentOne, 5, txidOf).length === 1);
+
+  const signNotice = (k) => ({ address: addrOf(k), signature: bitcoinMessage.sign(noticeStatement(hash), Buffer.from(k.privateKey), true, { segwitType: "p2wpkh" }).toString("base64") });
+  check("The notice is a fixed sentence naming the proposal", noticeStatement(hash) === `I declare proposal ${hash} dead: it did not reach its target, and I will complete none of its commitments.`);
+  check("A notice signed by the co-signer is genuine; one signed by anyone else is not",
+    noticeIsGenuine(signNotice(cosignerKey), args).ok && !noticeIsGenuine(signNotice(key), args).ok);
+  const dead = applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }, { type: "completed", tx: full(1), at: 2 }], args);
+  check("Once declared dead, no completion is recorded after it", !!dead.pile.notice && !dead.pile.completed && dead.outcome.some((o) => /declared this proposal dead/.test(o.reason ?? "")));
 }
 
 console.log(failures === 0 ? "Proposals behave as spec/proposal-and-settlement.md describes." : `${failures} check(s) failed.`);
