@@ -1151,12 +1151,14 @@ function CosignerKey({ words: walletWords, go }: { words: string; go: Go }) {
 // ---------------------------------------------------------------------------
 
 /** Sign in to GitHub when needed, showing the short code; reuses this session's sign-in. */
-function useGitHub() {
+function useGitHub(step: (text: string) => void = () => {}) {
   const [code, setCode] = useState<{ userCode: string; verificationUri: string } | null>(null);
   const withSignIn = async (task: (token: string) => Promise<void>) => {
     let token = currentSignIn();
     if (!token) {
+      step("Asking GitHub for a sign-in code…");
       const c = await startSignIn();
+      step("Waiting for you to sign in to GitHub…");
       setCode({ userCode: c.userCode, verificationUri: c.verificationUri });
       try { token = await waitForSignIn(c); } finally { setCode(null); }
       rememberSignIn(token);
@@ -1559,7 +1561,8 @@ function repoPathOf(c: Extract<Loaded, { ok: true }>, path: string) {
 }
 
 function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; account: any; owner: string; repo: string; onChange: () => void }) {
-  const { withSignIn, codeView } = useGitHub();
+  const [step, setStep] = useState("");
+  const { withSignIn, codeView } = useGitHub(setStep);
   const [address, setAddress] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1572,11 +1575,18 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     setBusy(true); setMsg(null);
     try {
       await withSignIn(async (token) => {
+        setStep("Checking you can change this Crowdlock…");
         if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can change it, and the GitHub account you signed in with isn't one of them.");
+        setStep("Reading its destinations list…");
         await addDestination({
           token, owner, repo, path,
           makeEntry: (file: any) => nextDestination(file, { address, text }),
-          attest: async (entry: any) => ({ address: account.address, signature: await signStatementWith(account, attestationStatement(entry)) }),
+          attest: async (entry: any) => {
+            setStep(account.kind === "ledger" ? "Waiting for your Ledger — unlock it, open Bitcoin Test, and approve the message it shows." : "Signing…");
+            const signature = await signStatementWith(account, attestationStatement(entry));
+            setStep("Saving it to the Crowdlock on GitHub…");
+            return { address: account.address, signature };
+          },
           check: (file: any) => {
             const ch = chainIsIntact(file.entries);
             const last = file.entries[file.entries.length - 1];
@@ -1589,7 +1599,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
         setTimeout(onChange, 90000);
       });
     } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
-    setBusy(false);
+    setBusy(false); setStep("");
   };
   return <>
     <Text style={s.label}>Destinations</Text>
@@ -1600,6 +1610,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
       <TextInput style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
       <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature.</Text>
       {codeView}
+      {busy && !!step && <Text style={s.note}>{step}</Text>}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
       <Button label={busy ? "Adding…" : "Add and attest this destination"} disabled={busy || !address.trim() || !text.trim() || /[|\n]/.test(text) || !path} onPress={add} />
     </>}
