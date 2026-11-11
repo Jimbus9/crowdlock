@@ -28,8 +28,9 @@ import {
   newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend, signStatement,
   lockFor, lockDate, buildLock, lockState, takeHome, relock, checkLedgerKey, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
   isPublicKey, keyFromXpub, xpubForKey, ledgerAccountFrom, readLedgerAccount, signStatementWith,
-  buildCommitment, checkCommitment, completeCommitmentWith,
+  buildCommitment, checkCommitment, completeCommitmentWith, NETWORKS,
 } from "./src/wallet/core.mjs";
+import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
   phaseOf, proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
 } from "../method/js/proposals.mjs";
@@ -1556,6 +1557,10 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
 
 // For founders and maintainers: approve a destination, and publish a proposal.
 
+function isAddressOn(address: string, network: string) {
+  try { bitcoinAddress.toOutputScript(address, NETWORKS[network === "mainnet" ? "mainnet" : "testnet4"].network); return true; } catch { return false; }
+}
+
 function repoPathOf(c: Extract<Loaded, { ok: true }>, path: string) {
   return pathInRepo(resolvePath(path, baseFor(c.url)));
 }
@@ -1612,7 +1617,8 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
       {codeView}
       {busy && !!step && <Text style={s.note}>{step}</Text>}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-      <Button label={busy ? "Adding…" : "Add and attest this destination"} disabled={busy || !address.trim() || !text.trim() || /[|\n]/.test(text) || !path} onPress={add} />
+      {!!address.trim() && !isAddressOn(address.trim(), c.crowdlock.network) && <Text style={s.error}>That isn't a {c.crowdlock.network === "mainnet" ? "bitcoin" : "test-network"} address. Paste the seller's whole address.</Text>}
+      <Button label={busy ? "Adding…" : "Add and attest this destination"} disabled={busy || !isAddressOn(address.trim(), c.crowdlock.network) || !text.trim() || /[|\n]/.test(text) || !path} onPress={add} />
     </>}
   </>;
 }
@@ -1641,7 +1647,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
     if (!title.trim()) return { problem: "Give it a title." };
     if (!text.trim()) return { problem: "Say what is being bought, from whom, and why." };
     if (!dest) return { problem: "Choose a destination." };
-    if (!/^[A-Z]{3}$/.test(cur)) return { problem: "The currency is its three-letter code in capitals, like GBP, EUR or USD." };
+    if (!/^[A-Z]{3}$/.test(cur)) return { problem: "Type the currency's three-letter code, like GBP, EUR or USD." };
     const digits = minorDigits(cur);
     const t = price.trim().replace(",", ".");
     if (!new RegExp(`^\\d+(\\.\\d{0,${digits}})?$`).test(t)) return { problem: `Write the price in ${cur}, with at most ${digits} decimal places.` };
@@ -1689,10 +1695,11 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
     {usable.length === 0 ? <Text style={s.note}>No destination is ready yet. Add and attest one above{c.crowdlock.destination_wait_days ? `, then wait ${c.crowdlock.destination_wait_days} days` : ""}.</Text> : <>
       <TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="Title" />
       <TextInput style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline value={text} onChangeText={setText} placeholder="What is being bought, from whom, and why" />
-      {usable.map((e: any) => <Pressable key={e.index} onPress={() => setDest(e.address)}><Text style={dest === e.address ? s.good : s.note}>{dest === e.address ? "● " : "○ "}{e.text} — {e.address.slice(0, 14)}…</Text></Pressable>)}
+      <Text style={s.label}>Pays (tap one)</Text>
+      {usable.map((e: any) => <Pressable key={e.index} onPress={() => setDest(e.address)} style={[s.btn, dest !== e.address && s.btnPlain, { alignItems: "flex-start" }]}><Text style={[s.btnText, dest !== e.address && s.btnTextPlain, { fontSize: 15 }]}>{dest === e.address ? "✓ " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}</Text></Pressable>)}
       <View style={{ flexDirection: "row", gap: 8 }}>
         <TextInput style={[s.input, { flex: 2 }]} keyboardType="decimal-pad" value={price} onChangeText={setPrice} placeholder="Price" />
-        <TextInput style={[s.input, { flex: 1 }]} autoCapitalize="characters" value={currency} onChangeText={(t) => setCurrency(t.toUpperCase())} placeholder="GBP" maxLength={3} />
+        <TextInput style={[s.input, { flex: 1 }]} autoCapitalize="characters" value={currency} onChangeText={(t) => setCurrency(t.toUpperCase())} placeholder="Currency" maxLength={3} />
       </View>
       <TextInput style={s.input} keyboardType="decimal-pad" value={target} onChangeText={setTarget} placeholder="Target in BTC (the price in bitcoin today)" />
       <Text style={s.note}>Gathers for (days, at most {c.crowdlock.gathering_window_max_days}) and settles for (days, at most {c.crowdlock.settlement_window_max_days}):</Text>
