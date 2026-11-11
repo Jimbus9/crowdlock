@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-10c";
+export const TEMPLATE_VERSION = "2026-11-11";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -34,10 +34,11 @@ export const CHANGES = [
   { version: "2026-11-10", change: "Accepts a destination waiting period of 7 days or more on real bitcoin (it was 14), and none on a test copy. Nothing about your Crowdlock changes unless you edit its file" },
   { version: "2026-11-10b", change: "Accepts a Crowdlock file that names a proposals file. No change to how anything works until proposals are published" },
   { version: "2026-11-10c", change: "The destination waiting period is your own choice again, with seven days recommended, rather than a rule of the method" },
+  { version: "2026-11-11", change: "Collects commitments to your proposals from the relays into a lasting record in your repository (commitments/), in the order they arrived. Nothing changes until you publish a proposal" },
 ];
 
 const FROM_REPO = [
-  "method/js/inbox.mjs", "method/js/append.mjs", "method/js/lockrecord.mjs", "method/js/verify.mjs", "method/js/crowdlock.mjs", "method/js/relayhealth.mjs",
+  "method/js/inbox.mjs", "method/js/append.mjs", "method/js/lockrecord.mjs", "method/js/verify.mjs", "method/js/crowdlock.mjs", "method/js/relayhealth.mjs", "method/js/proposals.mjs",
   "method/js/vendor/noble-secp256k1.js",
   "method/js/vendor/noble-hashes/_assert.js", "method/js/vendor/noble-hashes/_md.js", "method/js/vendor/noble-hashes/crypto.js",
   "method/js/vendor/noble-hashes/ripemd160.js", "method/js/vendor/noble-hashes/sha256.js", "method/js/vendor/noble-hashes/utils.js",

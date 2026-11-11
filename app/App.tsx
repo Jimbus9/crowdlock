@@ -33,6 +33,7 @@ import {
 import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
   phaseOf, proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
+  pilePath, checkPileShape,
 } from "../method/js/proposals.mjs";
 import {
   isLedgerWallet, readLedgerWallet, ledgerWalletText, ledgerUser, withLedger, lookForLedgers, askForBluetooth, ledgerAppFor,
@@ -1379,7 +1380,24 @@ const atUtc = (iso: string) => iso.slice(0, 16).replace("T", " ") + " UTC";
 type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number };
 
 async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
-  const items = await fetchCommitments(c.crowdlock, p.hash);
+  // The repository's pile first — the lasting record, in the order the
+  // Crowdlock received them — then anything on the relays it hasn't taken yet.
+  const items: any[] = [];
+  const inPile = new Set<string>();
+  try {
+    const r = await fetch(resolvePath(pilePath(c.crowdlock.register.proposals, p.hash), baseFor(c.url)), { cache: "no-store" });
+    if (r.ok) {
+      const file = await r.json();
+      if (checkPileShape(file, p.hash).ok) {
+        for (const x of file.commitments) { items.push({ type: "commitment", record: x.record, at: Date.parse(x.submitted) / 1000 }); inPile.add(x.record.tx); }
+      }
+    }
+  } catch {}
+  for (const it of await fetchCommitments(c.crowdlock, p.hash)) {
+    if (it.type === "commitment" && inPile.has(it.record.tx)) continue;
+    // Not yet in the repository: ordered after everything that is.
+    items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
+  }
   const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0 };
   for (const it of items) {
     if (it.type === "completed") { pile.completed++; continue; }

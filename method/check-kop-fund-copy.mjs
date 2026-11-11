@@ -17,7 +17,7 @@ const other = process.argv[2];
 if (!other || !existsSync(other)) { console.error("usage: node method/check-kop-fund-copy.mjs <path to the-kop-fund>"); process.exit(2); }
 
 const PAIRS = [
-  ...["append", "crowdlock", "inbox", "lockplan", "lockrecord", "relayhealth", "release", "verify"].map((n) => [`js/${n}.mjs`, `js/${n}.mjs`]),
+  ...["append", "crowdlock", "inbox", "lockplan", "lockrecord", "proposals", "relayhealth", "release", "verify"].map((n) => [`js/${n}.mjs`, `js/${n}.mjs`]),
   ["relay/inbox.mjs", "relay/inbox.mjs"], ["relay/nostr.mjs", "relay/nostr.mjs"],
   ["relay/package.json", "relay/package.json"], ["relay/package-lock.json", "relay/package-lock.json"],
 ];

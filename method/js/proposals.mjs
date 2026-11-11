@@ -261,3 +261,72 @@ export function commitmentFromEvent(event, fingerprint, proposal) {
   if (c.type === "completed" && typeof c.tx === "string" && /^[0-9a-f]+$/.test(c.tx)) return { type: "completed", tx: c.tx, at: event.created_at };
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// The pile, kept in the repository by the relay inbox (spec/proposal-and-
+// settlement.md, "Where the pile lives"). The inbox records what arrived and
+// when; it does not judge signatures or coins, which change and need the
+// chain. Every reader — the app, the co-signer, the register page — checks
+// every commitment in full before counting or completing it. What the inbox
+// does refuse keeps the file honest and small: a commitment for a lock that
+// is not on the register, one posted outside the proposal's gathering window,
+// a malformed one, a copy of one already there, and more than a handful per
+// lock.
+// ---------------------------------------------------------------------------
+
+export const PER_LOCK_LIMIT = 5;
+const MAX_TX_HEX = 4000;
+
+/** A new, empty pile for a proposal. */
+export function emptyPile(hash) {
+  return { format: PILE_FORMAT, proposal: hash, commitments: [] };
+}
+
+/**
+ * Add the commitments found in relay events to a proposal's pile.
+ *
+ *   pile       the pile file as it stands (or emptyPile(hash))
+ *   events     Nostr events from the Crowdlock's relays, any order
+ *   crowdlock  the parsed Crowdlock file
+ *   proposal   a checked proposal (checkProposals)
+ *   register   the Crowdlock's register, for its locks
+ *   nowIso     when this run is, as "YYYY-MM-DDTHH:MM:SSZ": the time recorded
+ *              as `submitted`. The repository's own clock decides the order,
+ *              not the time a poster wrote on the event, which anyone can set.
+ *
+ * Returns { pile, outcome }; the pile is the same object if nothing was added.
+ */
+export function applyCommitments(pile, events, { crowdlock, proposal, register, nowIso }) {
+  const fingerprint = crowdlock.declaration.sha256;
+  const opens = Date.parse(proposal.opens) / 1000, closes = Date.parse(proposal.closes) / 1000;
+  const known = new Set(pile.commitments.map((c) => c.record.tx));
+  const perLock = new Map();
+  for (const c of pile.commitments) perLock.set(c.record.lock?.address, (perLock.get(c.record.lock?.address) ?? 0) + 1);
+  const locks = new Map((register?.locks ?? []).map((l) => [l.address, l]));
+  const outcome = [];
+  const added = [];
+  const sorted = [...events].sort((a, b) => a.created_at - b.created_at || String(a.id).localeCompare(String(b.id)));
+  for (const e of sorted) {
+    const item = commitmentFromEvent(e, fingerprint, proposal.hash);
+    if (!item || item.type !== "commitment") continue;
+    const r = item.record;
+    if (known.has(r.tx)) continue; // already in the pile, or posted to two relays
+    const lockAddress = r.lock?.address;
+    const refuse = (reason) => { outcome.push({ added: false, lock: lockAddress, reason }); known.add(r.tx); };
+    if (typeof r.tx !== "string" || r.tx.length > MAX_TX_HEX || !/^[0-9a-f]+$/.test(r.tx) || r.tx.length % 2) { refuse("its transaction is not hex of a sensible size"); continue; }
+    if (!(item.at >= opens && item.at < closes)) { refuse("it was posted outside the proposal's gathering window"); continue; }
+    const onRegister = locks.get(lockAddress);
+    if (!onRegister || onRegister.owner_pubkey !== r.lock.owner_pubkey || onRegister.cosigner_pubkey !== r.lock.cosigner_pubkey || onRegister.locktime !== r.lock.locktime) {
+      refuse("its lock is not on this Crowdlock's register"); continue;
+    }
+    if ((perLock.get(lockAddress) ?? 0) >= PER_LOCK_LIMIT) { refuse(`that lock already has ${PER_LOCK_LIMIT} commitments in the pile`); continue; }
+    perLock.set(lockAddress, (perLock.get(lockAddress) ?? 0) + 1);
+    known.add(r.tx);
+    const entry = { submitted: nowIso, record: r };
+    if (r.remainder === undefined) delete entry.record.remainder;
+    added.push(entry);
+    outcome.push({ added: true, lock: lockAddress, member: onRegister.member });
+  }
+  if (!added.length) return { pile, outcome };
+  return { pile: { ...pile, commitments: [...pile.commitments, ...added] }, outcome };
+}

@@ -5,6 +5,7 @@ import {
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
   PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
   chainIsIntact, destinationIsPermitted, nextDestination, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
+  applyCommitments, emptyPile, PER_LOCK_LIMIT,
 } from "./proposals.mjs";
 import bitcoinMessage from "../lock/node_modules/bitcoinjs-message/index.js";
 import { ECPair } from "../lock/lock.mjs";
@@ -101,6 +102,29 @@ check("A commitment event reads back as the same record", commitmentFromEvent(ev
 check("…and not for another proposal or Crowdlock", commitmentFromEvent(ev, instance, "1".repeat(64)) === null && commitmentFromEvent(ev, "2".repeat(64), hash) === null);
 const done = commitmentEventTemplate({ type: "completed", proposal: hash, tx: "abcd" }, instance, 1800000000);
 check("A completed transaction event reads back", commitmentFromEvent(done, instance, hash)?.tx === "abcd");
+
+// The pile the inbox keeps.
+{
+  const lock = { address: "tb1qlockaddress", owner_pubkey: "02" + "a".repeat(64), cosigner_pubkey: "03" + "b".repeat(64), locktime: 1800000000 };
+  const register = { locks: [{ ...lock, member: "tb1qmember" }] };
+  const prop = { ...p, hash };
+  const inWindow = Math.floor(Date.parse(p.opens) / 1000) + 60;
+  const ev = (tx, at = inWindow, l = lock) => ({ id: tx, ...commitmentEventTemplate({ type: "commitment", proposal: hash, record: { proposal: hash, lock: l, tx } }, instance, at) });
+  const run = (pile, events) => applyCommitments(pile, events, { crowdlock, proposal: prop, register, nowIso: "2026-11-12T09:00:00Z" });
+  const r1 = run(emptyPile(hash), [ev("aa"), ev("aa"), ev("bb", inWindow + 5)]);
+  check("The inbox adds each commitment once, in the order it first saw them, with its own time",
+    r1.pile.commitments.length === 2 && r1.pile.commitments[0].record.tx === "aa" && r1.pile.commitments.every((c) => c.submitted === "2026-11-12T09:00:00Z"));
+  const r2 = run(r1.pile, [ev("aa"), ev("bb")]);
+  check("…and nothing again on the next run", r2.pile === r1.pile);
+  const r3 = run(emptyPile(hash), [ev("cc", inWindow, { ...lock, address: "tb1qnotregistered" }), ev("dd", Math.floor(Date.parse(p.opens) / 1000) - 10), ev("zz-not-hex")]);
+  check("It refuses a lock not on the register, one posted before the proposal opened, and a malformed one",
+    r3.pile.commitments.length === 0 && r3.outcome.length === 3 && r3.outcome.every((o) => !o.added), r3.outcome.map((o) => o.reason).join("; "));
+  const many = Array.from({ length: PER_LOCK_LIMIT + 2 }, (_, i) => ev(`e${i}`.replace(/[^0-9a-f]/g, "e"), inWindow + i));
+  const r4 = run(emptyPile(hash), many);
+  check(`It keeps at most ${PER_LOCK_LIMIT} per lock, so nobody can flood the file`, r4.pile.commitments.length === PER_LOCK_LIMIT);
+  check("A completed transaction posted to the relays is not put in the pile",
+    run(emptyPile(hash), [{ id: "x", ...commitmentEventTemplate({ type: "completed", proposal: hash, tx: "ab" }, instance, inWindow) }]).pile.commitments.length === 0);
+}
 
 console.log(failures === 0 ? "Proposals behave as spec/proposal-and-settlement.md describes." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
