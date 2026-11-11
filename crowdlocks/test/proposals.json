@@ -1,5 +1,22 @@
 {
   "format": "crowdlock-proposals/1",
   "instance": "29f943a5bf2c110200cb33d0299b00960b19f10f1942d14699aec154b39316df",
-  "proposals": []
+  "proposals": [
+    {
+      "title": "Test",
+      "text": "Test money for test propasal",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-11T16:58:26Z",
+      "closes": "2026-11-12T16:58:26Z",
+      "settles_by": "2026-11-13T16:58:26Z",
+      "hash": "a8dd3c1f0821afd113853408127d661c38629281977bd766617706f7157d4a9c",
+      "target": {
+        "sats": 10000,
+        "rate": "1 BTC = 100000.00 GBP",
+        "at": "2026-11-11T16:58:26Z"
+      }
+    }
+  ]
 }
