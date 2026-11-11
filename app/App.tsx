@@ -313,6 +313,43 @@ function CheckEveryWord({ words, onDone, onShowAgain }: { words: string; onDone:
   );
 }
 
+/**
+ * Typing backup words in: the same box everywhere — restoring a wallet,
+ * checking a co-signer key's paper, co-signing a purchase. As each word is
+ * typed it offers the standard words that start that way (from the word list,
+ * never from anything saved), and says how many words there are and whether
+ * they check out.
+ */
+function WordsInput({ value, onChange, placeholder }: { value: string; onChange: (t: string) => void; placeholder?: string }) {
+  const endsWithSpace = /\s$/.test(value);
+  const parts = value.split(/\s+/);
+  const partial = endsWithSpace ? "" : (parts[parts.length - 1] ?? "");
+  const suggestions = partial ? suggestWords(partial).filter((w: string) => w !== partial.toLowerCase() || suggestWords(partial).length > 1) : [];
+  const pick = (w: string) => {
+    const head = endsWithSpace ? value : value.slice(0, value.length - partial.length);
+    onChange(head + w + " ");
+  };
+  const count = tidyWords(value).split(" ").filter(Boolean).length;
+  const rightLength = [12, 15, 18, 21, 24].includes(count);
+  const valid = rightLength && wordsAreValid(value);
+  return <>
+    <TextInput
+      style={[s.input, { minHeight: 100, textAlignVertical: "top" }]} multiline
+      autoCapitalize="none" autoCorrect={false} value={value} onChangeText={onChange} placeholder={placeholder}
+    />
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+      {suggestions.map((w: string) => (
+        <Pressable key={w} onPress={() => pick(w)} style={s.chip}><Text style={s.chipText}>{w}</Text></Pressable>
+      ))}
+    </View>
+    <Text style={valid ? s.good : s.note}>
+      {valid ? "Those words are valid."
+        : rightLength ? `${count} words, but they don't check out — look for a misspelt word.`
+        : `${count} word${count === 1 ? "" : "s"} so far`}
+    </Text>
+  </>;
+}
+
 function Restore({ go }: { go: Go }) {
   const [text, setText] = useState("");
   // 12 is what this app makes; 15 to 24 come from other wallets (a Ledger
@@ -331,15 +368,7 @@ function Restore({ go }: { go: Go }) {
     <View>
       <Text style={s.h1}>Restore your wallet</Text>
       <Text style={s.p}>Type your backup words, in order, with spaces between them. Usually 12 or 24.</Text>
-      <TextInput
-        style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline
-        autoCapitalize="none" autoCorrect={false} value={text} onChangeText={setText}
-      />
-      <Text style={valid ? s.good : s.note}>
-        {valid ? "Those words are valid."
-          : rightLength ? `${count} words, but they don't check out — look for a misspelt word.`
-          : `${count} words so far`}
-      </Text>
+      <WordsInput value={text} onChange={setText} />
       <Button label="Restore" disabled={!valid} onPress={finish} />
       <Button label="Back" kind="plain" onPress={() => go({ name: "welcome" })} />
     </View>
@@ -1083,7 +1112,7 @@ function CosignerKey({ words: walletWords, go }: { words: string; go: Go }) {
     <View>
       <Text style={s.h1}>Check co-signer words</Text>
       <Text style={s.p}>Type the words from your paper (12, or 24 for a key made elsewhere) to see the public key they make — the way to prove the paper works.</Text>
-      <TextInput style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline autoCapitalize="none" autoCorrect={false} value={typed} onChangeText={(t) => { setTyped(t); setProblem(null); }} />
+      <WordsInput value={typed} onChange={(t) => { setTyped(t); setProblem(null); }} />
       {problem && <Text style={s.error}>{problem}</Text>}
       <Button label="Show the key" onPress={() => {
         if (tidyWords(typed) === tidyWords(walletWords)) { setProblem("Those are this wallet's own words. A co-signer key must have words of its own — otherwise it would be the same key as your member key."); return; }
@@ -1515,7 +1544,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         <Text style={s.label}>Co-sign this proposal</Text>
         <Text style={s.note}>Only once the target is met, and only if the proposal and its destination are genuine. Type the co-signer key's words, ideally on a phone that is otherwise offline. They are used once and not saved.</Text>
         {!met && <Text style={s.error}>The target isn't met yet: {btc(BigInt(pile.sats))} of {btc(BigInt(p.target.sats))}. Nothing should be completed.</Text>}
-        <TextInput style={[s.input, { minHeight: 80, textAlignVertical: "top" }]} multiline autoCapitalize="none" autoCorrect={false} value={words} onChangeText={setWords} placeholder="The co-signer key's 12 words" />
+        <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
         {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
         <Button label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={complete} />
       </View>}
