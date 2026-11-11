@@ -1,4 +1,4 @@
-// The Lock page's Ledger support, as one browser bundle.
+// The Lock and Commit pages' Ledger support, as one browser bundle.
 //
 // WHAT THIS IS. A thin join between three things that already exist and are
 // already proved on a real Nano X in the app: the app's key module
@@ -20,7 +20,7 @@ import * as bitcoinApi from "@ledgerhq/ledger-bitcoin";
 import TransportBase from "@ledgerhq/hw-transport";
 import {
   NETWORKS, readLedgerAccount, ledgerAccountFrom, lockFor, buildLock, takeHome, lockState,
-  xpubForKey, checkLedgerKey,
+  xpubForKey, checkLedgerKey, buildCommitment, checkCommitment, commitmentPaid,
 } from "../../app/src/wallet/core.mjs";
 import { esploraChain } from "../../app/src/wallet/esplora.mjs";
 import { transportFor, withTimeout } from "../../app/src/ledgerLink.mjs";
@@ -119,4 +119,4 @@ export async function connectLedger(network) {
   } catch (e) { throw new Error(plain(e, network)); }
 }
 
-export { lockFor, buildLock, takeHome, lockState, xpubForKey, checkLedgerKey, esploraChain };
+export { lockFor, buildLock, takeHome, lockState, xpubForKey, checkLedgerKey, esploraChain, buildCommitment, checkCommitment, commitmentPaid };
