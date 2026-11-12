@@ -3,6 +3,7 @@
 // one-file edit. Crowdlock's own neutral identity — not any one Crowdlock's.
 //
 // Every text pairing below was measured at 4.5 to 1 or better, light and dark.
+import { useSyncExternalStore } from "react";
 import { useColorScheme } from "react-native";
 
 const light = {
@@ -56,7 +57,27 @@ export function themeFor(scheme: string | null | undefined): Theme {
   return scheme === "dark" ? { ...dark, dark: true } : { ...light, dark: false };
 }
 
-/** The colours for the phone's own light or dark setting. */
+// Light or dark: "phone" follows the phone's own setting; the other two are
+// the person's own choice, made under More and remembered.
+export type Look = "phone" | "light" | "dark";
+let look: Look = "phone";
+const watchers = new Set<() => void>();
+const watch = (f: () => void) => { watchers.add(f); return () => { watchers.delete(f); }; };
+const current = () => look;
+
+export function setLook(v: Look) {
+  look = v;
+  watchers.forEach((f) => f());
+}
+
+/** Which of the three is chosen. */
+export function useLook(): Look {
+  return useSyncExternalStore(watch, current);
+}
+
+/** The colours to draw with: the person's choice, or the phone's own setting. */
 export function useTheme(): Theme {
-  return themeFor(useColorScheme());
+  const phone = useColorScheme();
+  const chosen = useLook();
+  return themeFor(chosen === "phone" ? phone : chosen);
 }

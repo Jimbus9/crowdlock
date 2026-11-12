@@ -33,6 +33,18 @@ export async function saveFeeSpeed(v: FeeSpeed): Promise<void> {
   try { await SecureStore.setItemAsync(FEE_SPEED, v); } catch {}
 }
 
+// Light or dark: the phone's own setting, or the fan's own choice. Only a preference.
+const LOOK = "crowdlock.look.v1";
+export type SavedLook = "phone" | "light" | "dark";
+
+export async function loadLook(): Promise<SavedLook> {
+  try { const v = await SecureStore.getItemAsync(LOOK); return v === "light" || v === "dark" ? v : "phone"; } catch { return "phone"; }
+}
+
+export async function saveLook(v: SavedLook): Promise<void> {
+  try { await SecureStore.setItemAsync(LOOK, v); } catch {}
+}
+
 // Crowdlocks the fan has added by link, beyond the starting list. Not secret,
 // but kept beside the words so removing the wallet removes them too.
 const ADDED = "crowdlock.added.v1";

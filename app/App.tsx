@@ -65,12 +65,12 @@ import {
 import { postToRelays, announce, fetchAnnouncements, postCommitment, fetchCommitments } from "./src/relays.mjs";
 import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
-  loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed } from "./src/storage";
+  loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed, loadLook, saveLook } from "./src/storage";
 import type { FeeSpeed } from "./src/storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB } from "./src/config";
 // The look (one theme file) and the shared parts every screen is built from.
-import { banner, font, gap, radius, size, themeFor, useTheme } from "./src/ui/theme";
-import type { Theme } from "./src/ui/theme";
+import { banner, font, gap, radius, setLook, size, themeFor, useLook, useTheme } from "./src/ui/theme";
+import type { Look, Theme } from "./src/ui/theme";
 import { Btn, Card, NavRow, StepBar, TabBar, TopBar, Warning } from "./src/ui/parts";
 import type { TabName } from "./src/ui/parts";
 // @ts-ignore — plain module, tested in test-chain
@@ -192,6 +192,7 @@ export default function App() {
     // the link up. A link arriving while the app is open is opened at once if
     // there is a wallet, or waits for one.
     loadFeeSpeed().then((v) => { feeSpeed = v; });
+    loadLook().then(setLook);
     Linking.getInitialURL().then((u) => {
       pending.current = fileUrlFromOpenLink(u ?? null);
       loadWords().then((w) => setScreen(w ? { name: "home", words: w } : { name: "welcome" }));
@@ -209,7 +210,9 @@ export default function App() {
   const refreshers = useRef(new Set<Refresher>());
   const [refreshing, setRefreshing] = useState(false);
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  const lastRun = useRef(0);
   const runAll = useCallback(async (spin: boolean) => {
+    lastRun.current = Date.now();
     if (spin) setRefreshing(true);
     await Promise.all([...refreshers.current].map((f) => Promise.resolve().then(f).catch(() => {})));
     setCheckedAt(Date.now());
@@ -221,7 +224,7 @@ export default function App() {
     checkedAt,
   }), [runAll, checkedAt]);
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => { if (state === "active") runAll(false); });
+    const sub = AppState.addEventListener("change", (state) => { if (state === "active" && Date.now() - lastRun.current > 60000) runAll(false); });
     return () => sub.remove();
   }, [runAll]);
 
@@ -529,11 +532,14 @@ function Restore({ go }: { go: Go }) {
 // ---------------------------------------------------------------------------
 
 type MyLock = { crowdlock: string; name: string; address: string; locktime: number; state: string; confirmed: bigint; arriving: bigint };
-type HomeAlert = { url: string; name: string; kind: "keys" | "released" };
-type Overview = {
-  balance: { confirmed: bigint; arriving: bigint } | null; error: string | null;
-  locks: MyLock[] | null; step: any | null; alerts: HomeAlert[];
-};
+type HomeAlert = { url: string; name: string };
+type OverviewData = { balance: { confirmed: bigint; arriving: bigint } | null; locks: MyLock[] | null; step: any | null; alerts: HomeAlert[] };
+type Overview = OverviewData & { error: string | null };
+
+// What Home last read, kept while the app is open: coming back to Home shows
+// it at once, and nothing is asked again if it was read moments ago.
+let lastOverview: { address: string; at: number; data: OverviewData } | null = null;
+const OVERVIEW_FRESH_MS = 20000;
 
 /** Has this wallet already committed to this proposal? Read from the Crowdlock's own published pile. */
 async function inPile(c: Extract<Loaded, { ok: true }>, p: any, publicKey: string): Promise<boolean> {
@@ -546,18 +552,28 @@ async function inPile(c: Extract<Loaded, { ok: true }>, p: any, publicKey: strin
   } catch { return false; }
 }
 
+// Home asks the block explorer as little as it can: the balance, the
+// network's clock, and one question per lock. Whether an empty lock was ever
+// funded doesn't matter here (it isn't shown), so that second question is
+// answered without asking. The Crowdlock's own page still asks everything.
+const quickChain = { utxos: (address: string) => chain.utxos(address), everFunded: async () => true };
+
 function useOverview(account: any): Overview {
-  const [balance, setBalance] = useState<{ confirmed: bigint; arriving: bigint } | null>(null);
+  const held = lastOverview && lastOverview.address === account.address ? lastOverview : null;
+  const [data, setData] = useState<OverviewData>(held?.data ?? { balance: null, locks: null, step: null, alerts: [] });
   const [error, setError] = useState<string | null>(null);
-  const [locks, setLocks] = useState<MyLock[] | null>(null);
-  const [step, setStep] = useState<any | null>(null);
-  const [alerts, setAlerts] = useState<HomeAlert[]>([]);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
 
   const load = useCallback(async () => {
     setError(null);
-    let waiting: { confirmed: bigint; arriving: bigint } | null = null;
-    try { waiting = await waitingBalance(chain, account.address); setBalance(waiting); }
-    catch (e: any) { setError(String(e.message ?? e)); }
+    let waiting: { confirmed: bigint; arriving: bigint };
+    // If the explorer doesn't answer this, it won't answer the rest: stop here
+    // rather than queue more questions behind it, and keep what was last read.
+    try { waiting = await waitingBalance(chain, account.address); }
+    catch (e: any) { if (alive.current) setError(String(e.message ?? e)); return; }
+    if (!alive.current) return;
+    setData((old) => ({ ...old, balance: waiting }));
 
     const loaded: Loaded[] = await Promise.all((await allLinks()).map((u) => loadCrowdlock(u)));
     const here = loaded.filter((c) => c.ok && c.crowdlock.network === NETWORK) as Extract<Loaded, { ok: true }>[];
@@ -569,17 +585,22 @@ function useOverview(account: any): Overview {
     const all: MyLock[] = [];
     const notes: HomeAlert[] = [];
     const forStep: any[] = [];
+    let missed = 0;
     for (const c of here) {
       const member = !!membershipOf(c.register, account.address);
       const cosigner: string | undefined = newestCosigner(c.crowdlock);
       const changed = keyChanges(await loadSeenKeys(c.url), c.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(c.url)).changed;
-      if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name, kind: "keys" });
+      if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name });
       const mine: MyLock[] = [];
       if (member) {
         const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address)];
         for (const l of saved.filter((x) => x.crowdlock === c.url)) if (!terms.some((x) => x.address === l.address)) terms.push(l);
         for (const l of terms) {
-          try { mine.push({ crowdlock: c.url, name: c.crowdlock.name, address: l.address, locktime: l.locktime, ...(await lockState({ chain, lock: l, medianTime })) }); } catch {}
+          if (!alive.current) return;   // Home has been left: stop asking
+          try {
+            const st = await lockState({ chain: quickChain, lock: l, medianTime });
+            if (st.confirmed > 0n || st.arriving > 0n) mine.push({ crowdlock: c.url, name: c.crowdlock.name, address: l.address, locktime: l.locktime, ...st });
+          } catch { missed++; }
         }
       }
       all.push(...mine);
@@ -591,25 +612,18 @@ function useOverview(account: any): Overview {
         committed: member && open ? await inPile(c, open, account.publicKey) : false,
       });
     }
+    if (!alive.current) return;
     all.sort((a, b) => a.locktime - b.locktime);
-    setLocks(all);
-    setAlerts(notes);
-    // Without a balance there is no telling which step is next, so none is offered.
-    setStep(waiting ? nextStep({ waiting: waiting.confirmed, crowdlocks: forStep }) : null);
-
-    // Has a co-signer let a lock out early? Slower to read, so it follows on.
-    for (const c of here) {
-      if (!membershipOf(c.register, account.address)) continue;
-      coSignerRecord(c).then((r: any) => {
-        if (!r.releases.length) return;
-        setAlerts((old) => (old.some((a) => a.url === c.url && a.kind === "released") ? old : [...old, { url: c.url, name: c.crowdlock.name, kind: "released" }]));
-      }).catch(() => {});
-    }
+    const next: OverviewData = { balance: waiting, locks: all, step: nextStep({ waiting: waiting.confirmed, crowdlocks: forStep }), alerts: notes };
+    setData(next);
+    if (missed) setError(`${missed} of your locks couldn't be read just now`);
+    else lastOverview = { address: account.address, at: Date.now(), data: next };
   }, [account.address]);
 
-  useEffect(() => { load(); }, [load]);
+  // Read on arriving, unless it was read moments ago.
+  useEffect(() => { if (!held || Date.now() - held.at > OVERVIEW_FRESH_MS) load(); }, [load]);
   useRefresh(load);
-  return { balance, error, locks, step, alerts };
+  return { ...data, error };
 }
 
 function Tabs({ words, tab, setTab, go }: { words: string; tab: TabName; setTab: (t: TabName) => void; go: Go }) {
@@ -679,7 +693,7 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
   return (
     <View>
       {o.alerts.map((a) => (
-        <Warning key={a.url + a.kind} level="know" title={a.kind === "keys" ? `${a.name}: its co-signer keys have changed` : `${a.name}: the co-signer has released a lock early`}>
+        <Warning key={a.url} level="know" title={`${a.name}: its co-signer keys have changed`}>
           <Btn kind="link" label={`Look at ${a.name}`} onPress={() => go({ name: "crowdlock", words, url: a.url })} />
         </Warning>
       ))}
@@ -687,7 +701,7 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
       <Card>
         <Text style={s.kick}>Your next step</Text>
         {!w && !o.error && <ActivityIndicator style={{ marginVertical: 24 }} />}
-        {!w && !!o.error && <Text style={s.error}>Could not read your balance, so the next step can't be worked out: {o.error}</Text>}
+        {!w && !!o.error && <Text style={s.error}>The next step can't be worked out yet: {o.error}. Pull down to try again.</Text>}
         {w && <>
           <Text style={[s.h1, { marginTop: 4, marginBottom: 6 }]}>{w.title}</Text>
           <Text style={[s.p, { marginBottom: 0 }]}>{w.text}</Text>
@@ -695,6 +709,7 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
           <Btn kind="link" label="What do the six steps mean?" onPress={() => go({ name: "help", words })} />
         </>}
       </Card>
+      {w && !!o.error && <Text style={s.error}>Couldn't check just now: {o.error}. This is what was last read.</Text>}
       {!!o.step && o.step.step > 0 && <StepBar step={o.step.step} />}
 
       <Text style={s.h2}>Your bitcoin</Text>
@@ -705,7 +720,7 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
       />
       <NavRow
         title={`Locked: ${o.locks ? btc(lockedSats) : "…"}`}
-        sub={!o.locks ? "Reading your locks" : held.length === 0 ? "Nothing locked yet" : nextDate ? `Next one opens ${when(nextDate)}` : undefined}
+        sub={!o.locks ? (o.error ? "Couldn't be read just now" : "Reading your locks") : held.length === 0 ? "Nothing locked yet" : nextDate ? `Next one opens ${when(nextDate)}` : undefined}
         state={ready ? { text: "One is ready to take home", good: true } : undefined}
         onPress={() => setTab("bitcoin")}
       />
@@ -724,14 +739,15 @@ function BitcoinTab({ o, words, go }: { o: Overview; words: string; go: Go }) {
         <Text style={s.kick}>Waiting</Text>
         <Text style={s.big}>{o.balance ? btc(o.balance.confirmed) : "…"}</Text>
         {o.balance && o.balance.arriving > 0n && <Text style={s.note}>+ {btc(o.balance.arriving)} arriving (not yet confirmed)</Text>}
-        {o.error && <Text style={s.error}>Could not read the balance: {o.error}</Text>}
+        {o.error && <Text style={s.error}>Couldn't check just now: {o.error}.{o.balance ? " This is what was last read." : ""}</Text>}
         <Text style={[s.p, { marginBottom: 0 }]}>Yours to lock or send. It is in your own wallet: nobody else holds it.</Text>
         <Btn label="Add money" onPress={() => go({ name: "addMoney", words })} />
         <Btn kind="second" label="Send money out" onPress={() => go({ name: "send", words })} />
       </Card>
 
       <Text style={s.h2}>Locked</Text>
-      {o.locks === null && <ActivityIndicator style={{ marginVertical: 16 }} />}
+      {o.locks === null && !o.error && <ActivityIndicator style={{ marginVertical: 16 }} />}
+      {o.locks === null && !!o.error && <Text style={s.note}>Your locks couldn't be read just now. Pull down to try again.</Text>}
       {o.locks !== null && shown.length === 0 && <Text style={s.note}>Nothing locked yet. When you lock bitcoin for a Crowdlock, it shows here with its date.</Text>}
       {shown.map((l) => (
         <NavRow
@@ -758,7 +774,10 @@ function CrowdlocksTab({ words, address, go }: { words: string; address: string;
   );
 }
 
+const LOOKS: [Look, string][] = [["phone", "Same as phone"], ["light", "Light"], ["dark", "Dark"]];
+
 function MoreTab({ words, account, go }: { words: string; account: any; go: Go }) {
+  const look = useLook();
   return (
     <View>
       <NavRow title="Help" sub="What the words mean, and the six steps" onPress={() => go({ name: "help", words })} />
@@ -766,6 +785,16 @@ function MoreTab({ words, account, go }: { words: string; account: any; go: Go }
       <NavRow title="Wallet" sub={account.kind === "ledger" ? `On your Ledger (${account.ledgerName})` : "Recovery words, kept on this phone"} onPress={() => go({ name: "wallet", words })} />
       <NavRow title="For founders and co-signers" sub="Start a Crowdlock, make a co-signer key, look after one" onPress={() => go({ name: "founders", words })} />
       <NavRow title="About this app" sub={`${IS_TEST_MONEY ? "Test version" : "Real bitcoin version"} · ${NETWORK}`} onPress={() => go({ name: "about", words })} />
+      <Text style={s.h2}>Light or dark</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup">
+        {LOOKS.map(([value, label]) => (
+          <Pressable key={value} accessibilityRole="radio" accessibilityLabel={label} accessibilityState={{ selected: look === value }}
+            onPress={() => { setLook(value); saveLook(value); }} style={[s.chip, look === value && s.chipOn]}>
+            <Text style={[s.chipText, look === value && s.chipTextOn]}>{look === value ? "✓ " : ""}{label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={s.note}>"Same as phone" follows your phone's own light or dark setting.</Text>
     </View>
   );
 }
@@ -1090,8 +1119,10 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         await saveExpectedKeys(url, expected.filter((k) => !x.has(k.slice(2)))).catch(() => {});
       }
       setKeyChange(ch.changed ? { added: ch.added, removed: ch.removed } : null);
-      committedTotal(loaded).then(setTotal).catch(() => setTotal(null));
-      coSignerRecord(loaded).then(setRecord).catch(() => setRecord(null));
+      // One after the other, not both at once: each asks the explorer about every
+      // lock on the register, and a phone only keeps a few questions open at a time.
+      committedTotal(loaded).then(setTotal).catch(() => setTotal(null))
+        .then(() => coSignerRecord(loaded)).then(setRecord).catch(() => setRecord(null));
       poundsPerBtc(loaded.crowdlock).then(setGbp);
     }
   }, [url]);

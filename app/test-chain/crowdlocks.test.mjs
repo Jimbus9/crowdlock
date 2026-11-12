@@ -169,7 +169,7 @@ let waitedFor = null;
 const busyAlways = async () => new Response("slow down", { status: 429, headers: { "retry-after": "3" } });
 let busyMsg = null;
 try { await esploraChain("https://x", busyAlways, 50, { wait: async (ms) => { waitedFor = ms; } }).utxos("tb1qme"); } catch (e) { busyMsg = e.message; }
-check("If it never relents, the fan is told it's busy, in plain words", /busy — wait a minute and tap Refresh/.test(busyMsg ?? ""), busyMsg ?? "NO ERROR");
+check("If it never relents, the fan is told it's busy, in plain words", /busy — wait a minute and try again/.test(busyMsg ?? ""), busyMsg ?? "NO ERROR");
 check("The explorer's own 'try again in' is honoured", waitedFor === 3000, String(waitedFor));
 calls = 0;
 const counting = async () => { calls++; return Response.json([]); };

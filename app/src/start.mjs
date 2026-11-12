@@ -117,11 +117,11 @@ function frontPage({ name, about, links }) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(name)}</title>
 <style>
-  body { font: 17px/1.55 system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px 16px 60px; color: #1a1a1a; background: #fff; }
-  code { word-break: break-all; background: #f3f3f3; padding: 2px 4px; border-radius: 4px; font-size: 14px; }
-  .note { color: #555; font-size: 15px; }
-  .btn { display: inline-block; background: #C8102E; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 700; }
-  @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } code { background: #222; } .note { color: #aaa; } }
+  body { font: 17px/1.55 system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px 16px 60px; color: #1B2420; background: #FBF8F1; }
+  code { word-break: break-all; background: #F0EBDD; padding: 2px 4px; border-radius: 4px; font-size: 14px; }
+  .note { color: #4F5B54; font-size: 15px; }
+  .btn { display: inline-block; background: #1F4D3A; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 4px; font-weight: 700; }
+  @media (prefers-color-scheme: dark) { body { background: #101713; color: #F1EEE3; } code { background: #1A241E; } .note { color: #AAB5AC; } .btn { background: #9FD3B4; color: #0C2218; } }
 </style>
 </head>
 <body>

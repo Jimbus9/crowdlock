@@ -29,7 +29,7 @@ function withTimeout(fetchImpl, ms) {
 // told plainly what's going on.
 export const REMEMBER_MS = 20000;
 export const RETRIES = 2;
-export const BUSY = "the block explorer is busy — wait a minute and tap Refresh";
+export const BUSY = "the block explorer is busy — wait a minute and try again";
 // One memory per way of fetching, so every screen shares it but tests don't.
 const memories = new WeakMap();
 const busy = (status) => status === 429 || status === 503;
