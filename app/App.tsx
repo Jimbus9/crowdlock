@@ -2,9 +2,11 @@
 // can join with it.
 //
 //   Welcome    →  New: show the 12 words → check three of them → Home
-//              →  Restore: type the backup words → Home
-//   Home       →  the waiting balance, Add money (QR + copy), Send out,
-//                 and the Crowdlocks: each one checked before it is shown
+//              →  Restore: type the recovery words → Home
+//   Home       →  four places along the bottom: Home (your next step, from
+//                 the six steps), My bitcoin (waiting, Add money, Send out,
+//                 your locks), Crowdlocks (each one checked before it is
+//                 shown), More (help, fee speed, wallet, founders)
 //   Crowdlock  →  its declaration, and Sign and join in one tap; then, for a
 //                 member, Your locks: progress to the minimum, Lock it,
 //                 each lock's state, and Take it home after its date
@@ -15,10 +17,12 @@
 //
 // Every screen here is presentation. Anything touching keys or money goes
 // through src/wallet/core.mjs, and nothing else may.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Linking, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Alert, AppState, BackHandler, Linking, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View,
 } from "react-native";
+import type { ComponentRef } from "react";
+import type { TextInputProps } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
@@ -64,6 +68,13 @@ import {
   loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed } from "./src/storage";
 import type { FeeSpeed } from "./src/storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB } from "./src/config";
+// The look (one theme file) and the shared parts every screen is built from.
+import { banner, font, gap, radius, size, themeFor, useTheme } from "./src/ui/theme";
+import type { Theme } from "./src/ui/theme";
+import { Btn, Card, NavRow, StepBar, TabBar, TopBar, Warning } from "./src/ui/parts";
+import type { TabName } from "./src/ui/parts";
+// @ts-ignore — plain module, tested in test-chain
+import { nextStep } from "./src/nextStep.mjs";
 
 type Screen =
   | { name: "loading" }
@@ -72,6 +83,12 @@ type Screen =
   | { name: "checkWords"; words: string }
   | { name: "restore" }
   | { name: "home"; words: string }
+  | { name: "addMoney"; words: string }
+  | { name: "feeSpeed"; words: string }
+  | { name: "wallet"; words: string }
+  | { name: "founders"; words: string }
+  | { name: "help"; words?: string }
+  | { name: "about"; words: string }
   | { name: "send"; words: string }
   | { name: "crowdlock"; words: string; url: string }
   | { name: "addCrowdlock"; words: string; link?: string }
@@ -80,21 +97,95 @@ type Screen =
   | { name: "cosignerKey"; words: string }
   | { name: "ledgerSetup"; from?: string };
 
+// ---------------------------------------------------------------------------
+// Checking again
+//
+// Pull down on a screen and everything on it that reads the chain or a
+// Crowdlock's files reads them again. Screens also check when they open and
+// when the app comes back to the front. A screen says what "check again"
+// means for it with useRefresh; one pull runs them all. For anyone who can't
+// pull down, the same thing is one tap away: the "Check now" in CheckedLine.
+// ---------------------------------------------------------------------------
+
+type Refresher = () => Promise<unknown> | void;
+const RefreshCtx = createContext<{ add: (f: Refresher) => () => void; checkNow: () => void; checkedAt: number | null }>(
+  { add: () => () => {}, checkNow: () => {}, checkedAt: null },
+);
+
+function useRefresh(fn: Refresher) {
+  const { add } = useContext(RefreshCtx);
+  const latest = useRef(fn);
+  latest.current = fn;
+  useEffect(() => add(() => latest.current()), [add]);
+}
+
+/** When this screen last checked, and the one-tap way to check again. */
+function CheckedLine() {
+  const { checkedAt, checkNow } = useContext(RefreshCtx);
+  const d = checkedAt ? new Date(checkedAt) : null;
+  const at = d ? `Checked at ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}. ` : "";
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`${at}Check now`} onPress={checkNow} style={{ minHeight: 48, justifyContent: "center", marginTop: 8 }}>
+      <Text style={s.note}>{at}Pull down to check again, or tap <Text style={s.link}>Check now</Text>.</Text>
+    </Pressable>
+  );
+}
+
+/** A text box in the app's colours (the hint text stays readable in the dark). */
+function Input(props: TextInputProps) {
+  const t = useTheme();
+  return <TextInput placeholderTextColor={t.soft} {...props} />;
+}
+
+// Screens where pulling down checks again. Forms and word screens are left
+// out: nothing on them comes from outside the phone.
+const REFRESHABLE = new Set(["home", "crowdlock", "findCrowdlocks"]);
+const TAB_TITLE: Record<TabName, string> = { home: "Crowdlock", bitcoin: "My bitcoin", crowdlocks: "Crowdlocks", more: "More" };
+
 export default function App() {
-  const [screen, setScreenRaw] = useState<Screen>({ name: "loading" });
+  const t = useTheme();
+  // Every screen below reads `s` as it draws, so it is set before they do.
+  s = useMemo(() => makeStyles(t), [t.dark]);
+
+  // Where the person is, and how they got there: the last entry is on screen,
+  // and Back (the phone's own, or the one at the top) drops it.
+  const [stack, setStack] = useState<Screen[]>([{ name: "loading" }]);
+  const [tab, setTab] = useState<TabName>("home");
+  const screen = stack[stack.length - 1];
+  const stackRef = useRef(stack); stackRef.current = stack;
+  const tabRef = useRef(tab); tabRef.current = tab;
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+
   // A Crowdlock link the app was opened with (crowdlock://add?url=…, from a
   // QR code or a web page's button). Held until there is a wallet to add it
   // to, then opened in Add a Crowdlock, where it is checked like any other.
   const pending = useRef<string | null>(null);
 
   const setScreen = useCallback((next: Screen) => {
-    if (next.name === "home" && pending.current) {
-      const link = pending.current; pending.current = null;
-      setScreenRaw({ name: "addCrowdlock", words: next.words, link });
-      return;
-    }
-    setScreenRaw(next);
+    let link: string | null = null;
+    if (next.name === "home" && pending.current) { link = pending.current; pending.current = null; }
+    setStack((old) => {
+      // Home and Welcome are where everything starts: going there clears the way back.
+      if (next.name === "home") return link ? [next, { name: "addCrowdlock", words: next.words, link }] : [next];
+      if (next.name === "welcome") return [next];
+      // Going to a screen already behind us is going back to it, not piling it on top.
+      const i = old.findIndex((x) => x.name === next.name);
+      return i >= 0 ? [...old.slice(0, i), next] : [...old.filter((x) => x.name !== "loading"), next];
+    });
   }, []);
+
+  const goBack = useCallback(() => setStack((old) => (old.length > 1 ? old.slice(0, -1) : old)), []);
+
+  // The phone's own Back: one screen back; from another tab, to Home; on Home
+  // (or Welcome) it leaves the app, as every Android app does.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (stackRef.current.length > 1) { goBack(); return true; }
+      if (stackRef.current[0].name === "home" && tabRef.current !== "home") { setTab("home"); return true; }
+      return false;
+    });
+    return () => sub.remove();
+  }, [goBack]);
 
   useEffect(() => {
     // Opened by a link: note it, then show the first screen once; "home" picks
@@ -114,27 +205,77 @@ export default function App() {
     return () => sub.remove();
   }, [setScreen]);
 
+  // Checking again: by pulling down, by "Check now", and when the app comes back to the front.
+  const refreshers = useRef(new Set<Refresher>());
+  const [refreshing, setRefreshing] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  const runAll = useCallback(async (spin: boolean) => {
+    if (spin) setRefreshing(true);
+    await Promise.all([...refreshers.current].map((f) => Promise.resolve().then(f).catch(() => {})));
+    setCheckedAt(Date.now());
+    if (spin) setRefreshing(false);
+  }, []);
+  const refreshCtx = useMemo(() => ({
+    add: (f: Refresher) => { refreshers.current.add(f); return () => { refreshers.current.delete(f); }; },
+    checkNow: () => { runAll(true); },
+    checkedAt,
+  }), [runAll, checkedAt]);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => { if (state === "active") runAll(false); });
+    return () => sub.remove();
+  }, [runAll]);
+
+  // A new screen starts at its top, and has just read what it shows.
+  useEffect(() => {
+    scroll.current?.scrollTo({ y: 0, animated: false });
+    setCheckedAt(Date.now());
+  }, [stack.length, screen.name, tab]);
+
+  const onTabs = screen.name === "home";
+  const words = "words" in screen ? screen.words : undefined;
   return (
     <SafeAreaProvider>
       <SafeAreaView style={s.page}>
-        <StatusBar style="dark" />
+        <StatusBar style={t.dark ? "light" : "dark"} />
         {IS_TEST_MONEY && <Text style={s.banner}>TEST MONEY · {NETWORK} · not real bitcoin</Text>}
         {!IS_TEST_MONEY && <Text style={s.bannerReal}>REAL BITCOIN · early build, not yet independently reviewed</Text>}
-        <ScrollView contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
-          {screen.name === "loading" && <ActivityIndicator style={{ marginTop: 80 }} />}
-          {screen.name === "welcome" && <Welcome go={setScreen} />}
-          {screen.name === "showWords" && <ShowWords words={screen.words} go={setScreen} />}
-          {screen.name === "checkWords" && <CheckWords words={screen.words} go={setScreen} />}
-          {screen.name === "restore" && <Restore go={setScreen} />}
-          {screen.name === "home" && <Home words={screen.words} go={setScreen} />}
-          {screen.name === "send" && <Send words={screen.words} go={setScreen} />}
-          {screen.name === "crowdlock" && <CrowdlockScreen words={screen.words} url={screen.url} go={setScreen} />}
-          {screen.name === "addCrowdlock" && <AddCrowdlock key={screen.link ?? "add"} words={screen.words} link={screen.link} go={setScreen} />}
-          {screen.name === "startCrowdlock" && <StartCrowdlock words={screen.words} go={setScreen} />}
-          {screen.name === "findCrowdlocks" && <FindCrowdlocks words={screen.words} go={setScreen} />}
-          {screen.name === "cosignerKey" && <CosignerKey words={screen.words} go={setScreen} />}
-          {screen.name === "ledgerSetup" && <LedgerSetup from={screen.from} go={setScreen} />}
-        </ScrollView>
+        {screen.name !== "loading" && (
+          <TopBar
+            title={onTabs ? TAB_TITLE[tab] : screen.name === "welcome" ? "Crowdlock" : undefined}
+            showLogo={(onTabs && tab === "home") || screen.name === "welcome"}
+            onBack={stack.length > 1 ? goBack : undefined}
+            onHelp={screen.name === "help" ? undefined : () => setScreen({ name: "help", words })}
+          />
+        )}
+        <RefreshCtx.Provider value={refreshCtx}>
+          <ScrollView
+            ref={scroll} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled"
+            refreshControl={REFRESHABLE.has(screen.name)
+              ? <RefreshControl refreshing={refreshing} onRefresh={() => runAll(true)} colors={[t.brand]} tintColor={t.brand} progressBackgroundColor={t.panel} />
+              : undefined}
+          >
+            {screen.name === "loading" && <ActivityIndicator style={{ marginTop: 80 }} />}
+            {screen.name === "welcome" && <Welcome go={setScreen} />}
+            {screen.name === "showWords" && <ShowWords words={screen.words} go={setScreen} />}
+            {screen.name === "checkWords" && <CheckWords words={screen.words} go={setScreen} />}
+            {screen.name === "restore" && <Restore go={setScreen} />}
+            {screen.name === "home" && <Tabs words={screen.words} tab={tab} setTab={setTab} go={setScreen} />}
+            {screen.name === "addMoney" && <AddMoney words={screen.words} />}
+            {screen.name === "send" && <Send words={screen.words} go={setScreen} />}
+            {screen.name === "feeSpeed" && <FeeSpeedScreen />}
+            {screen.name === "wallet" && <WalletScreen words={screen.words} go={setScreen} />}
+            {screen.name === "founders" && <Founders words={screen.words} go={setScreen} />}
+            {screen.name === "help" && <Help />}
+            {screen.name === "about" && <About />}
+            {screen.name === "crowdlock" && <CrowdlockScreen words={screen.words} url={screen.url} go={setScreen} />}
+            {screen.name === "addCrowdlock" && <AddCrowdlock key={screen.link ?? "add"} words={screen.words} link={screen.link} go={setScreen} />}
+            {screen.name === "startCrowdlock" && <StartCrowdlock words={screen.words} go={setScreen} />}
+            {screen.name === "findCrowdlocks" && <FindCrowdlocks words={screen.words} go={setScreen} />}
+            {screen.name === "cosignerKey" && <CosignerKey words={screen.words} go={setScreen} />}
+            {screen.name === "ledgerSetup" && <LedgerSetup from={screen.from} go={setScreen} />}
+          </ScrollView>
+        </RefreshCtx.Provider>
+        {onTabs && <TabBar tab={tab} onTab={setTab} />}
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -144,7 +285,7 @@ type Go = (s: Screen) => void;
 
 // ---------------------------------------------------------------------------
 
-// The wallet on this phone: backup words, or a Ledger that holds the key.
+// The wallet on this phone: recovery words, or a Ledger that holds the key.
 // Everything else in the app treats them the same; only signing differs.
 function walletAccount(words: string): any {
   if (isLedgerWallet(words)) {
@@ -163,10 +304,9 @@ function LedgerHint({ account }: { account: any }) {
 function Welcome({ go }: { go: Go }) {
   return (
     <View>
-      <Text style={s.h1}>Crowdlock</Text>
       <Text style={s.p}>Your own bitcoin wallet. Nobody else holds your money — not us, not anyone.</Text>
       <Button label="Create a new wallet" onPress={() => go({ name: "showWords", words: newWords() })} />
-      <Button label="I already have backup words" kind="plain" onPress={() => go({ name: "restore" })} />
+      <Button label="I already have recovery words" kind="plain" onPress={() => go({ name: "restore" })} />
       <Button label="Use a Ledger" kind="plain" onPress={() => go({ name: "ledgerSetup" })} />
     </View>
   );
@@ -280,7 +420,7 @@ function CheckWords({ words, go }: { words: string; go: Go }) {
 }
 
 /**
- * Check a paper copy of backup words, every word, one at a time — the way a
+ * Check a paper copy of recovery words, every word, one at a time — the way a
  * hardware wallet does. A copy wrong in a single word is not a backup, and
  * checking only a few words leaves most of them unchecked. Suggestions come
  * from the standard word list, never from the words themselves.
@@ -300,7 +440,7 @@ function CheckEveryWord({ words, onDone, onShowAgain }: { words: string; onDone:
       <Text style={s.h1}>Check your paper</Text>
       <Text style={s.p}>Type each word from what you wrote down. Every word is checked — one wrong word and the paper wouldn't bring your money back.</Text>
       <Text style={s.label}>Word {i + 1} of {list.length}</Text>
-      <TextInput
+      <Input
         style={s.input} autoCapitalize="none" autoCorrect={false} autoFocus value={typed}
         onChangeText={(t) => { setTyped(t); setWrong(false); }} onSubmitEditing={() => accept(typed)} returnKeyType="next"
       />
@@ -317,7 +457,7 @@ function CheckEveryWord({ words, onDone, onShowAgain }: { words: string; onDone:
 }
 
 /**
- * Typing backup words in: the same box everywhere — restoring a wallet,
+ * Typing recovery words in: the same box everywhere — restoring a wallet,
  * checking a co-signer key's paper, co-signing a purchase. As each word is
  * typed it offers the standard words that start that way (from the word list,
  * never from anything saved), and says how many words there are and whether
@@ -336,7 +476,7 @@ function WordsInput({ value, onChange, placeholder }: { value: string; onChange:
   const rightLength = [12, 15, 18, 21, 24].includes(count);
   const valid = rightLength && wordsAreValid(value);
   return <>
-    <TextInput
+    <Input
       style={[s.input, { minHeight: 100, textAlignVertical: "top" }]} multiline
       autoCapitalize="none" autoCorrect={false} value={value} onChangeText={onChange} placeholder={placeholder}
     />
@@ -370,21 +510,308 @@ function Restore({ go }: { go: Go }) {
   return (
     <View>
       <Text style={s.h1}>Restore your wallet</Text>
-      <Text style={s.p}>Type your backup words, in order, with spaces between them. Usually 12 or 24.</Text>
+      <Text style={s.p}>Type your recovery words, in order, with spaces between them. Usually 12 or 24.</Text>
       <WordsInput value={text} onChange={setText} />
       <Button label="Restore" disabled={!valid} onPress={finish} />
-      <Button label="Back" kind="plain" onPress={() => go({ name: "welcome" })} />
     </View>
   );
 }
 
 // ---------------------------------------------------------------------------
 
-function Home({ words, go }: { words: string; go: Go }) {
-  const account = useMemo(() => walletAccount(words), [words]);
+// ---------------------------------------------------------------------------
+// The four places: Home, My bitcoin, Crowdlocks, More
+//
+// Home shows one thing to do next, worked out from the six steps (understand,
+// sign, get bitcoin, lock, commit to a purchase, take it home), then what is
+// waiting and what is locked. Everything read here is read the same way the
+// Crowdlock's own page reads it; nothing is decided here about money.
+// ---------------------------------------------------------------------------
+
+type MyLock = { crowdlock: string; name: string; address: string; locktime: number; state: string; confirmed: bigint; arriving: bigint };
+type HomeAlert = { url: string; name: string; kind: "keys" | "released" };
+type Overview = {
+  balance: { confirmed: bigint; arriving: bigint } | null; error: string | null;
+  locks: MyLock[] | null; step: any | null; alerts: HomeAlert[];
+};
+
+/** Has this wallet already committed to this proposal? Read from the Crowdlock's own published pile. */
+async function inPile(c: Extract<Loaded, { ok: true }>, p: any, publicKey: string): Promise<boolean> {
+  try {
+    if (!c.crowdlock.register?.proposals) return false;
+    const r = await fetch(resolvePath(pilePath(c.crowdlock.register.proposals, p.hash), baseFor(c.url)), { cache: "no-store" });
+    if (!r.ok) return false;
+    const file = await r.json();
+    return checkPileShape(file, p.hash).ok && file.commitments.some((x: any) => x.record?.lock?.owner_pubkey === publicKey);
+  } catch { return false; }
+}
+
+function useOverview(account: any): Overview {
   const [balance, setBalance] = useState<{ confirmed: bigint; arriving: bigint } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [locks, setLocks] = useState<MyLock[] | null>(null);
+  const [step, setStep] = useState<any | null>(null);
+  const [alerts, setAlerts] = useState<HomeAlert[]>([]);
+
+  const load = useCallback(async () => {
+    setError(null);
+    let waiting: { confirmed: bigint; arriving: bigint } | null = null;
+    try { waiting = await waitingBalance(chain, account.address); setBalance(waiting); }
+    catch (e: any) { setError(String(e.message ?? e)); }
+
+    const loaded: Loaded[] = await Promise.all((await allLinks()).map((u) => loadCrowdlock(u)));
+    const here = loaded.filter((c) => c.ok && c.crowdlock.network === NETWORK) as Extract<Loaded, { ok: true }>[];
+    const saved = await loadSavedLocks();
+    // If the network's clock can't be read, no lock is called ready: 0 keeps them all "locked".
+    let medianTime = 0;
+    try { medianTime = await chain.medianTime(); } catch {}
+
+    const all: MyLock[] = [];
+    const notes: HomeAlert[] = [];
+    const forStep: any[] = [];
+    for (const c of here) {
+      const member = !!membershipOf(c.register, account.address);
+      const cosigner: string | undefined = newestCosigner(c.crowdlock);
+      const changed = keyChanges(await loadSeenKeys(c.url), c.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(c.url)).changed;
+      if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name, kind: "keys" });
+      const mine: MyLock[] = [];
+      if (member) {
+        const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address)];
+        for (const l of saved.filter((x) => x.crowdlock === c.url)) if (!terms.some((x) => x.address === l.address)) terms.push(l);
+        for (const l of terms) {
+          try { mine.push({ crowdlock: c.url, name: c.crowdlock.name, address: l.address, locktime: l.locktime, ...(await lockState({ chain, lock: l, medianTime })) }); } catch {}
+        }
+      }
+      all.push(...mine);
+      const open = (c.proposals ?? []).find((p: any) => phaseOf(p) === "gathering") ?? null;
+      forStep.push({
+        url: c.url, name: c.crowdlock.name, member, minimum: BigInt(c.crowdlock.minimum_counted_lock_sats),
+        canLock: !!cosigner && !changed && !(account.kind === "ledger" && !xpubForKey(c.crowdlock, cosigner)),
+        locks: mine, openProposal: open ? { title: open.title } : null,
+        committed: member && open ? await inPile(c, open, account.publicKey) : false,
+      });
+    }
+    all.sort((a, b) => a.locktime - b.locktime);
+    setLocks(all);
+    setAlerts(notes);
+    // Without a balance there is no telling which step is next, so none is offered.
+    setStep(waiting ? nextStep({ waiting: waiting.confirmed, crowdlocks: forStep }) : null);
+
+    // Has a co-signer let a lock out early? Slower to read, so it follows on.
+    for (const c of here) {
+      if (!membershipOf(c.register, account.address)) continue;
+      coSignerRecord(c).then((r: any) => {
+        if (!r.releases.length) return;
+        setAlerts((old) => (old.some((a) => a.url === c.url && a.kind === "released") ? old : [...old, { url: c.url, name: c.crowdlock.name, kind: "released" }]));
+      }).catch(() => {});
+    }
+  }, [account.address]);
+
+  useEffect(() => { load(); }, [load]);
+  useRefresh(load);
+  return { balance, error, locks, step, alerts };
+}
+
+function Tabs({ words, tab, setTab, go }: { words: string; tab: TabName; setTab: (t: TabName) => void; go: Go }) {
+  const account = useMemo(() => walletAccount(words), [words]);
+  const o = useOverview(account);
+  if (tab === "bitcoin") return <BitcoinTab o={o} words={words} go={go} />;
+  if (tab === "crowdlocks") return <CrowdlocksTab words={words} address={account.address} go={go} />;
+  if (tab === "more") return <MoreTab words={words} account={account} go={go} />;
+  return <HomeTab o={o} words={words} go={go} setTab={setTab} />;
+}
+
+/** The words for each next step: a title, a sentence, and the one button. */
+function stepWords(step: any, o: Overview, words: string, go: Go): { title: string; text: string; button?: string; onPress?: () => void } {
+  const open = () => go({ name: "crowdlock", words, url: step.url });
+  switch (step.kind) {
+    case "find": return {
+      title: "Find a Crowdlock",
+      text: "A Crowdlock is a crowd of people who each lock their own bitcoin towards buying something together. Nobody holds anyone else's money.",
+      button: "Find Crowdlocks", onPress: () => go({ name: "findCrowdlocks", words }),
+    };
+    case "understand": return {
+      title: `Read what ${step.name} asks`,
+      text: "Start with its declaration: the words you would sign. Signing is free and moves no money.",
+      button: "Read the declaration", onPress: open,
+    };
+    case "getBitcoin": return {
+      title: "Get bitcoin",
+      text: (o.balance && o.balance.confirmed > 0n
+        ? `You have ${btc(o.balance.confirmed)} waiting. ${btc(step.need)} more and you can lock it for ${step.name}.`
+        : `To lock for ${step.name} you need at least ${btc(step.need)} in this wallet.`)
+        + (o.balance && o.balance.arriving > 0n ? ` ${btc(o.balance.arriving)} is on its way and counts once it confirms.` : ""),
+      button: "Add money", onPress: () => go({ name: "addMoney", words }),
+    };
+    case "lock": return {
+      title: "Lock your bitcoin",
+      text: `You have ${btc(step.sats)} waiting. Lock it for ${step.name}.`,
+      button: "Lock my bitcoin", onPress: open,
+    };
+    case "blocked": return {
+      title: "Locking is waiting on something",
+      text: `You have enough waiting, but ${step.name} can't take a lock just now. Its page says why.`,
+      button: `Look at ${step.name}`, onPress: open,
+    };
+    case "commit": return {
+      title: "A purchase is open",
+      text: `"${step.title}" is gathering commitments in ${step.name}. You can commit your locked bitcoin to it. This step is optional.`,
+      button: "Look at the proposal", onPress: open,
+    };
+    case "takeHome": return {
+      title: "Take it home",
+      text: `${btc(step.sats)} in ${step.name} has passed its date. Take it home, or lock it again.`,
+      button: "Take it home", onPress: open,
+    };
+    default: return {
+      title: "Nothing to do",
+      text: `Your bitcoin is locked.${step.opens ? ` The next lock opens on ${when(step.opens)}.` : ""} Steps 1 to 4 are done. Steps 5 and 6 come later.`,
+    };
+  }
+}
+
+function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go; setTab: (t: TabName) => void }) {
+  const held = (o.locks ?? []).filter((l) => l.state === "locked" || l.state === "lapsed");
+  const lockedSats = held.reduce((n, l) => n + l.confirmed, 0n);
+  const ready = held.some((l) => l.state === "lapsed");
+  const nextDate = held.filter((l) => l.state === "locked").map((l) => l.locktime)[0];
+  const w = o.step ? stepWords(o.step, o, words, go) : null;
+  return (
+    <View>
+      {o.alerts.map((a) => (
+        <Warning key={a.url + a.kind} level="know" title={a.kind === "keys" ? `${a.name}: its co-signer keys have changed` : `${a.name}: the co-signer has released a lock early`}>
+          <Btn kind="link" label={`Look at ${a.name}`} onPress={() => go({ name: "crowdlock", words, url: a.url })} />
+        </Warning>
+      ))}
+
+      <Card>
+        <Text style={s.kick}>Your next step</Text>
+        {!w && !o.error && <ActivityIndicator style={{ marginVertical: 24 }} />}
+        {!w && !!o.error && <Text style={s.error}>Could not read your balance, so the next step can't be worked out: {o.error}</Text>}
+        {w && <>
+          <Text style={[s.h1, { marginTop: 4, marginBottom: 6 }]}>{w.title}</Text>
+          <Text style={[s.p, { marginBottom: 0 }]}>{w.text}</Text>
+          {w.button && w.onPress && <Btn label={w.button} onPress={w.onPress} />}
+          <Btn kind="link" label="What do the six steps mean?" onPress={() => go({ name: "help", words })} />
+        </>}
+      </Card>
+      {!!o.step && o.step.step > 0 && <StepBar step={o.step.step} />}
+
+      <Text style={s.h2}>Your bitcoin</Text>
+      <NavRow
+        title={`Waiting: ${o.balance ? btc(o.balance.confirmed) : "…"}`}
+        sub={o.balance && o.balance.arriving > 0n ? `Yours to lock or send. ${btc(o.balance.arriving)} more is arriving` : "Yours to lock or send"}
+        onPress={() => setTab("bitcoin")}
+      />
+      <NavRow
+        title={`Locked: ${o.locks ? btc(lockedSats) : "…"}`}
+        sub={!o.locks ? "Reading your locks" : held.length === 0 ? "Nothing locked yet" : nextDate ? `Next one opens ${when(nextDate)}` : undefined}
+        state={ready ? { text: "One is ready to take home", good: true } : undefined}
+        onPress={() => setTab("bitcoin")}
+      />
+      <CheckedLine />
+    </View>
+  );
+}
+
+const LOCK_WORDS: Record<string, string> = { arriving: "Arriving", lapsed: "Ready to take home" };
+
+function BitcoinTab({ o, words, go }: { o: Overview; words: string; go: Go }) {
+  const shown = (o.locks ?? []).filter((l) => l.state === "locked" || l.state === "lapsed" || l.state === "arriving");
+  return (
+    <View>
+      <Card>
+        <Text style={s.kick}>Waiting</Text>
+        <Text style={s.big}>{o.balance ? btc(o.balance.confirmed) : "…"}</Text>
+        {o.balance && o.balance.arriving > 0n && <Text style={s.note}>+ {btc(o.balance.arriving)} arriving (not yet confirmed)</Text>}
+        {o.error && <Text style={s.error}>Could not read the balance: {o.error}</Text>}
+        <Text style={[s.p, { marginBottom: 0 }]}>Yours to lock or send. It is in your own wallet: nobody else holds it.</Text>
+        <Btn label="Add money" onPress={() => go({ name: "addMoney", words })} />
+        <Btn kind="second" label="Send money out" onPress={() => go({ name: "send", words })} />
+      </Card>
+
+      <Text style={s.h2}>Locked</Text>
+      {o.locks === null && <ActivityIndicator style={{ marginVertical: 16 }} />}
+      {o.locks !== null && shown.length === 0 && <Text style={s.note}>Nothing locked yet. When you lock bitcoin for a Crowdlock, it shows here with its date.</Text>}
+      {shown.map((l) => (
+        <NavRow
+          key={l.address}
+          title={btc(l.confirmed > 0n ? l.confirmed : l.arriving)}
+          sub={l.name}
+          state={{ text: LOCK_WORDS[l.state] ?? `Locked until ${when(l.locktime)}`, good: l.state === "lapsed" }}
+          onPress={() => go({ name: "crowdlock", words, url: l.crowdlock })}
+        />
+      ))}
+      <CheckedLine />
+    </View>
+  );
+}
+
+function CrowdlocksTab({ words, address, go }: { words: string; address: string; go: Go }) {
+  return (
+    <View>
+      <CrowdlockList words={words} address={address} go={go} />
+      <Btn label="Find Crowdlocks" onPress={() => go({ name: "findCrowdlocks", words })} />
+      <Btn kind="second" label="Add one by link" onPress={() => go({ name: "addCrowdlock", words })} />
+      <CheckedLine />
+    </View>
+  );
+}
+
+function MoreTab({ words, account, go }: { words: string; account: any; go: Go }) {
+  return (
+    <View>
+      <NavRow title="Help" sub="What the words mean, and the six steps" onPress={() => go({ name: "help", words })} />
+      <NavRow title="Fee speed" sub={SPEED_LABEL[feeSpeed]} onPress={() => go({ name: "feeSpeed", words })} />
+      <NavRow title="Wallet" sub={account.kind === "ledger" ? `On your Ledger (${account.ledgerName})` : "Recovery words, kept on this phone"} onPress={() => go({ name: "wallet", words })} />
+      <NavRow title="For founders and co-signers" sub="Start a Crowdlock, make a co-signer key, look after one" onPress={() => go({ name: "founders", words })} />
+      <NavRow title="About this app" sub={`${IS_TEST_MONEY ? "Test version" : "Real bitcoin version"} · ${NETWORK}`} onPress={() => go({ name: "about", words })} />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: get bitcoin
+// ---------------------------------------------------------------------------
+
+function AddMoney({ words }: { words: string }) {
+  const account = useMemo(() => walletAccount(words), [words]);
   const [copied, setCopied] = useState(false);
+  return (
+    <View>
+      <Text style={s.kick}>Step 3 of 6: Get bitcoin</Text>
+      <Text style={s.h1}>Add money</Text>
+      <Text style={s.p}>Send bitcoin to this address. It is yours alone. Another phone can scan the square; anywhere else, paste the address.</Text>
+      <View style={s.qr}><QRCode value={account.address} size={200} /></View>
+      <Text style={s.mono} selectable>{account.address}</Text>
+      <Btn label={copied ? "Copied. Copy it again" : "Copy my address"} onPress={async () => { await Clipboard.setStringAsync(account.address); setCopied(true); }} />
+      <Warning level="know" title="Buying bitcoin is not instant anywhere">
+        Expect to prove who you are and to wait for a bank transfer. In some countries you wait again before you can move the bitcoin out. How long depends on where you live and who you buy from.
+      </Warning>
+      <Text style={s.note}>
+        Want it automatic? Set up a standing order with a service that sends bitcoin to your own wallet, and give it this address.
+      </Text>
+      <Text style={s.note}>Never type your recovery words into a website or give them to anyone. No Crowdlock will ever ask for them. If you lose them, your bitcoin is gone and nobody can bring it back.</Text>
+      <Text style={s.note}>In many countries buying, sending or spending bitcoin has tax or reporting rules. They differ, and finding out yours is up to you.</Text>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// More: fee speed, wallet, founders and co-signers, help, about
+// ---------------------------------------------------------------------------
+
+function FeeSpeedScreen() {
+  return (
+    <View>
+      <FeeChoice />
+      <Text style={s.p}>Every bitcoin payment pays a small fee to the network. A higher fee is quicker. Your choice is saved and used for every lock and payment.</Text>
+    </View>
+  );
+}
+
+function WalletScreen({ words, go }: { words: string; go: Go }) {
+  const account = useMemo(() => walletAccount(words), [words]);
   const [checking, setChecking] = useState(false);
   const [keyCheck, setKeyCheck] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -400,13 +827,6 @@ function Home({ words, go }: { words: string; go: Go }) {
     setChecking(false);
   };
 
-  const refresh = useCallback(async () => {
-    setError(null);
-    try { setBalance(await waitingBalance(chain, account.address)); }
-    catch (e: any) { setError(String(e.message ?? e)); }
-  }, [account.address]);
-  useEffect(() => { refresh(); }, [refresh]);
-
   const remove = () => Alert.alert(
     "Remove this wallet from the phone?",
     account.kind === "ledger"
@@ -420,40 +840,93 @@ function Home({ words, go }: { words: string; go: Go }) {
 
   return (
     <View>
-      <Text style={s.h1}>Waiting to lock</Text>
-      <Text style={s.big}>{balance ? btc(balance.confirmed) : "…"}</Text>
-      {balance && balance.arriving > 0n && <Text style={s.note}>+ {btc(balance.arriving)} arriving (not yet confirmed)</Text>}
-      {error && <Text style={s.error}>Could not read the balance: {error}</Text>}
-      <Button label="Refresh" kind="plain" onPress={refresh} />
-
-      <Text style={s.h2}>Add money</Text>
-      <Text style={s.p}>Send bitcoin to this address. It is yours alone.</Text>
-      <View style={s.qr}><QRCode value={account.address} size={200} /></View>
+      <Text style={s.h1}>Wallet</Text>
+      <Text style={s.p}>{account.kind === "ledger"
+        ? `This wallet signs on your Ledger (${account.ledgerName}). The key never leaves the Ledger.`
+        : "This wallet's key is kept on this phone. Your recovery words on paper are its only backup."}</Text>
+      <Text style={s.label}>Your address</Text>
       <Text style={s.mono} selectable>{account.address}</Text>
-      <Button
-        label={copied ? "Copied" : "Copy address"} kind="plain"
-        onPress={async () => { await Clipboard.setStringAsync(account.address); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-      />
-      <Text style={s.note}>
-        Want it automatic? Set up a standing order with a service that sends bitcoin to your own wallet, and give it this address.
-      </Text>
-
-      <FeeChoice />
-      <Button label="Send money out" onPress={() => go({ name: "send", words })} />
-
-      <Text style={s.h2}>Crowdlocks</Text>
-      <CrowdlockList words={words} address={account.address} go={go} />
-      <Button label="Find Crowdlocks" onPress={() => go({ name: "findCrowdlocks", words })} />
-      <Button label="Add a Crowdlock" kind="plain" onPress={() => go({ name: "addCrowdlock", words })} />
-      <Button label="Start a Crowdlock" kind="plain" onPress={() => go({ name: "startCrowdlock", words })} />
-      <Button label="Make a co-signer key" kind="plain" onPress={() => go({ name: "cosignerKey", words })} />
       {account.kind === "ledger" && <>
-        <Button label={checking ? "Look at your Ledger…" : "Check my Ledger"} kind="plain" disabled={checking} onPress={checkKey} />
+        <Btn label={checking ? "Look at your Ledger…" : "Check my Ledger"} disabled={checking} onPress={checkKey} />
         {keyCheck && <Text style={keyCheck.ok ? s.good : s.error}>{keyCheck.text}</Text>}
         <Text style={s.note}>Checks it's the same Ledger, gives the same address, and can still sign. It signs a harmless dated message you approve on its screen; nothing is sent.</Text>
       </>}
-      {account.kind !== "ledger" && <Button label="Use a Ledger instead" kind="plain" onPress={() => go({ name: "ledgerSetup", from: words })} />}
-      <Button label="Remove wallet from this phone" kind="danger" onPress={remove} />
+      {account.kind !== "ledger" && <Btn label="Use a Ledger instead" onPress={() => go({ name: "ledgerSetup", from: words })} />}
+      <Btn kind="danger" label="Remove wallet from this phone" onPress={remove} />
+    </View>
+  );
+}
+
+function Founders({ words, go }: { words: string; go: Go }) {
+  return (
+    <View>
+      <Text style={s.h1}>For founders and co-signers</Text>
+      <Text style={s.p}>Most people never need this page. It is for someone starting a Crowdlock of their own, or helping to run one.</Text>
+      <NavRow title="Start a Crowdlock" sub="Write what it is for; the app sets it up in your own GitHub account" onPress={() => go({ name: "startCrowdlock", words })} />
+      <NavRow title="Make a co-signer key" sub="The key that adds the second signature to a funded purchase" onPress={() => go({ name: "cosignerKey", words })} />
+      <Text style={s.h2}>Look after a Crowdlock</Text>
+      <Text style={s.p}>Updating one, adding co-signer keys, destinations, proposals and maintainers all live on the Crowdlock's own page. Open it from Crowdlocks, then go to "Look after this Crowdlock".</Text>
+      <Text style={s.p}>Co-signing a purchase, and declaring a proposal dead, are on the proposal itself, under "For the co-signer".</Text>
+    </View>
+  );
+}
+
+const SIX_STEPS: [string, string][] = [
+  ["Understand", "Read what the Crowdlock is for and what you would be signing."],
+  ["Sign", "Sign its declaration with your wallet. It is free and moves no money. It puts you on the public register."],
+  ["Get bitcoin", "Put bitcoin into this wallet. Until you lock it, it is just yours, waiting."],
+  ["Lock", "Choose how long, and lock it. Until your date nobody can move it, not even you, except into a purchase you sign for yourself."],
+  ["Commit to a purchase", "Optional. If a purchase is proposed, you can sign your locked bitcoin towards it. Nothing moves unless it reaches its target."],
+  ["Take it home", "On your date, whatever has not gone into a purchase is yours to take back, or to lock again."],
+];
+
+const WORDS_MEAN: [string, string][] = [
+  ["Crowdlock", "A crowd of people who each lock their own bitcoin towards buying something together. Nobody holds anyone else's money, and nobody gets anything financial back."],
+  ["Wallet", "An app that holds your keys. This app is one."],
+  ["Key", "A secret number that proves bitcoin is yours and lets you move it."],
+  ["Recovery words", "The 12 or 24 words a wallet gives you when you set it up. They are its only backup. Anyone who has them has your bitcoin."],
+  ["Ledger", "A small device that keeps your key off your phone. You approve each signature on its own screen."],
+  ["Blockchain", "The public record of every bitcoin payment."],
+  ["Sat", "The smallest unit of bitcoin. 100,000,000 sats make one bitcoin."],
+  ["Network fee", "A small payment to the bitcoin network for carrying your payment. A higher fee is quicker."],
+  ["Confirmation", "The moment the network writes a payment into its record. Until then it is \"arriving\"."],
+  ["Lock (timelock)", "Bitcoin that can't be moved until a date you chose. It stays in an address only you can open."],
+  ["The register", "A Crowdlock's public list of who has signed and what is locked. Anyone can check it."],
+  ["Fingerprint", "A short code made from exact words. Change one word and the code changes, so it proves a text is the real one."],
+  ["Co-signer", "The second signature a purchase needs. A co-signer can't take or keep anyone's money: only complete what members signed for, or refuse."],
+  ["xpub", "The long form of a public key. A Ledger needs it before it will lock."],
+  ["Proposal", "A purchase put to a Crowdlock: what, from whom, for how much, by when."],
+  ["Test network", "A practice copy of bitcoin. Its coins are worthless."],
+];
+
+function Help() {
+  return (
+    <View>
+      <Text style={s.h1}>Help</Text>
+      <Text style={s.h2}>The six steps</Text>
+      {SIX_STEPS.map(([name, text], i) => (
+        <Text key={name} style={s.p}><Text style={s.bold}>{i + 1}. {name}. </Text>{text}</Text>
+      ))}
+      <Text style={s.note}>Steps 1 to 4 you do now. Steps 5 and 6 come later.</Text>
+      <Text style={s.h2}>What the words mean</Text>
+      {WORDS_MEAN.map(([word, text]) => (
+        <Text key={word} style={s.p}><Text style={s.bold}>{word}. </Text>{text}</Text>
+      ))}
+      <Text style={s.h2}>Getting about</Text>
+      <Text style={s.p}>The phone's own Back goes back one screen. Pull a screen down to make it check again, or tap "Check now" at its foot.</Text>
+    </View>
+  );
+}
+
+function About() {
+  return (
+    <View>
+      <Text style={s.h1}>About this app</Text>
+      <Text style={s.p}>{IS_TEST_MONEY ? `This is the test version. It uses ${NETWORK}, a practice copy of bitcoin. Its coins are worthless: do not send real bitcoin to it.` : "This version uses real bitcoin. It is an early build and has not yet been independently reviewed."}</Text>
+      <Text style={s.p}>Crowdlock is a set of published rules, not this app. Every key, record and action here can also be made with standard tools, so nothing depends on the app.</Text>
+      <Text style={s.p}>This is not an investment. There is no return, no dividend and no payout, now or ever. Bitcoin rises and falls, and bitcoin you lock can fall in value while it is locked. Nothing here is legal or financial advice.</Text>
+      <Text style={s.label}>Where the app reads the blockchain</Text>
+      <Text style={s.mono} selectable>{EXPLORER_WEB}</Text>
     </View>
   );
 }
@@ -488,7 +961,7 @@ function Send({ words, go }: { words: string; go: Go }) {
   if (done) return (
     <View>
       <Text style={s.h1}>Sent</Text>
-      <Text style={s.p}>It will confirm in the next block or so.</Text>
+      <Text style={s.p}>How soon it confirms depends on the fee speed you chose.</Text>
       <Text style={s.mono} selectable>{EXPLORER_WEB}/tx/{done}</Text>
       <Button label="Back to wallet" onPress={() => go({ name: "home", words })} />
     </View>
@@ -498,9 +971,9 @@ function Send({ words, go }: { words: string; go: Go }) {
     <View>
       <Text style={s.h1}>Send money out</Text>
       <Text style={s.label}>To address</Text>
-      <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={to} onChangeText={(t) => { setTo(t); setReview(null); }} />
+      <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={to} onChangeText={(t) => { setTo(t); setReview(null); }} />
       <Text style={s.label}>Amount in BTC</Text>
-      <TextInput
+      <Input
         style={s.input} keyboardType="decimal-pad" editable={!all}
         value={all ? "everything" : amount} onChangeText={(t) => { setAmount(t); setReview(null); }}
       />
@@ -538,6 +1011,8 @@ async function allLinks(): Promise<string[]> {
 function CrowdlockList({ words, address, go }: { words: string; address: string; go: Go }) {
   const [items, setItems] = useState<Loaded[] | null>(null);
   const [totals, setTotals] = useState<Record<string, { sats: bigint; members: number }>>({});
+  const [tick, setTick] = useState(0);
+  useRefresh(() => setTick((n) => n + 1));
   useEffect(() => {
     let live = true;
     allLinks().then((links) => Promise.all(links.map((u) => loadCrowdlock(u)))).then((r) => {
@@ -550,7 +1025,7 @@ function CrowdlockList({ words, address, go }: { words: string; address: string;
       }
     });
     return () => { live = false; };
-  }, []);
+  }, [tick]);
 
   if (!items) return <ActivityIndicator style={{ marginVertical: 16 }} />;
   const here = items.filter((c) => c.ok && c.crowdlock.network === NETWORK) as Extract<Loaded, { ok: true }>[];
@@ -621,6 +1096,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
     }
   }, [url]);
   useEffect(() => { load(); }, [load]);
+  useRefresh(load);
 
   if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
   if (!c.ok) return (
@@ -628,7 +1104,6 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
       <Text style={s.h1}>Refused</Text>
       <Text style={s.p}>This Crowdlock failed its checks, so the app will not show it or let you sign anything for it.</Text>
       {c.problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}
-      <Button label="Back" kind="plain" onPress={() => go({ name: "home", words })} />
     </View>
   );
 
@@ -667,7 +1142,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
       </View>
 
       <Text style={s.p}>
-        A lock counts from <Text style={{ fontWeight: "700" }}>{shortBtc(c.crowdlock.minimum_counted_lock_sats)}</Text>
+        A lock counts from <Text style={s.bold}>{shortBtc(c.crowdlock.minimum_counted_lock_sats)}</Text>
         {gbp ? ` (about £${Math.round(Number(c.crowdlock.minimum_counted_lock_sats) / 1e8 * gbp)} today)` : ""}.
         {" "}A smaller lock is still yours and still locked — it just isn't added to the total.
       </Text>
@@ -724,7 +1199,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         message: `${c.crowdlock.name} — a Crowdlock. Nobody pools money, and nobody gets anything financial back. Have a look: ${shareLinkFor(c)}`,
       })} />
 
-      <Button label="Back" kind="plain" onPress={() => go({ name: "home", words })} />
+      <CheckedLine />
     </View>
   );
 }
@@ -854,7 +1329,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
             await chain.broadcast(tx.hex);
             if (viaRelays) await publish({ address: lock.address, locktime, cosignerPubkey: cosigner });
             setAmountText("");
-            setMessage({ ok: true, text: `Locked ${btc(tx.sent)} (fee ${btc(tx.fee)}). Once it confirms — usually within the hour — it goes on the register by itself.` });
+            setMessage({ ok: true, text: `Locked ${btc(tx.sent)} (fee ${btc(tx.fee)}). Once it confirms it goes on the register by itself.` });
             await refresh(); onChange();
           } catch (e: any) { setMessage({ ok: false, text: String(e.message ?? e) }); }
           setBusy(null);
@@ -926,7 +1401,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
         <View style={s.panel}>
           <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting, enough for a lock that counts.</Text>
           <Text style={s.label}>How much to lock</Text>
-          <TextInput
+          <Input
             style={s.input} keyboardType="decimal-pad" placeholder="Everything waiting"
             value={amountText} onChangeText={setAmountText}
           />
@@ -937,7 +1412,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {lengths.map((y) => (
               <Pressable key={y} onPress={() => setYears(y)} style={[s.chip, years === y && s.chipOn]}>
-                <Text style={[s.chipText, years === y && { color: "#fff" }]}>{lengthLabel(y)}</Text>
+                <Text style={[s.chipText, years === y && s.chipTextOn]}>{lengthLabel(y)}</Text>
               </Pressable>
             ))}
           </View>
@@ -952,7 +1427,7 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
       ) : (
         <Text style={s.p}>
           {waiting.confirmed === 0n
-            ? `Nothing waiting yet. Add money on the home screen; once ${shortBtc(c.crowdlock.minimum_counted_lock_sats)} is waiting, you can lock it here.`
+            ? `Nothing waiting yet. Add money in My bitcoin; once ${shortBtc(c.crowdlock.minimum_counted_lock_sats)} is waiting, you can lock it here.`
             : `${btc(waiting.confirmed)} waiting. ${btc(minimum - waiting.confirmed)} more and you can lock it.`}
         </Text>
       )}
@@ -979,13 +1454,13 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {lengths.map((y) => (
                 <Pressable key={y} onPress={() => setRenewYears(y)} style={[s.chip, renewYears === y && s.chipOn]}>
-                  <Text style={[s.chipText, renewYears === y && { color: "#fff" }]}>{lengthLabel(y)}</Text>
+                  <Text style={[s.chipText, renewYears === y && s.chipTextOn]}>{lengthLabel(y)}</Text>
                 </Pressable>
               ))}
             </View>
             {waiting && waiting.confirmed > 0n && (
               <Pressable onPress={() => setAddWaiting(!addWaiting)} style={{ flexDirection: "row", alignItems: "center", marginTop: 12 }}>
-                <View style={[s.box, addWaiting && s.boxOn]}>{addWaiting && <Text style={{ color: "#fff", fontWeight: "800" }}>✓</Text>}</View>
+                <View style={[s.box, addWaiting && s.boxOn]}>{addWaiting && <Text style={s.onBrand}>✓</Text>}</View>
                 <Text style={[s.p, { marginBottom: 0, flex: 1 }]}>Add the {btc(waiting.confirmed)} waiting too</Text>
               </Pressable>
             )}
@@ -998,7 +1473,6 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
           </>}
         </View>
       ))}
-      <Button label="Refresh" kind="plain" onPress={() => { setMessage(null); refresh(); }} />
     </View>
   );
 }
@@ -1049,11 +1523,10 @@ function AddCrowdlock({ words, go, link: given }: { words: string; go: Go; link?
     <View>
       <Text style={s.h1}>Add a Crowdlock</Text>
       <Text style={s.p}>Paste the link to a Crowdlock's file. It is checked on this phone, the same way the register page checks it, before it is added.</Text>
-      <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} placeholder="https://…/crowdlocks/name.json" value={link} onChangeText={(t) => { setLink(t); setProblems(null); }} />
+      <Input style={s.input} autoCapitalize="none" autoCorrect={false} placeholder="https://…/crowdlocks/name.json" value={link} onChangeText={(t) => { setLink(t); setProblems(null); }} />
       {problems && <><Text style={s.error}>Refused:</Text>{problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}</>}
       <Button label={busy ? "Checking…" : "Check and add"} disabled={busy || !link} onPress={() => add()} />
       <Text style={s.note}>Someone showing you a Crowdlock's QR code? Point your phone's own camera at it — it opens here by itself.</Text>
-      <Button label="Back" kind="plain" onPress={() => go({ name: "home", words })} />
     </View>
   );
 }
@@ -1207,7 +1680,7 @@ function MaintainerForm({ owner, repo }: { owner: string; repo: string }) {
   };
   return <>
     <Text style={s.label}>Their GitHub username</Text>
-    <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={name} onChangeText={setName} placeholder="e.g. janesmith" />
+    <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={name} onChangeText={setName} placeholder="e.g. janesmith" />
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
     <Button label={busy ? "Adding…" : "Add a maintainer"} disabled={busy || !name.trim()} onPress={add} />
@@ -1245,7 +1718,7 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
         // but the website hasn't caught up yet, so it's expected, not seen.
         await saveExpectedKeys(c.url, [...(await loadExpectedKeys(c.url)), k]).catch(() => {});
         setKey("");
-        setMsg({ ok: true, text: has ? "Added its xpub. Its website updates in a minute or two." : "Added. Its website updates in a minute or two — then tap Refresh and new locks will use it." });
+        setMsg({ ok: true, text: has ? "Added its xpub. Its website updates in a minute or two." : "Added. Its website updates in a minute or two — then pull down to check again and new locks will use it." });
         setTimeout(onChange, 90000);
       });
     } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
@@ -1259,8 +1732,8 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
           <Text style={[s.note, { flex: 1 }]}>{x.slice(0, 10)}…{x.slice(-8)}{i === keys.length - 1 ? "  · new locks use this one" : "  · kept for locks already made"}{xpubForKey(c.crowdlock, x) ? "  · hardware wallets can lock" : ""}</Text>
           <Button label="Copy" kind="plain" onPress={() => Clipboard.setStringAsync(x)} />
         </View>))}
-    <Text style={s.note}>Adding a key never removes one, so every lock already made keeps counting. Don't have one? Make it from Home → "Make a co-signer key", ideally on a phone that holds no money{c.crowdlock.network === "mainnet" ? ", and keep its words on paper only" : ""}.</Text>
-    <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={key} onChangeText={(t) => { setKey(t); setMsg(null); }} placeholder="Paste its xpub, or its key: 02… or 03…" />
+    <Text style={s.note}>Adding a key never removes one, so every lock already made keeps counting. Don't have one? Make it from More → "For founders and co-signers", ideally on a phone that holds no money{c.crowdlock.network === "mainnet" ? ", and keep its words on paper only" : ""}.</Text>
+    <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={key} onChangeText={(t) => { setKey(t); setMsg(null); }} placeholder="Paste its xpub, or its key: 02… or 03…" />
     {!!pastedXpub && <Text style={s.note}>That xpub stands for {k.slice(0, 10)}…{k.slice(-8)}.{has ? " This Crowdlock already has that key, so only the xpub will be added." : ""}</Text>}
     {keys.length > 0 && keys.some((x) => !xpubForKey(c.crowdlock, x)) && <Text style={s.note}>Members with a hardware wallet can only lock with a key whose xpub is published. To add one for a key already here, paste its xpub.</Text>}
     {problem && <Text style={s.error}>{problem}</Text>}
@@ -1440,7 +1913,7 @@ function Proposals({ c, account, member }: { c: Extract<Loaded, { ok: true }>; a
       {list.slice().reverse().map((p) => (
         <View key={p.hash} style={s.card}>
           <Pressable onPress={() => setOpen(open === p.hash ? null : p.hash)}>
-            <Text style={[s.p, { fontWeight: "700" }]}>{p.title}</Text>
+            <Text style={[s.p, s.bold]}>{p.title}</Text>
             <ProposalStatus c={c} p={p} account={account} />
             <Text style={s.link}>{open === p.hash ? "Hide" : "Read it and see who's committed →"}</Text>
           </Pressable>
@@ -1492,7 +1965,6 @@ function ProposalDetail({ c, p, account, member }: { c: Extract<Loaded, { ok: tr
         {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
         {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
       </>}
-      <Button label="Refresh" kind="plain" onPress={refresh} />
       {member && phase === "gathering" && <CommitForm c={c} p={p} account={account} onDone={() => setTimeout(refresh, 3000)} />}
       {member && phase === "soon" && <Text style={s.note}>You can commit once it opens.</Text>}
       {pile && (phase === "gathering" || phase === "settling") && <CoSign c={c} p={p} pile={pile} onDone={() => setTimeout(refresh, 3000)} />}
@@ -1556,7 +2028,7 @@ function CommitForm({ c, p, account, onDone }: { c: Extract<Loaded, { ok: true }
           <Text style={i === pick ? s.good : s.note}>{i === pick ? "● " : "○ "}{btc(BigInt(x.coin.value))}, locked until {new Date(x.lock.locktime * 1000).toISOString().slice(0, 10)}</Text>
         </Pressable>
       ))}
-      <TextInput style={s.input} keyboardType="decimal-pad" value={amount} onChangeText={(t) => { setAmount(t); setMsg(null); }} placeholder="Amount in BTC — leave empty for all of it" />
+      <Input style={s.input} keyboardType="decimal-pad" value={amount} onChangeText={(t) => { setAmount(t); setMsg(null); }} placeholder="Amount in BTC — leave empty for all of it" />
       {problem && <Text style={s.error}>{problem}</Text>}
       <FeeChoice />
       <LedgerHint account={account} />
@@ -1683,7 +2155,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
           token, owner, repo, path,
           makeEntry: (file: any) => nextDestination(file, { address, text }),
           attest: async (entry: any) => {
-            setStep(account.kind === "ledger" ? "Waiting for your Ledger — unlock it, open Bitcoin Test, and approve the message it shows." : "Signing…");
+            setStep(account.kind === "ledger" ? `Waiting for your Ledger — unlock it, open ${ledgerAppFor(NETWORK)}, and approve the message it shows.` : "Signing…");
             const signature = await signStatementWith(account, attestationStatement(entry));
             setStep("Saving it to the Crowdlock on GitHub…");
             return { address: account.address, signature };
@@ -1707,8 +2179,8 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     {(d.entries ?? []).length === 0 ? <Text style={s.note}>None yet. A proposal can only pay an address on this list, attested by this Crowdlock's attestors.</Text>
       : d.entries.map((e: any) => <Text key={e.index} style={s.note}>{e.index}. {e.op === "revoke" ? "Revoked: " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}, public since {String(e.firstSeen ?? "?").slice(0, 10)}</Text>)}
     {!isAttestor ? <Text style={s.note}>This wallet isn't one of its attestors, so it can't approve a destination.</Text> : <>
-      <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={address} onChangeText={(t) => { setAddress(t); setMsg(null); }} placeholder="The address a purchase would pay" />
-      <TextInput style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
+      <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={address} onChangeText={(t) => { setAddress(t); setMsg(null); }} placeholder="The address a purchase would pay" />
+      <Input style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
       <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature.</Text>
       {codeView}
       {busy && !!step && <Text style={s.note}>{step}</Text>}
@@ -1779,7 +2251,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
               check: ({ crowdlock, file }: any) => checkProposals(file, crowdlock),
             });
             setTitle(""); setText(""); setPrice(""); setTarget("");
-            setMsg({ ok: true, text: "Published. Its website updates in a minute or two — then tap Refresh on the Crowdlock and it appears under Proposals." });
+            setMsg({ ok: true, text: "Published. Its website updates in a minute or two — then pull down on the Crowdlock to check again and it appears under Proposals." });
             setTimeout(onChange, 90000);
           });
         } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
@@ -1789,19 +2261,19 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   return <>
     <Text style={s.label}>Write a proposal</Text>
     {usable.length === 0 ? <Text style={s.note}>No destination is ready yet. Add and attest one above{c.crowdlock.destination_wait_days ? `, then wait ${c.crowdlock.destination_wait_days} days` : ""}.</Text> : <>
-      <TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="Title" />
-      <TextInput style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline value={text} onChangeText={setText} placeholder="What is being bought, from whom, and why" />
+      <Input style={s.input} value={title} onChangeText={setTitle} placeholder="Title" />
+      <Input style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline value={text} onChangeText={setText} placeholder="What is being bought, from whom, and why" />
       <Text style={s.label}>Pays (tap one)</Text>
       {usable.map((e: any) => <Pressable key={e.index} onPress={() => setDest(e.address)} style={[s.btn, dest !== e.address && s.btnPlain, { alignItems: "flex-start" }]}><Text style={[s.btnText, dest !== e.address && s.btnTextPlain, { fontSize: 15 }]}>{dest === e.address ? "✓ " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}</Text></Pressable>)}
       <View style={{ flexDirection: "row", gap: 8 }}>
-        <TextInput style={[s.input, { flex: 2 }]} keyboardType="decimal-pad" value={price} onChangeText={setPrice} placeholder="Price" />
-        <TextInput style={[s.input, { flex: 1 }]} autoCapitalize="characters" value={currency} onChangeText={(t) => setCurrency(t.toUpperCase())} placeholder="Currency" maxLength={3} />
+        <Input style={[s.input, { flex: 2 }]} keyboardType="decimal-pad" value={price} onChangeText={setPrice} placeholder="Price" />
+        <Input style={[s.input, { flex: 1 }]} autoCapitalize="characters" value={currency} onChangeText={(t) => setCurrency(t.toUpperCase())} placeholder="Currency" maxLength={3} />
       </View>
-      <TextInput style={s.input} keyboardType="decimal-pad" value={target} onChangeText={setTarget} placeholder="Target in BTC (the price in bitcoin today)" />
+      <Input style={s.input} keyboardType="decimal-pad" value={target} onChangeText={setTarget} placeholder="Target in BTC (the price in bitcoin today)" />
       <Text style={s.note}>Gathers for (days, at most {c.crowdlock.gathering_window_max_days}) and settles for (days, at most {c.crowdlock.settlement_window_max_days}):</Text>
       <View style={{ flexDirection: "row", gap: 8 }}>
-        <TextInput style={[s.input, { flex: 1 }]} keyboardType="number-pad" value={days} onChangeText={setDays} />
-        <TextInput style={[s.input, { flex: 1 }]} keyboardType="number-pad" value={settle} onChangeText={setSettle} />
+        <Input style={[s.input, { flex: 1 }]} keyboardType="number-pad" value={days} onChangeText={setDays} />
+        <Input style={[s.input, { flex: 1 }]} keyboardType="number-pad" value={settle} onChangeText={setSettle} />
       </View>
       {problem ? <Text style={s.note}>{problem}</Text> : <Text style={s.note}>Opens now, closes {preview.closes.slice(0, 10)}, settles by {preview.settles_by.slice(0, 10)}. Fingerprint {preview.hash.slice(0, 12)}…</Text>}
       {codeView}
@@ -1827,6 +2299,8 @@ function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
   const [mine, setMine] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Asking the relays…");
+  const [tick, setTick] = useState(0);
+  useRefresh(() => setTick((n) => n + 1));
 
   useEffect(() => {
     let live = true;
@@ -1846,7 +2320,7 @@ function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
       if (live) { setFound(rankFound(results)); setStatus(""); }
     })().catch(() => { if (live) { setFound([]); setStatus("Couldn't reach the relays — check your connection, or turn off any VPN."); } });
     return () => { live = false; };
-  }, []);
+  }, [tick]);
 
   const open = async (url: string) => {
     const added = await loadAddedCrowdlocks();
@@ -1859,7 +2333,7 @@ function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
     <View>
       <Text style={s.h1}>Find Crowdlocks</Text>
       <Text style={s.p}>Crowdlocks that have announced themselves, ranked by the bitcoin actually locked in them. Anyone can announce one; nobody can fake the money, and anything that fails its checks isn't shown.</Text>
-      <TextInput style={s.input} placeholder="Search by name or purpose" value={query} onChangeText={setQuery} autoCorrect={false} />
+      <Input style={s.input} placeholder="Search by name or purpose" value={query} onChangeText={setQuery} autoCorrect={false} />
       {status ? <Text style={s.note}>{status}</Text> : null}
       {found === null && <ActivityIndicator style={{ marginVertical: 16 }} />}
       {found !== null && shown.length === 0 && !status && <Text style={s.note}>{query ? "Nothing matches that." : "None found yet."}</Text>}
@@ -1871,7 +2345,6 @@ function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
           <Text style={mine.includes(f.url) ? s.good : s.link}>{mine.includes(f.url) ? "In your list" : "Have a look →"}</Text>
         </Pressable>
       ))}
-      <Button label="Back" kind="plain" onPress={() => go({ name: "home", words })} />
     </View>
   );
 }
@@ -2008,48 +2481,48 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
         {([["testnet4", "Test bitcoin only"], ["mainnet", "Real bitcoin, with a test copy"]] as const).map(([k, label]) => (
           <Pressable key={k} onPress={() => { setNetwork(k); setChecked(null); }} style={[s.chip, network === k && s.chipOn]}>
-            <Text style={[s.chipText, network === k && { color: "#fff" }]}>{label}</Text>
+            <Text style={[s.chipText, network === k && s.chipTextOn]}>{label}</Text>
           </Pressable>
         ))}
       </View>
 
       <Text style={s.label}>Name</Text>
-      <TextInput style={s.input} value={name} onChangeText={(t) => { setName(t); setChecked(null); }} placeholder="The Pub Fund" />
+      <Input style={s.input} value={name} onChangeText={(t) => { setName(t); setChecked(null); }} placeholder="The Pub Fund" />
       <Text style={s.label}>What it's for, in one sentence</Text>
-      <TextInput style={s.input} value={about} onChangeText={(t) => { setAbout(t); setChecked(null); }} placeholder="Regulars buying the Red Lion so it stays a pub for good." />
+      <Input style={s.input} value={about} onChangeText={(t) => { setAbout(t); setChecked(null); }} placeholder="Regulars buying the Red Lion so it stays a pub for good." />
       <Text style={s.label}>The declaration's title</Text>
-      <TextInput style={s.input} value={title} autoCapitalize="characters" onChangeText={(t) => {
+      <Input style={s.input} value={title} autoCapitalize="characters" onChangeText={(t) => {
         // Keep the declaration's first line in step with its title while it still matches.
         setText((old) => old.startsWith(title.toUpperCase() + "\n") ? t.toUpperCase() + old.slice(title.length) : old);
         setTitle(t); setChecked(null);
       }} />
       <Text style={s.label}>The declaration — what people sign</Text>
       <Text style={s.note}>Replace the bracketed part with what you're raising money for. Keep the no-returns line exactly as it is: it's the one rule every Crowdlock shares. Once anyone signs, these words can never change.</Text>
-      <TextInput style={[s.input, { minHeight: 240, textAlignVertical: "top" }]} multiline value={text} onChangeText={(t) => { setText(t); setChecked(null); }} />
+      <Input style={[s.input, { minHeight: 240, textAlignVertical: "top" }]} multiline value={text} onChangeText={(t) => { setText(t); setChecked(null); }} />
 
       {network === "mainnet" ? <>
         <Text style={s.label}>Minimum lock that counts, in BTC</Text>
-        <TextInput style={s.input} keyboardType="decimal-pad" value={minimum} onChangeText={(t) => { setMinimum(t); setChecked(null); }} />
+        <Input style={s.input} keyboardType="decimal-pad" value={minimum} onChangeText={(t) => { setMinimum(t); setChecked(null); }} />
         <Text style={s.label}>Days a new destination must be public before a proposal can use it</Text>
-        <TextInput style={s.input} keyboardType="number-pad" value={waitDays} onChangeText={(t) => { setWaitDays(t); setChecked(null); }} />
+        <Input style={s.input} keyboardType="number-pad" value={waitDays} onChangeText={(t) => { setWaitDays(t); setChecked(null); }} />
         <Text style={s.note}>We recommend at least 7, The Kop Fund's choice. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
         <Text style={s.label}>Co-signer's public key</Text>
-        <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={cosigner} onChangeText={(t) => { setCosigner(t); setChecked(null); }} placeholder="Its xpub, or its key: 02… or 03…" />
-        <Text style={s.note}>The co-signer can't take or keep anyone's money — only refuse to complete a purchase. Make this key with "Make a co-signer key" on Home (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here — or its plain key, though then hardware wallets can't lock until the xpub is added.</Text>
+        <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={cosigner} onChangeText={(t) => { setCosigner(t); setChecked(null); }} placeholder="Its xpub, or its key: 02… or 03…" />
+        <Text style={s.note}>The co-signer can't take or keep anyone's money — only refuse to complete a purchase. Make this key with "Make a co-signer key" under More (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here — or its plain key, though then hardware wallets can't lock until the xpub is added.</Text>
         {!!cosigner.trim() && !isPublicKey(cosigner) && !keyFromXpub(cosigner) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
         {!!keyFromXpub(cosigner) && <Text style={s.note}>That xpub stands for {keyFromXpub(cosigner)!.slice(0, 10)}…, and is published beside it so hardware wallets can lock.</Text>}
       </> : <Text style={s.note}>Test bitcoin has no value: practise everything — joining, locking, taking a lock home — before anything is real.</Text>}
 
       <Text style={s.label}>Longest a proposal may gather commitments, in days</Text>
-      <TextInput style={s.input} keyboardType="number-pad" value={gatherDays} onChangeText={(t) => { setGatherDays(t); setChecked(null); }} />
+      <Input style={s.input} keyboardType="number-pad" value={gatherDays} onChangeText={(t) => { setGatherDays(t); setChecked(null); }} />
       <Text style={s.note}>We recommend 28, The Kop Fund's choice: long enough to reach supporters who only look now and then. Each proposal picks its own length up to this, and gathering ends as soon as the target is met. A small group with a short deadline can use less.</Text>
       <Text style={s.label}>Longest settling may take after that, in days</Text>
-      <TextInput style={s.input} keyboardType="number-pad" value={settleDays} onChangeText={(t) => { setSettleDays(t); setChecked(null); }} />
+      <Input style={s.input} keyboardType="number-pad" value={settleDays} onChangeText={(t) => { setSettleDays(t); setChecked(null); }} />
       <Text style={s.note}>We recommend 14: room for the co-signer to complete and send everything at a sensible pace. A small Crowdlock can settle in hours. Members are bound to a proposal for at most these two together.</Text>
 
       <Text style={s.label}>{network === "mainnet" ? "The test copy's co-signer key" : "Co-signer key"}</Text>
-      <Text style={s.note}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so paste a practice co-signer key (made with \"Make a co-signer key\") — its xpub, ideally:" : `Made on this phone from your backup words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Or paste a practice key you made instead:`}</Text>
-      <TextInput style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder="Optional: an xpub, or a key 02… or 03…" />
+      <Text style={s.note}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so paste a practice co-signer key (made with \"Make a co-signer key\") — its xpub, ideally:" : `Made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Or paste a practice key you made instead:`}</Text>
+      <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder="Optional: an xpub, or a key 02… or 03…" />
       {!!testPasted.trim() && !isPublicKey(testPasted) && !keyFromXpub(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
       <Text style={s.note}>You can add more co-signer keys later, under "Look after this Crowdlock".</Text>
 
@@ -2061,7 +2534,6 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         {checked.fingerprints.map((f: any) => <Text key={f.slug} style={s.note}>{f.network === "mainnet" ? "Real" : "Test copy"} · fingerprint {f.sha256.slice(0, 12)}…</Text>)}
         <Button label="Sign in to GitHub and create it" onPress={create} />
       </View>}
-      <Button label="Back" kind="plain" onPress={() => go({ name: "home", words })} />
     </View>
   );
 }
@@ -2106,48 +2578,60 @@ function FeeChoice() {
 function Button({ label, onPress, kind = "main", disabled }: { label: string; onPress: () => void; kind?: "main" | "plain" | "danger"; disabled?: boolean }) {
   return (
     <Pressable
+      accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled }}
       onPress={disabled ? undefined : onPress}
       style={({ pressed }) => [s.btn, kind === "plain" && s.btnPlain, kind === "danger" && s.btnDanger, (pressed || disabled) && { opacity: 0.5 }]}
     >
-      <Text style={[s.btnText, kind !== "main" && s.btnTextPlain, kind === "danger" && { color: "#a00" }]}>{label}</Text>
+      <Text style={[s.btnText, kind !== "main" && s.btnTextPlain, kind === "danger" && s.btnTextDanger]}>{label}</Text>
     </Pressable>
   );
 }
 
-const RED = "#C8102E";
-const s = StyleSheet.create({
-  page: { flex: 1, backgroundColor: "#fff" },
-  bannerReal: { backgroundColor: "#c8102e", color: "#fff", textAlign: "center", paddingVertical: 6, fontWeight: "700", fontSize: 12 },
-  banner: { backgroundColor: "#ffd84d", color: "#222", textAlign: "center", paddingVertical: 6, fontWeight: "700", fontSize: 12 },
-  body: { padding: 20, paddingBottom: 60 },
-  h1: { fontSize: 26, fontWeight: "800", marginTop: 12, marginBottom: 12, color: "#111" },
-  h2: { fontSize: 20, fontWeight: "700", marginTop: 28, marginBottom: 8, color: "#111" },
-  p: { fontSize: 16, lineHeight: 23, color: "#222", marginBottom: 10 },
-  note: { fontSize: 14, lineHeight: 20, color: "#666", marginVertical: 8 },
-  good: { fontSize: 14, color: "#18794e", marginVertical: 8 },
-  error: { fontSize: 15, color: "#a00", marginVertical: 8 },
-  big: { fontSize: 32, fontWeight: "800", color: "#111", marginBottom: 4 },
-  bold: { fontWeight: "700" },
-  label: { fontSize: 14, fontWeight: "600", color: "#333", marginTop: 12, marginBottom: 4 },
-  input: { borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 12, fontSize: 16, color: "#111" },
-  mono: { fontFamily: "monospace", fontSize: 14, color: "#111", marginVertical: 8 },
-  words: { flexDirection: "row", flexWrap: "wrap", marginVertical: 12 },
-  word: { width: "50%", fontSize: 18, paddingVertical: 6, color: "#111" },
-  wordNum: { color: "#888" },
-  qr: { alignItems: "center", padding: 16, backgroundColor: "#fff" },
-  panel: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 14, marginTop: 14 },
-  btn: { backgroundColor: RED, borderRadius: 10, paddingVertical: 14, alignItems: "center", marginTop: 14 },
-  btnPlain: { backgroundColor: "transparent", borderWidth: 1, borderColor: "#ccc" },
-  btnDanger: { backgroundColor: "transparent", marginTop: 40 },
-  btnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  btnTextPlain: { color: "#111" },
-  card: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 14, marginTop: 10 },
-  cardTitle: { fontSize: 17, fontWeight: "700", color: "#111" },
-  link: { fontSize: 15, color: RED, fontWeight: "600", marginTop: 4 },
-  declaration: { fontSize: 15, lineHeight: 22, color: "#222", marginVertical: 8 },
-  box: { width: 24, height: 24, borderWidth: 2, borderColor: "#999", borderRadius: 4, marginRight: 10, alignItems: "center", justifyContent: "center" },
-  boxOn: { backgroundColor: RED, borderColor: RED },
-  chip: { borderWidth: 1, borderColor: "#ccc", borderRadius: 18, paddingVertical: 8, paddingHorizontal: 14 },
-  chipOn: { backgroundColor: RED, borderColor: RED },
-  chipText: { fontSize: 15, color: "#111", fontWeight: "600" },
-});
+// The older screens' styles, drawn from the one theme (src/ui/theme.ts) so
+// they follow the phone's light or dark setting with everything else. Screens
+// move over to the shared parts in src/ui/parts.tsx as each is rebuilt.
+function makeStyles(t: Theme) {
+  return StyleSheet.create({
+    page: { flex: 1, backgroundColor: t.page },
+    bannerReal: { backgroundColor: banner.real.bg, color: banner.real.text, textAlign: "center", paddingVertical: 6, fontFamily: font.bold, fontSize: 12 },
+    banner: { backgroundColor: banner.test.bg, color: banner.test.text, textAlign: "center", paddingVertical: 6, fontFamily: font.bold, fontSize: 12 },
+    body: { paddingHorizontal: 20, paddingTop: gap.s, paddingBottom: 60 },
+    h1: { fontSize: size.h1, lineHeight: 32, fontFamily: font.bold, marginTop: 12, marginBottom: 12, color: t.ink },
+    h2: { fontSize: size.h2, lineHeight: 26, fontFamily: font.bold, marginTop: 28, marginBottom: 8, color: t.ink },
+    p: { fontSize: size.body, lineHeight: 23, fontFamily: font.regular, color: t.ink, marginBottom: 10 },
+    note: { fontSize: size.small, lineHeight: 20, fontFamily: font.regular, color: t.soft, marginVertical: 8 },
+    good: { fontSize: size.small, lineHeight: 20, fontFamily: font.bold, color: t.good, marginVertical: 8 },
+    error: { fontSize: 15, lineHeight: 21, fontFamily: font.bold, color: t.stop, marginVertical: 8 },
+    big: { fontSize: size.big, lineHeight: 40, fontFamily: font.bold, color: t.ink, marginBottom: 4 },
+    bold: { fontFamily: font.bold },
+    kick: { fontSize: size.small, fontFamily: font.bold, color: t.soft },
+    label: { fontSize: size.small, fontFamily: font.bold, color: t.ink, marginTop: 12, marginBottom: 4 },
+    input: { borderWidth: 1, borderColor: t.soft, borderRadius: radius, padding: 12, minHeight: 48, fontSize: size.body, fontFamily: font.regular, color: t.ink, backgroundColor: t.page },
+    mono: { fontFamily: font.mono, fontSize: 14, color: t.ink, marginVertical: 8 },
+    words: { flexDirection: "row", flexWrap: "wrap", marginVertical: 12 },
+    word: { width: "50%", fontSize: 18, paddingVertical: 6, fontFamily: font.regular, color: t.ink },
+    wordNum: { color: t.soft },
+    // A code to scan stays dark on white in both modes, so any camera can read it.
+    qr: { alignSelf: "center", padding: 16, backgroundColor: "#FFFFFF", borderRadius: radius, marginVertical: 8 },
+    panel: { borderWidth: 1, borderColor: t.rule, backgroundColor: t.panel, borderRadius: radius, padding: 14, marginTop: 14 },
+    btn: { backgroundColor: t.brand, borderRadius: radius, paddingVertical: 12, paddingHorizontal: 12, minHeight: 54, alignItems: "center", justifyContent: "center", marginTop: 14 },
+    btnPlain: { backgroundColor: "transparent", borderWidth: 1, borderColor: t.soft, minHeight: 48 },
+    btnDanger: { backgroundColor: "transparent", marginTop: 40, minHeight: 48 },
+    btnText: { color: t.onBrand, fontSize: size.body, fontFamily: font.bold, textAlign: "center" },
+    btnTextPlain: { color: t.ink },
+    btnTextDanger: { color: t.stop },
+    onBrand: { color: t.onBrand, fontFamily: font.bold },
+    card: { borderWidth: 1, borderColor: t.rule, borderRadius: radius, padding: 14, marginTop: 10 },
+    cardTitle: { fontSize: 17, fontFamily: font.bold, color: t.ink },
+    link: { fontSize: 15, color: t.brand, fontFamily: font.bold, marginTop: 4, textDecorationLine: "underline" },
+    declaration: { fontSize: 15, lineHeight: 22, fontFamily: font.regular, color: t.ink, marginVertical: 8 },
+    box: { width: 24, height: 24, borderWidth: 2, borderColor: t.soft, borderRadius: 4, marginRight: 10, alignItems: "center", justifyContent: "center" },
+    boxOn: { backgroundColor: t.brand, borderColor: t.brand },
+    chip: { borderWidth: 1, borderColor: t.soft, borderRadius: radius, paddingVertical: 8, paddingHorizontal: 14, minHeight: 48, justifyContent: "center" },
+    chipOn: { backgroundColor: t.ink, borderColor: t.ink },
+    chipText: { fontSize: 15, color: t.ink, fontFamily: font.bold },
+    chipTextOn: { color: t.page },
+  });
+}
+
+let s = makeStyles(themeFor(null));
