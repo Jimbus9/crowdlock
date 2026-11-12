@@ -50,6 +50,56 @@ line("EVERY ANCHOR IN THIS REPOSITORY IS A REAL ONE");
 rule();
 line();
 
+// --- verify.mjs: which proofs count as finished ------------------------------
+//
+// A finished proof keeps the calendars' pending branches beside the ones that
+// reach a Bitcoin block. verify.mjs once called any proof with a pending
+// branch unfinished. These build tiny proofs in a temp folder and run
+// verify.mjs on them. Only the pending-only case can reach for the network
+// (to ask the calendars), so it is given a short timeout and judged on what
+// it prints before that.
+
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+
+const verifyScript = join(dirname(fileURLToPath(import.meta.url)), "verify.mjs");
+const PENDING = "https://alice.btc.calendar.opentimestamps.org";
+
+function runVerify(branches) {
+  const dir = mkdtempSync(join(tmpdir(), "anchor-test-"));
+  try {
+    const file = join(dir, "thing.txt");
+    writeFileSync(file, "a file to anchor\n");
+    const digest = createHash("sha256").update(readFileSync(file)).digest();
+    const proof = OTS.DetachedTimestampFile.fromHash(new OTS.Ops.OpSHA256(), digest);
+    for (const b of branches) {
+      proof.timestamp.attestations.push(b === "block"
+        ? new OTS.Notary.BitcoinBlockHeaderAttestation(974596)
+        : new OTS.Notary.PendingAttestation(PENDING));
+    }
+    writeFileSync(`${file}.ots`, Buffer.from(proof.serializeToBytes()));
+    const r = spawnSync(process.execPath, [verifyScript, file], { encoding: "utf8", timeout: 20000 });
+    return { out: r.stdout ?? "", status: r.status };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+{
+  const pendingOnly = runVerify(["pending"]);
+  check("verify.mjs: a proof with only pending branches is unfinished",
+    pendingOnly.out.includes("Not in a block yet") && !pendingOnly.out.includes("FINISHED"));
+
+  const blockOnly = runVerify(["block"]);
+  check("verify.mjs: a proof that reaches a block is finished",
+    blockOnly.status === 0 && blockOnly.out.includes("FINISHED"));
+
+  const both = runVerify(["pending", "block"]);
+  check("verify.mjs: a proof with pending branches and a block is finished",
+    both.status === 0 && both.out.includes("FINISHED"));
+}
+
 const all = proofs();
 
 if (all.length === 0) {
