@@ -17,6 +17,22 @@
         "rate": "1 BTC = 100000.00 GBP",
         "at": "2026-11-11T16:58:26Z"
       }
+    },
+    {
+      "title": "Failure test",
+      "text": "To test what happens when a funding goal isn't reached",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-12T20:10:48Z",
+      "closes": "2026-11-13T20:10:48Z",
+      "settles_by": "2026-11-14T20:10:48Z",
+      "hash": "d819ca561592d5133c75e6d4c4d0f83567b7e4ccf317af81d281c4d726d5c292",
+      "target": {
+        "sats": 100000000,
+        "rate": "1 BTC = 10.00 GBP",
+        "at": "2026-11-12T20:10:48Z"
+      }
     }
   ]
 }
