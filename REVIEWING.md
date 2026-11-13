@@ -48,7 +48,7 @@ Install dependencies in each folder first, with `npm ci`. Run from the folder sh
 Notes:
 - Use `--ignore-scripts` for `app/` and `app/test-chain`. The private chain's native database module cannot build in some sandboxes; the test uses a stub instead.
 - The app suite runs bcoin, a full node, on a private regtest chain. It does not touch any public network.
-- The live testnet run uses mempool.space by default. Set `FANFUND_API` to use another explorer.
+- The live testnet run uses mempool.space by default. Set `CROWDLOCK_API` to use another explorer.
 
 ## What is proven, and what is not
 
@@ -75,7 +75,7 @@ Please **do not open a public issue** for anything that could move money or reve
 
 Send it privately to: **[PRIVATE CONTACT TO BE ADDED BY THE REPOSITORY OWNER]**
 
-If GitHub's private security advisory feature is enabled on `Jimbus9/fanfund`, that is also fine.
+If GitHub's private security advisory feature is enabled on `Jimbus9/crowdlock`, that is also fine.
 
 For anything else (a bug in a test, a wrong comment, a documentation gap), an ordinary issue on the repository is welcome.
 

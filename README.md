@@ -55,7 +55,7 @@ The code moved under `method/` so the layers are visible from the top.
 
 | Old path | New path | Public URL changed? |
 | --- | --- | --- |
-| `js/` | `method/js/` | Yes: `.../fanfund/js/...` is now `.../fanfund/method/js/...` |
+| `js/` | `method/js/` | Yes: `.../crowdlock/js/...` is now `.../crowdlock/method/js/...` |
 | `lock/` | `method/lock/` | Yes (and still not published by Pages) |
 | `cosigner/` | `method/cosigner/` | Yes |
 | `anchor/` | `method/anchor/` | Yes |

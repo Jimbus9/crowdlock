@@ -83,7 +83,7 @@ back. Those are testnet keys and worthless.
 If the default API is down:
 
 ```
-FANFUND_API=https://blockstream.info/testnet/api node run-testnet.mjs
+CROWDLOCK_API=https://blockstream.info/testnet/api node run-testnet.mjs
 ```
 
 ## What you should see

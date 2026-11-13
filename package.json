@@ -1,5 +1,5 @@
 {
-  "name": "fanfund",
+  "name": "crowdlock",
   "private": true,
   "type": "module",
   "description": "The Crowdlock method, and The Kop Fund's instance of it: declaration, register and lock",

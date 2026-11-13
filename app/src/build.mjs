@@ -7,8 +7,8 @@
 /** The Crowdlocks this build starts with. Anything else, the fan adds. */
 export const STARTING_LIST = [
   "https://jimbus9.github.io/the-kop-fund/crowdlocks/kop-fund.json",
-  "https://jimbus9.github.io/fanfund/crowdlocks/kop-fund-testnet4.json",
+  "https://jimbus9.github.io/crowdlock/crowdlocks/kop-fund-testnet4.json",
 ];
 
 /** Where the app links the counting rule: the method's published spec. */
-export const COUNTING_RULE_URL = "https://github.com/Jimbus9/fanfund/blob/main/spec/counting-rule.md#the-minimum";
+export const COUNTING_RULE_URL = "https://github.com/Jimbus9/crowdlock/blob/main/spec/counting-rule.md#the-minimum";

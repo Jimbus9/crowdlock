@@ -14,7 +14,7 @@ import { join, dirname } from "node:path";
 import { loadCrowdlock, baseFor, membershipOf, committedTotal, submitJoin, STARTING_LIST, shortBtc, poundsPerBtc, COUNTING_RULE_URL, submitLock, locksOnRegister, openLinkFor, fileUrlFromOpenLink, shareLinkFor, rankFound, matchesSearch } from "../src/crowdlocks.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SITE = "https://jimbus9.github.io/fanfund/";
+const SITE = "https://jimbus9.github.io/crowdlock/";
 // The Kop Fund has its own site; the tests serve its frozen copy (method/fixtures/the-kop-fund).
 const KOP_SITE = "https://jimbus9.github.io/the-kop-fund/";
 const KOP_FIX = join(REPO, "method/fixtures/the-kop-fund");
@@ -82,7 +82,7 @@ swappedReg.declaration.sha256 = "0".repeat(64);
 await refuses("A register that names a different declaration",
   loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, siteFetch({ "crowdlocks/test/registrations.json": JSON.stringify(swappedReg) })),
   "");
-await refuses("A link that is not https", loadCrowdlock("http://jimbus9.github.io/fanfund/crowdlocks/kop-fund.json", siteFetch()), "https");
+await refuses("A link that is not https", loadCrowdlock("http://jimbus9.github.io/crowdlock/crowdlocks/kop-fund.json", siteFetch()), "https");
 await refuses("Something that is not a link", loadCrowdlock("the kop fund please", siteFetch()), "not a link");
 await refuses("A link to nothing, said plainly", loadCrowdlock(`${SITE}crowdlocks/nonesuch.json`, siteFetch()), "no Crowdlock file at that link");
 

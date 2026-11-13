@@ -23,7 +23,7 @@ import {
   ECPair, lockAddress, buildSpend, describeLocktime, networkFor,
 } from "./lock.mjs";
 
-const API = process.env.FANFUND_API || "https://mempool.space/testnet4/api";
+const API = process.env.CROWDLOCK_API || "https://mempool.space/testnet4/api";
 const NETWORK = networkFor("testnet");
 // fileURLToPath, not .pathname: on Windows .pathname yields "/C:/Users/..."
 // and the leading slash makes Node resolve it against the current drive,
@@ -58,7 +58,7 @@ async function tipHeight() {
     line("This needs internet access to a Bitcoin testnet API. Check you are online,");
     line("or point it somewhere else:");
     line();
-    line("  FANFUND_API=https://blockstream.info/testnet/api node run-testnet.mjs");
+    line("  CROWDLOCK_API=https://blockstream.info/testnet/api node run-testnet.mjs");
     line();
     process.exit(2);
   }
