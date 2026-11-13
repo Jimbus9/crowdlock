@@ -142,6 +142,17 @@ function CheckedLine() {
 }
 
 /** A text box in the app's colours (the hint text stays readable in the dark). */
+// Settings for any box backup words are typed into. Without them the phone's
+// keyboard predicts and learns the words, and may keep them in its own
+// dictionary or send them to its maker for "better suggestions". A
+// visible-password box is one Android keyboards don't predict in or learn
+// from; the app's own word chips (from the standard word list, on the phone)
+// do the suggesting instead. Pasting still works.
+const SECRET_WORDS: Partial<TextInputProps> = {
+  autoCapitalize: "none", autoCorrect: false, spellCheck: false, autoComplete: "off",
+  importantForAutofill: "no", keyboardType: "visible-password", textContentType: "none",
+};
+
 function Input(props: TextInputProps) {
   const t = useTheme();
   return <TextInput placeholderTextColor={t.soft} {...props} />;
@@ -463,7 +474,7 @@ function CheckEveryWord({ words, onDone, onShowAgain }: { words: string; onDone:
       <Text style={s.p}>Type each word from what you wrote down. Every word is checked — one wrong word and the paper wouldn't bring your money back.</Text>
       <Text style={s.label}>Word {i + 1} of {list.length}</Text>
       <Input
-        style={s.input} autoCapitalize="none" autoCorrect={false} autoFocus value={typed}
+        style={s.input} {...SECRET_WORDS} autoFocus value={typed}
         onChangeText={(t) => { setTyped(t); setWrong(false); }} onSubmitEditing={() => accept(typed)} returnKeyType="next"
       />
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
@@ -500,7 +511,7 @@ function WordsInput({ value, onChange, placeholder }: { value: string; onChange:
   return <>
     <Input
       style={[s.input, { minHeight: 100, textAlignVertical: "top" }]} multiline
-      autoCapitalize="none" autoCorrect={false} value={value} onChangeText={onChange} placeholder={placeholder}
+      {...SECRET_WORDS} value={value} onChangeText={onChange} placeholder={placeholder}
     />
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
       {suggestions.map((w: string) => (
