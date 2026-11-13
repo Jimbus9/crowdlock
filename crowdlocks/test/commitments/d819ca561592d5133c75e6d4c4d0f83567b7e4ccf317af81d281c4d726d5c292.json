@@ -20,5 +20,11 @@
         }
       }
     }
-  ]
+  ],
+  "notice": {
+    "address": "tb1qjvct72tkn2rtc4dq6a8hzsx73aku3dzeks5k98",
+    "signature": "J5l9MmNXJUyJCjpP/5KkVYEXN6Zyx4ZXKw/9cy+afaSlIj0J0QRDcbE0rJuabPtbLlEQyPyQMyGdgsggyW5pMng=",
+    "statement": "I declare proposal d819ca561592d5133c75e6d4c4d0f83567b7e4ccf317af81d281c4d726d5c292 dead: it did not reach its target, and I will complete none of its commitments.",
+    "published": "2026-11-13T21:40:50Z"
+  }
 }
