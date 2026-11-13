@@ -84,6 +84,7 @@ type Screen =
   | { name: "restore" }
   | { name: "home"; words: string }
   | { name: "addMoney"; words: string }
+  | { name: "lock"; words: string; url: string }
   | { name: "feeSpeed"; words: string }
   | { name: "wallet"; words: string }
   | { name: "founders"; words: string }
@@ -106,6 +107,15 @@ type Screen =
 // means for it with useRefresh; one pull runs them all. For anyone who can't
 // pull down, the same thing is one tap away: the "Check now" in CheckedLine.
 // ---------------------------------------------------------------------------
+
+// A screen that has pages of its own says what Back does while it is showing.
+const BackCtx = createContext<(f: () => boolean) => () => void>(() => () => {});
+function useBack(fn: () => boolean) {
+  const set = useContext(BackCtx);
+  const latest = useRef(fn);
+  latest.current = fn;
+  useEffect(() => set(() => latest.current()), [set]);
+}
 
 type Refresher = () => Promise<unknown> | void;
 const RefreshCtx = createContext<{ add: (f: Refresher) => () => void; checkNow: () => void; checkedAt: number | null }>(
@@ -174,7 +184,13 @@ export default function App() {
     });
   }, []);
 
-  const goBack = useCallback(() => setStack((old) => (old.length > 1 ? old.slice(0, -1) : old)), []);
+  // A screen with pages of its own (locking) answers Back first; otherwise Back drops the screen.
+  const intercept = useRef<null | (() => boolean)>(null);
+  const backCtx = useMemo(() => (f: () => boolean) => { intercept.current = f; return () => { if (intercept.current === f) intercept.current = null; }; }, []);
+  const goBack = useCallback(() => {
+    if (intercept.current?.()) return;
+    setStack((old) => (old.length > 1 ? old.slice(0, -1) : old));
+  }, []);
 
   // The phone's own Back: one screen back; from another tab, to Home; on Home
   // (or Welcome) it leaves the app, as every Android app does.
@@ -250,7 +266,7 @@ export default function App() {
             onHelp={screen.name === "help" ? undefined : () => setScreen({ name: "help", words })}
           />
         )}
-        <RefreshCtx.Provider value={refreshCtx}>
+        <BackCtx.Provider value={backCtx}><RefreshCtx.Provider value={refreshCtx}>
           <ScrollView
             ref={scroll} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled"
             refreshControl={REFRESHABLE.has(screen.name)
@@ -264,6 +280,7 @@ export default function App() {
             {screen.name === "restore" && <Restore go={setScreen} />}
             {screen.name === "home" && <Tabs words={screen.words} tab={tab} setTab={setTab} go={setScreen} />}
             {screen.name === "addMoney" && <AddMoney words={screen.words} />}
+            {screen.name === "lock" && <LockFlow words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "send" && <Send words={screen.words} go={setScreen} />}
             {screen.name === "feeSpeed" && <FeeSpeedScreen />}
             {screen.name === "wallet" && <WalletScreen words={screen.words} go={setScreen} />}
@@ -277,7 +294,7 @@ export default function App() {
             {screen.name === "cosignerKey" && <CosignerKey words={screen.words} go={setScreen} />}
             {screen.name === "ledgerSetup" && <LedgerSetup from={screen.from} go={setScreen} />}
           </ScrollView>
-        </RefreshCtx.Provider>
+        </RefreshCtx.Provider></BackCtx.Provider>
         {onTabs && <TabBar tab={tab} onTab={setTab} />}
       </SafeAreaView>
     </SafeAreaProvider>
@@ -660,7 +677,7 @@ function stepWords(step: any, o: Overview, words: string, go: Go): { title: stri
     case "lock": return {
       title: "Lock your bitcoin",
       text: `You have ${btc(step.sats)} waiting. Lock it for ${step.name}.`,
-      button: "Lock my bitcoin", onPress: open,
+      button: "Lock my bitcoin", onPress: () => go({ name: "lock", words, url: step.url }),
     };
     case "blocked": return {
       title: "Locking is waiting on something",
@@ -960,6 +977,213 @@ function About() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Step 4: lock
+//
+// Three short pages, one question each: how long, how much, then a check page
+// that shows the amount, the date and the fee above the one button. The check
+// page is the confirmation: nothing is signed or sent before that button.
+// The money side is unchanged: the same calls, in the same order, as before.
+// ---------------------------------------------------------------------------
+
+function SumRow({ label, value }: { label: string; value: string }) {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: t.rule }}>
+      <Text style={[s.p, { marginBottom: 0 }]}>{label}</Text>
+      <Text style={[s.p, s.bold, { marginBottom: 0, flexShrink: 1, textAlign: "right" }]}>{value}</Text>
+    </View>
+  );
+}
+
+function LockFlow({ words, url, go }: { words: string; url: string; go: Go }) {
+  const account = useMemo(() => walletAccount(words), [words]);
+  const [c, setC] = useState<Loaded | null>(null);
+  const [waiting, setWaiting] = useState<{ confirmed: bigint; arriving: bigint } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [page, setPage] = useState(1);
+  const [years, setYears] = useState<number | null>(null);
+  const [amountText, setAmountText] = useState("");
+  const [rate, setRate] = useState<number | null>(null);
+  const [showSpeeds, setShowSpeeds] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ sent: bigint; fee: bigint; locktime: number } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const loaded: Loaded = await loadCrowdlock(url);
+      setC(loaded);
+      if (!loaded.ok) return;
+      setYears(loaded.crowdlock.lock_lengths_years[0]);
+      setPaused(keyChanges(await loadSeenKeys(url), loaded.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(url)).changed);
+      try { setWaiting(await waitingBalance(chain, account.address)); }
+      catch (e: any) { setLoadError(String(e.message ?? e)); }
+    })();
+  }, [url, account.address]);
+
+  const readRate = useCallback(() => { chain.feeRate(feeSpeed).then(setRate).catch(() => setRate(null)); }, []);
+  useEffect(() => { if (page === 3) readRate(); }, [page, readRate]);
+
+  // Back, on pages 2 and 3, goes to the page before; anywhere else it leaves.
+  useBack(() => { if (page === 2 || page === 3) { if (!busy) setPage(page - 1); return true; } return false; });
+
+  if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
+  const openPage = () => go({ name: "crowdlock", words, url });
+  if (!c.ok) return (
+    <View>
+      <Text style={s.h1}>This Crowdlock failed its checks</Text>
+      {c.problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}
+    </View>
+  );
+
+  const name: string = c.crowdlock.name;
+  const cosigner: string | undefined = newestCosigner(c.crowdlock);
+  const minimum = BigInt(c.crowdlock.minimum_counted_lock_sats);
+  const lengths: number[] = c.crowdlock.lock_lengths_years;
+  const viaRelays = Array.isArray(c.crowdlock.relays);
+
+  // Reasons a lock can't be made here just now, each said plainly.
+  const stop =
+    c.crowdlock.network !== NETWORK ? "This Crowdlock uses a different network from this app."
+    : !membershipOf(c.register, account.address) ? `You haven't joined ${name} yet. Read its declaration and sign first.`
+    : !cosigner ? "This Crowdlock hasn't published its co-signer key yet, so nothing can be locked for it yet. Your waiting money stays yours in the meantime."
+    : account.kind === "ledger" && !xpubForKey(c.crowdlock, cosigner) ? "This Crowdlock's co-signer hasn't published the xpub a Ledger needs, so a Ledger can't lock here yet: it couldn't take the lock home. Ask its founder to add it."
+    : paused ? "This Crowdlock's co-signer keys have changed since you last looked. New locks are paused on this phone until you've looked at its page."
+    : loadError ? `Could not read your money: ${loadError}`
+    : null;
+  if (stop) return (
+    <View>
+      <Text style={s.kick}>Step 4 of 6: Lock</Text>
+      <Text style={s.h1}>Lock your bitcoin</Text>
+      <Text style={s.error}>{stop}</Text>
+      <Btn kind="second" label={`Look at ${name}`} onPress={openPage} />
+    </View>
+  );
+  if (!waiting || years === null) return <ActivityIndicator style={{ marginTop: 60 }} />;
+
+  if (!done && (waiting.confirmed === 0n || waiting.confirmed < minimum)) return (
+    <View>
+      <Text style={s.kick}>Step 4 of 6: Lock</Text>
+      <Text style={s.h1}>Not enough waiting yet</Text>
+      <Text style={s.p}>
+        {waiting.confirmed === 0n
+          ? `Nothing is waiting yet. Once ${shortBtc(c.crowdlock.minimum_counted_lock_sats)} is waiting, you can lock it for ${name}.`
+          : `${btc(waiting.confirmed)} is waiting. ${btc(minimum - waiting.confirmed)} more and you can lock it.`}
+      </Text>
+      {waiting.arriving > 0n && <Text style={s.note}>+ {btc(waiting.arriving)} arriving. It can be locked once it confirms.</Text>}
+      <Btn label="Add money" onPress={() => go({ name: "addMoney", words })} />
+    </View>
+  );
+
+  // What the fan has asked to lock: everything, or an amount they typed.
+  const chosen = ((): { amount: bigint | "all"; shown: bigint; problem?: string } => {
+    const all = waiting.confirmed;
+    const t = amountText.trim().replace(",", ".");
+    if (t === "") return { amount: "all", shown: all };
+    if (!/^\d*\.?\d{0,8}$/.test(t) || t === ".") return { amount: 0n, shown: 0n, problem: "Type an amount in BTC, like 0.001" };
+    const [w, f = ""] = t.split(".");
+    const sats = BigInt(w || "0") * 100000000n + BigInt((f + "00000000").slice(0, 8));
+    if (sats < minimum) return { amount: sats, shown: sats, problem: `That's below this Crowdlock's minimum of ${shortBtc(c.crowdlock.minimum_counted_lock_sats)}, so it wouldn't count.` };
+    if (sats > all) return { amount: sats, shown: sats, problem: "That's more than you have waiting." };
+    // Asking for exactly what is waiting means everything: the fee comes out of it.
+    return sats === all ? { amount: "all", shown: all } : { amount: sats, shown: sats };
+  })();
+  const locktime = lockDate(years);
+
+  const lockIt = async () => {
+    setBusy(true); setError(null);
+    try {
+      const lock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner!) };
+      const feeRate = await chain.feeRate(feeSpeed);
+      const tx = await buildLock({ account, chain, lock, feeRate, amount: chosen.amount });
+      // The terms are saved before the money moves, and checked saved.
+      await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner! });
+      await chain.broadcast(tx.hex);
+      if (viaRelays) await postToRelays(c.crowdlock, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: cosigner, locktime, address: lock.address }).catch(() => {});
+      lastOverview = null;   // Home reads afresh
+      setDone({ sent: tx.sent, fee: tx.fee, locktime });
+      setPage(4);
+    } catch (e: any) { setError(String(e.message ?? e)); }
+    setBusy(false);
+  };
+
+  if (page === 4 && done) return (
+    <View>
+      <Text style={s.kick}>Step 4 of 6: Lock</Text>
+      <Text style={s.h1}>Locked</Text>
+      <Text style={s.good}>Locked {btc(done.sent)} for {name} until {when(done.locktime)}. The network fee was {btc(done.fee)}.</Text>
+      <Text style={s.p}>Once it confirms it goes on the register by itself. You don't need to do anything.</Text>
+      <Text style={s.note}>Steps 1 to 4 are done. Committing to a purchase and taking it home come later.</Text>
+      <Btn label="Back to Home" onPress={() => go({ name: "home", words })} />
+    </View>
+  );
+
+  if (page === 1) return (
+    <View>
+      <Text style={s.kick}>Step 4 of 6 · Lock · 1 of 3</Text>
+      <Text style={s.h1}>How long?</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup">
+        {lengths.map((y) => (
+          <Pressable key={y} accessibilityRole="radio" accessibilityState={{ selected: years === y }} onPress={() => setYears(y)} style={[s.chip, years === y && s.chipOn]}>
+            <Text style={[s.chipText, years === y && s.chipTextOn]}>{years === y ? "✓ " : ""}{lengthLabel(y)}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={s.p}>Opens {when(locktime)}. After that you can take it home whenever you like.</Text>
+      {lengths.some((y) => y < 1) && <Text style={s.note}>The test network's clock can run ahead of real time, so a short test lock may unlock early. Real bitcoin's never does.</Text>}
+      <Warning level="stop" title="Until your date, you can't touch it">
+        If bitcoin's price halves, you cannot sell. Only lock what you can leave alone for the whole time. A longer lock counts for longer, and leaves you exposed for longer.
+      </Warning>
+      <Btn label="Next" onPress={() => setPage(2)} />
+    </View>
+  );
+
+  if (page === 2) return (
+    <View>
+      <Text style={s.kick}>Step 4 of 6 · Lock · 2 of 3</Text>
+      <Text style={s.h1}>How much?</Text>
+      <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting.</Text>
+      <Text style={s.label}>Amount to lock, in BTC</Text>
+      <Input style={s.input} keyboardType="decimal-pad" placeholder="Everything waiting" value={amountText} onChangeText={setAmountText} />
+      <Text style={chosen.problem ? s.error : s.note}>
+        {chosen.problem ?? `Leave it empty to lock everything. At least ${shortBtc(c.crowdlock.minimum_counted_lock_sats)}, so that it counts. Whatever you don't lock stays waiting.`}
+      </Text>
+      <Warning level="know" title="No outside review yet">
+        Nobody outside this project has checked the code that builds a lock. A mistake could leave coins stuck. If you are thinking of a large amount, wait for that review.
+      </Warning>
+      <Text style={s.note}>In many countries sending, receiving or moving bitcoin has tax or reporting rules. They differ, and finding out yours is up to you.</Text>
+      <Btn label="Next" disabled={!!chosen.problem} onPress={() => setPage(3)} />
+    </View>
+  );
+
+  return (
+    <View>
+      <Text style={s.kick}>Step 4 of 6 · Lock · 3 of 3</Text>
+      <Text style={s.h1}>Check and lock</Text>
+      <SumRow label="You lock" value={chosen.amount === "all" ? `${btc(waiting.confirmed)} (everything waiting)` : btc(chosen.shown)} />
+      <SumRow label="For" value={name} />
+      <SumRow label="Until" value={when(locktime)} />
+      <SumRow label="Network fee" value={rate ? `about ${Math.ceil(rate * 141)} sats (${SPEED_LABEL[feeSpeed]})` : "being worked out"} />
+      <Text style={s.note}>
+        A sat is the smallest unit of bitcoin: 100,000,000 make one bitcoin. {chosen.amount === "all" ? "The fee comes out of what you lock." : "The fee is paid from what stays waiting."}
+      </Text>
+      {!showSpeeds
+        ? <Btn kind="link" label="Change the fee speed" onPress={() => setShowSpeeds(true)} />
+        : <FeeChoice onChange={readRate} />}
+      <Text style={s.p}>Until that date it can only leave the lock into a purchase you sign for yourself. After it, you can take it home whenever you like.</Text>
+      <Warning level="stop" title="Public and permanent">
+        Your lock goes on the register, with your membership and the amount, for anyone to see. It can't be undone. Anyone can work out your lock address from your public key. If you don't want this to be public, don't lock.
+      </Warning>
+      <LedgerHint account={account} />
+      {account.kind === "ledger" && <Text style={s.note}>Your Ledger will first ask you to approve the lock's rules, then the payment. If it refuses the rules, nothing is sent.</Text>}
+      {error && <Text style={s.error}>{error}</Text>}
+      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Locking…") : "Lock my bitcoin"} disabled={busy} onPress={lockIt} />
+    </View>
+  );
+}
+
 function Send({ words, go }: { words: string; go: Go }) {
   const account = useMemo(() => walletAccount(words), [words]);
   const [to, setTo] = useState("");
@@ -1217,7 +1441,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         <Button label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
       </View>}
 
-      {me && c.crowdlock.network === NETWORK && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} />}
+      {me && c.crowdlock.network === NETWORK && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} />}
 
       {c.crowdlock.network === NETWORK && <Proposals c={c} account={account} member={!!me} />}
 
@@ -1246,7 +1470,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 type LockTerms = { address: string; locktime: number; cosignerPubkey: string };
 type LockRow = LockTerms & { state: string; confirmed: bigint; arriving: bigint; onRegister: boolean; note?: string };
 
-function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Extract<Loaded, { ok: true }>; onChange: () => void; paused?: boolean }) {
+function MyLocks({ account, c, onChange, onLock, paused = false }: { account: any; c: Extract<Loaded, { ok: true }>; onChange: () => void; onLock: () => void; paused?: boolean }) {
   // New locks name the newest key; older ones stay listed for the locks that name them.
   const cosigner: string | undefined = newestCosigner(c.crowdlock);
   // A Ledger can't take home a lock whose co-signer xpub it was never given.
@@ -1255,9 +1479,6 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
   const lengths: number[] = c.crowdlock.lock_lengths_years;
   const [waiting, setWaiting] = useState<{ confirmed: bigint; arriving: bigint } | null>(null);
   const [rows, setRows] = useState<LockRow[] | null>(null);
-  const [years, setYears] = useState<number>(lengths[0]);
-  // Empty means everything waiting; otherwise an amount in BTC.
-  const [amountText, setAmountText] = useState("");
   // Which lapsed lock has its "Lock it again" choices open, and those choices.
   const [renewing, setRenewing] = useState<string | null>(null);
   const [renewYears, setRenewYears] = useState<number>(lengths[0]);
@@ -1321,54 +1542,6 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
     </View>
   );
 
-  // What the fan has asked to lock: everything, or an amount they typed.
-  const chosen = ((): { amount: bigint | "all"; shown: bigint; problem?: string } => {
-    const all = waiting?.confirmed ?? 0n;
-    const t = amountText.trim().replace(",", ".");
-    if (t === "") return { amount: "all", shown: all };
-    if (!/^\d*\.?\d{0,8}$/.test(t) || t === ".") return { amount: 0n, shown: 0n, problem: "Type an amount in BTC, like 0.001" };
-    const [w, f = ""] = t.split(".");
-    const sats = BigInt(w || "0") * 100000000n + BigInt((f + "00000000").slice(0, 8));
-    if (sats < minimum) return { amount: sats, shown: sats, problem: `That's below this Crowdlock's minimum of ${shortBtc(c.crowdlock.minimum_counted_lock_sats)}, so it wouldn't count.` };
-    if (sats > all) return { amount: sats, shown: sats, problem: "That's more than you have waiting." };
-    // Asking for exactly what is waiting means everything: the fee comes out of it.
-    return sats === all ? { amount: "all", shown: all } : { amount: sats, shown: sats };
-  })();
-
-  const lockIt = async () => {
-    if (!waiting || chosen.problem) return;
-    const locktime = lockDate(years);
-    // The fee is shown before anything is approved: a lock is about 141 vbytes.
-    let feeNote = "";
-    try { const r = await chain.feeRate(feeSpeed); feeNote = ` Network fee: ${r} sat/vB (${SPEED_LABEL[feeSpeed]}), about ${Math.ceil(r * 141)} sats.`; } catch {}
-    Alert.alert(
-      `Lock ${chosen.amount === "all" ? `everything waiting (${btc(waiting.confirmed)})` : btc(chosen.shown)} until ${when(locktime)}?`,
-      (chosen.amount === "all" ? "The network fee comes out of it. " : "The network fee is paid from what stays waiting. ")
-        + feeNote
-        + " Until that date it can only leave the lock into a purchase you sign for yourself. After it, you can take it home whenever you like. This cannot be undone."
-        + (account.kind === "ledger" ? " Your Ledger will first ask you to approve the lock's rules, then the payment: if it refuses the rules, nothing is sent." : ""),
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Lock it", onPress: async () => {
-          setBusy("lock"); setMessage(null);
-          try {
-            const lock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner) };
-            const feeRate = await chain.feeRate(feeSpeed);
-            const tx = await buildLock({ account, chain, lock, feeRate, amount: chosen.amount });
-            // The terms are saved before the money moves, and checked saved.
-            await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner });
-            await chain.broadcast(tx.hex);
-            if (viaRelays) await publish({ address: lock.address, locktime, cosignerPubkey: cosigner });
-            setAmountText("");
-            setMessage({ ok: true, text: `Locked ${btc(tx.sent)} (fee ${btc(tx.fee)}). Once it confirms it goes on the register by itself.` });
-            await refresh(); onChange();
-          } catch (e: any) { setMessage({ ok: false, text: String(e.message ?? e) }); }
-          setBusy(null);
-        } },
-      ],
-    );
-  };
-
   const home = (row: LockRow) => {
     Alert.alert(
       `Take ${btc(row.confirmed)} home?`,
@@ -1431,29 +1604,8 @@ function MyLocks({ account, c, onChange, paused = false }: { account: any; c: Ex
       {waiting === null ? <ActivityIndicator /> : (waiting as any).failed ? null : ready ? (
         <View style={s.panel}>
           <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting, enough for a lock that counts.</Text>
-          <Text style={s.label}>How much to lock</Text>
-          <Input
-            style={s.input} keyboardType="decimal-pad" placeholder="Everything waiting"
-            value={amountText} onChangeText={setAmountText}
-          />
-          <Text style={chosen.problem ? s.error : s.note}>
-            {chosen.problem ?? `In BTC. Leave it empty to lock everything. At least ${shortBtc(c.crowdlock.minimum_counted_lock_sats)}; whatever you don't lock stays waiting.`}
-          </Text>
-          <Text style={s.label}>Lock it for</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {lengths.map((y) => (
-              <Pressable key={y} onPress={() => setYears(y)} style={[s.chip, years === y && s.chipOn]}>
-                <Text style={[s.chipText, years === y && s.chipTextOn]}>{lengthLabel(y)}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <Text style={s.note}>Unlocks {when(lockDate(years))}.</Text>
-          <FeeChoice />
-          {lengths.some((y) => y < 1) && <Text style={s.note}>The test network's clock can run ahead of real time, so a short test lock may unlock early. Real bitcoin's never does.</Text>}
-          <Button
-            label={busy === "lock" ? "Locking…" : chosen.amount === "all" ? "Lock everything waiting" : `Lock ${btc(chosen.shown)}`}
-            disabled={busy !== null || !!chosen.problem || paused || noLedgerXpub} onPress={lockIt}
-          />
+          {paused && <Text style={s.note}>New locks are paused until you've looked at the changed co-signer keys above.</Text>}
+          <Button label="Lock my bitcoin" disabled={busy !== null || paused || noLedgerXpub} onPress={onLock} />
         </View>
       ) : (
         <Text style={s.p}>
@@ -2584,11 +2736,11 @@ const SPEED_LABEL: Record<FeeSpeed, string> = { slow: "Slow", normal: "Normal", 
 const SPEED_WHEN: Record<FeeSpeed, string> = { slow: "about an hour", normal: "about half an hour", fast: "the next block or two" };
 
 /** Slow / Normal / Fast, with the network fee rate each means right now. */
-function FeeChoice() {
+function FeeChoice({ onChange }: { onChange?: () => void } = {}) {
   const [speed, setSpeed] = useState<FeeSpeed>(feeSpeed);
   const [rates, setRates] = useState<{ slow: number; normal: number; fast: number } | null>(null);
   useEffect(() => { chain.feeRates().then(setRates).catch(() => {}); loadFeeSpeed().then((v) => { feeSpeed = v; setSpeed(v); }); }, []);
-  const pick = (v: FeeSpeed) => { feeSpeed = v; setSpeed(v); saveFeeSpeed(v); };
+  const pick = (v: FeeSpeed) => { feeSpeed = v; setSpeed(v); saveFeeSpeed(v); onChange?.(); };
   return (
     <View>
       <Text style={s.h2}>Fee speed</Text>
