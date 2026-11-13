@@ -2109,11 +2109,13 @@ function Proposals({ c, account, member }: { c: Extract<Loaded, { ok: true }>; a
   );
 }
 
-/** The one line under a proposal's title: its phase, or that it has been paid. */
+/** The one line under a proposal's title: its phase, or that it has been paid, or declared dead. */
 function ProposalStatus({ c, p, account }: { c: Extract<Loaded, { ok: true }>; p: any; account: any }) {
   const [paid, setPaid] = useState<number | null>(null);
-  useEffect(() => { readPile(c, p, account).then((x) => setPaid(x.paid)).catch(() => setPaid(null)); }, [c, p]);
+  const [dead, setDead] = useState(false);
+  useEffect(() => { readPile(c, p, account).then((x) => { setPaid(x.paid); setDead(!!x.notice); }).catch(() => setPaid(null)); }, [c, p]);
   if (paid !== null && paid >= p.target.sats) return <Text style={s.good}>Funded and paid · {btc(BigInt(paid))} sent to the seller · closed</Text>;
+  if (dead) return <Text style={s.note}>Declared dead · didn't reach its target · closed · nothing will move</Text>;
   return <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}{paid ? ` · ${btc(BigInt(paid))} paid so far` : ""}</Text>;
 }
 
