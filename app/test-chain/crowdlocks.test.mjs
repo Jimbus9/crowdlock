@@ -16,7 +16,7 @@ import { loadCrowdlock, baseFor, membershipOf, committedTotal, submitJoin, START
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SITE = "https://jimbus9.github.io/crowdlock/";
 // The Kop Fund has its own site; the tests serve its frozen copy (method/fixtures/the-kop-fund).
-const KOP_SITE = "https://jimbus9.github.io/the-kop-fund/";
+const KOP_SITE = "https://thekopfund.org/";
 const KOP_FIX = join(REPO, "method/fixtures/the-kop-fund");
 
 let failures = 0;
@@ -56,7 +56,8 @@ check("The test Crowdlock loads and passes every check", test.ok, test.ok ? test
 check("…it is on testnet4, and takes registrations through its relays, not an endpoint",
   test.ok && test.crowdlock.network === "testnet4" && test.crowdlock.relays.length > 0 && !test.crowdlock.join_endpoint);
 check("…and a different declaration from The Kop Fund", test.ok && kop.ok && test.statement !== kop.statement);
-check("Both are on the app's starting list", STARTING_LIST.length === 2);
+check("Both are on the app's starting list, The Kop Fund at its own domain",
+  STARTING_LIST.length === 2 && STARTING_LIST[0] === `${KOP_SITE}crowdlocks/kop-fund.json` && STARTING_LIST[1] === `${SITE}crowdlocks/kop-fund-testnet4.json`);
 
 console.log("-".repeat(80));
 console.log("REFUSING WHAT IT SHOULD");
@@ -317,6 +318,61 @@ console.log(failures === 0 ? "The app's Crowdlock loader accepts the real files 
   const ok3 = r3.slow === 3 && r3.normal === 6 && r3.fast === 12 && r3f.slow === 5 && r3f.normal === 6 && r3f.fast === 12 && slow === 3 && fast === 12 && dflt === 6;
   console.log(ok3 ? "PASS  Slow, normal and fast fee rates come from the explorer, in order, above the floor" : `FAIL  three rates ${JSON.stringify([r3, r3f, slow, fast, dflt])}`);
   if (!ok3) process.exitCode = 1;
+}
+
+console.log("-".repeat(80));
+console.log("A CROWDLOCK THAT MOVES KEEPS THE PHONE'S RECORDS");
+console.log("-".repeat(80));
+{
+  const { movedUrl, moveRecords } = await import("../src/moves.mjs");
+  const { MOVED_ADDRESSES } = await import("../src/build.mjs");
+  const { repoFromFileUrl, pathInRepo, historyLinkFor } = await import("../src/crowdlocks.mjs");
+  const OLD_KOP = "https://jimbus9.github.io/the-kop-fund/crowdlocks/kop-fund.json";
+  const OLD_TEST = "https://jimbus9.github.io/fanfund/crowdlocks/kop-fund-testnet4.json";
+  const NEW_KOP = STARTING_LIST[0], NEW_TEST = STARTING_LIST[1];
+  const OTHER = "https://somefan.github.io/the-pub-fund/crowdlocks/the-pub-fund.json";
+  check("Both old addresses move to the ones on the starting list",
+    movedUrl(OLD_KOP, MOVED_ADDRESSES) === NEW_KOP && movedUrl(OLD_TEST, MOVED_ADDRESSES) === NEW_TEST);
+  check("…and nothing else moves", movedUrl(OTHER, MOVED_ADDRESSES) === OTHER && movedUrl(NEW_KOP, MOVED_ADDRESSES) === NEW_KOP);
+
+  const realLock = { crowdlock: OLD_KOP, address: "bc1qreal", locktime: 1826000000, cosignerPubkey: "02aa" };
+  const testLock = { crowdlock: OLD_TEST, address: "tb1qtest", locktime: 1763100000, cosignerPubkey: "02bb" };
+  const otherLock = { crowdlock: OTHER, address: "tb1qother", locktime: 1, cosignerPubkey: "02cc" };
+  const phone = {
+    locks: [realLock, testLock, otherLock],
+    seen: { [OLD_KOP]: ["02k1"], [OLD_TEST]: ["02t1"], [OTHER]: ["02o1"] },
+    expected: { [OLD_TEST]: ["02t2"] },
+    added: [OTHER, OLD_TEST],
+  };
+  const moved = moveRecords(phone, MOVED_ADDRESSES, STARTING_LIST);
+  check("The real lock is refiled under The Kop Fund's new address, terms untouched",
+    moved.changed && JSON.stringify(moved.locks[0]) === JSON.stringify({ ...realLock, crowdlock: NEW_KOP }));
+  check("…the test lock under the test Crowdlock's new address",
+    JSON.stringify(moved.locks[1]) === JSON.stringify({ ...testLock, crowdlock: NEW_TEST }));
+  check("…and a lock in another Crowdlock is left alone", JSON.stringify(moved.locks[2]) === JSON.stringify(otherLock));
+  check("No lock is lost or added", moved.locks.length === 3);
+  check("The co-signer keys seen move too, so a key change still warns",
+    JSON.stringify(moved.seen) === JSON.stringify({ [OTHER]: ["02o1"], [NEW_KOP]: ["02k1"], [NEW_TEST]: ["02t1"] }));
+  check("…and so do the keys this phone is waiting to see", JSON.stringify(moved.expected) === JSON.stringify({ [NEW_TEST]: ["02t2"] }));
+  check("An added Crowdlock that moved onto the starting list isn't listed twice", JSON.stringify(moved.added) === JSON.stringify([OTHER]));
+
+  const again = moveRecords(moved, MOVED_ADDRESSES, STARTING_LIST);
+  check("Running it again changes nothing, so it can run at every start",
+    !again.changed && JSON.stringify(again.locks) === JSON.stringify(moved.locks) && JSON.stringify(again.seen) === JSON.stringify(moved.seen));
+  check("A phone with nothing saved is fine", !moveRecords({}, MOVED_ADDRESSES, STARTING_LIST).changed);
+
+  const both = moveRecords({ seen: { [OLD_KOP]: ["02old"], [NEW_KOP]: ["02new"] }, expected: { [OLD_KOP]: ["02a"], [NEW_KOP]: ["02b"] } }, MOVED_ADDRESSES, STARTING_LIST);
+  check("If both addresses have keys, the newer list wins for 'seen'", JSON.stringify(both.seen) === JSON.stringify({ [NEW_KOP]: ["02new"] }));
+  check("…and a key waiting under either still waits", JSON.stringify(both.expected[NEW_KOP]?.slice().sort()) === JSON.stringify(["02a", "02b"]));
+
+  const shared = fileUrlFromOpenLink(openLinkFor(OLD_KOP));
+  check("An app link shared before the move opens the new address", shared === NEW_KOP);
+
+  check("The Kop Fund's own domain still knows its repository",
+    JSON.stringify(repoFromFileUrl(NEW_KOP)) === JSON.stringify({ owner: "Jimbus9", repo: "the-kop-fund" }) && pathInRepo(NEW_KOP) === "crowdlocks/kop-fund.json");
+  check("…so a co-signer key change there links to its history",
+    historyLinkFor(NEW_KOP) === "https://github.com/Jimbus9/the-kop-fund/commits/main/crowdlocks/kop-fund.json");
+  check("A domain the build doesn't know names no repository", repoFromFileUrl("https://example.org/crowdlocks/x.json") === null && pathInRepo("https://example.org/crowdlocks/x.json") === null);
 }
 
 console.log("-".repeat(80));

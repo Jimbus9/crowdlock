@@ -27,7 +27,9 @@ import { checkCosignerXpubs } from "./wallet/core.mjs";
 
 // This build's starting list and counting-rule link live in ./build.mjs, the
 // one file that differs between builds of the app.
-export { STARTING_LIST, COUNTING_RULE_URL } from "./build.mjs";
+export { STARTING_LIST, COUNTING_RULE_URL, MOVED_ADDRESSES } from "./build.mjs";
+import { OWN_DOMAINS, MOVED_ADDRESSES } from "./build.mjs";
+import { movedUrl } from "./moves.mjs";
 
 // Links are handled as plain text rather than with URL objects: a phone's
 // JavaScript engine has an incomplete URL implementation, and these few rules
@@ -140,7 +142,8 @@ export function fileUrlFromOpenLink(link) {
   if (!m) return null;
   let u;
   try { u = decodeURIComponent(m[1]); } catch { return null; }
-  return LINK.test(u) ? u : null;
+  // A link shared before a Crowdlock moved still opens it, at its new address.
+  return LINK.test(u) ? movedUrl(u, MOVED_ADDRESSES) : null;
 }
 
 /** Where to send people when sharing: the Crowdlock's own page if it names one, else its site. */
@@ -344,14 +347,24 @@ export function historyLinkFor(fileUrl) {
 }
 
 /** Where a Crowdlock's file sits inside its repository, from its link. */
-export function pathInRepo(fileUrl) {
-  const m = /^https:\/\/[a-z0-9-]+\.github\.io\/[A-Za-z0-9._-]+\/(.+)$/i.exec(String(fileUrl ?? ""));
+export function pathInRepo(fileUrl, domains = OWN_DOMAINS) {
+  const u = String(fileUrl ?? "");
+  const site = ownDomainOf(u, domains);
+  if (site) { const rest = u.slice(site.length).split(/[?#]/)[0]; return rest ? decodeURIComponent(rest) : null; }
+  const m = /^https:\/\/[a-z0-9-]+\.github\.io\/[A-Za-z0-9._-]+\/(.+)$/i.exec(u);
   return m ? decodeURIComponent(m[1].split(/[?#]/)[0]) : null;
 }
 
-export function repoFromFileUrl(fileUrl) {
+/** The GitHub repository behind a Crowdlock file's link: from a github.io address, or a site on its own domain the build knows. */
+export function repoFromFileUrl(fileUrl, domains = OWN_DOMAINS) {
+  const site = ownDomainOf(String(fileUrl ?? ""), domains);
+  if (site) return { ...domains[site] };
   const m = /^https:\/\/([a-z0-9-]+)\.github\.io\/([A-Za-z0-9._-]+)\//i.exec(String(fileUrl ?? ""));
   return m ? { owner: m[1], repo: m[2] } : null;
+}
+
+function ownDomainOf(u, domains) {
+  return Object.keys(domains ?? {}).find((site) => u.startsWith(site)) ?? null;
 }
 
 /**

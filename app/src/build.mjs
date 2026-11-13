@@ -6,9 +6,31 @@
 
 /** The Crowdlocks this build starts with. Anything else, the fan adds. */
 export const STARTING_LIST = [
-  "https://jimbus9.github.io/the-kop-fund/crowdlocks/kop-fund.json",
+  "https://thekopfund.org/crowdlocks/kop-fund.json",
   "https://jimbus9.github.io/crowdlock/crowdlocks/kop-fund-testnet4.json",
 ];
+
+/**
+ * Addresses that have moved, old → new. On every start the app refiles what
+ * the phone saved under an old address (lock terms, co-signer keys seen) to
+ * the new one; see ./moves.mjs. Never remove a line: a phone that skipped
+ * every update in between still needs it.
+ */
+export const MOVED_ADDRESSES = [
+  // 13 November 2026: the method repository was renamed from fanfund.
+  ["https://jimbus9.github.io/fanfund/", "https://jimbus9.github.io/crowdlock/"],
+  // 13 November 2026: The Kop Fund moved to its own domain.
+  ["https://jimbus9.github.io/the-kop-fund/", "https://thekopfund.org/"],
+];
+
+/**
+ * Sites on a domain of their own, and the GitHub repository behind each. A
+ * github.io address names its repository; a domain doesn't, and the app needs
+ * the repository to show a file's history and to publish to it.
+ */
+export const OWN_DOMAINS = {
+  "https://thekopfund.org/": { owner: "Jimbus9", repo: "the-kop-fund" },
+};
 
 /** Where the app links the counting rule: the method's published spec. */
 export const COUNTING_RULE_URL = "https://github.com/Jimbus9/crowdlock/blob/main/spec/counting-rule.md#the-minimum";

@@ -3,6 +3,7 @@
 // sent anywhere. If the app is deleted, they are gone from the phone — which
 // is why the fan writes them down first, and why restoring from them must work.
 import * as SecureStore from "expo-secure-store";
+import { moveRecords } from "./moves.mjs";
 
 const KEY = "crowdlock.words.v1";
 
@@ -136,4 +137,30 @@ export async function saveLedgerStore(store: any): Promise<void> {
 
 export async function forgetLedgerStore(): Promise<void> {
   await SecureStore.deleteItemAsync(LEDGER_STORE);
+}
+
+// When a Crowdlock's address has changed, refile everything above that is
+// kept under its old address (see ./moves.mjs). Run at every start, before
+// anything reads these records; running it again changes nothing. A failure
+// leaves the records as they were, under the old address, to try next start.
+export async function moveSavedRecords(moves: string[][], starting: string[]): Promise<boolean> {
+  try {
+    const read = async (key: string, empty: string) => JSON.parse((await SecureStore.getItemAsync(key)) ?? empty);
+    const before = {
+      locks: await read(LOCKS, "[]"),
+      seen: await read(SEEN_KEYS, "{}"),
+      expected: await read(EXPECTED_KEYS, "{}"),
+      added: await read(ADDED, "[]"),
+    };
+    const after = moveRecords(before, moves, starting);
+    if (!after.changed) return false;
+    // Lock terms first, and checked, because they are the ones that matter.
+    await SecureStore.setItemAsync(LOCKS, JSON.stringify(after.locks));
+    const kept = await loadSavedLocks();
+    if (kept.length !== after.locks.length) return false;
+    await SecureStore.setItemAsync(SEEN_KEYS, JSON.stringify(after.seen));
+    await SecureStore.setItemAsync(EXPECTED_KEYS, JSON.stringify(after.expected));
+    await SecureStore.setItemAsync(ADDED, JSON.stringify(after.added));
+    return true;
+  } catch { return false; }
 }

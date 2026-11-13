@@ -57,7 +57,7 @@ const build = buildCrowdlock as (x: any) => any;
 const createRepo = createCrowdlockRepo as (x: any) => Promise<any>;
 // @ts-ignore — plain module shared with the chain tests
 import {
-  STARTING_LIST, loadCrowdlock, membershipOf, committedTotal, submitJoin, COUNTING_RULE_URL, poundsPerBtc, shortBtc,
+  STARTING_LIST, MOVED_ADDRESSES, loadCrowdlock, membershipOf, committedTotal, submitJoin, COUNTING_RULE_URL, poundsPerBtc, shortBtc,
   locksOnRegister, submitLock, newestCosigner, pathInRepo, keyChanges, historyLinkFor, coSignerRecord, openLinkFor, fileUrlFromOpenLink, shareLinkFor, rankFound, matchesSearch,
   repoFromFileUrl, versionStatus, changesSince, baseFor, resolvePath,
 } from "./src/crowdlocks.mjs";
@@ -65,7 +65,7 @@ import {
 import { postToRelays, announce, fetchAnnouncements, postCommitment, fetchCommitments } from "./src/relays.mjs";
 import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
-  loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed, loadLook, saveLook } from "./src/storage";
+  loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed, loadLook, saveLook, moveSavedRecords } from "./src/storage";
 import type { FeeSpeed } from "./src/storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB } from "./src/config";
 // The look (one theme file) and the shared parts every screen is built from.
@@ -209,7 +209,9 @@ export default function App() {
     // there is a wallet, or waits for one.
     loadFeeSpeed().then((v) => { feeSpeed = v; });
     loadLook().then(setLook);
-    Linking.getInitialURL().then((u) => {
+    // Refile anything saved under an address that has since moved, before
+    // anything reads it (see src/moves.mjs).
+    moveSavedRecords(MOVED_ADDRESSES, STARTING_LIST).catch(() => false).then(() => Linking.getInitialURL()).then((u) => {
       pending.current = fileUrlFromOpenLink(u ?? null);
       loadWords().then((w) => setScreen(w ? { name: "home", words: w } : { name: "welcome" }));
     });
