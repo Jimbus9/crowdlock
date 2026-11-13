@@ -1,6 +1,6 @@
 # Crowdlock — the method, and the app
 
-This repository holds the **method** (rules, reference code and tests) and the **Crowdlock app**. **The Kop Fund no longer lives here**: since 8 November 2026 it has its own repository, https://github.com/Jimbus9/the-kop-fund (site https://jimbus9.github.io/the-kop-fund/), so that its maintainers can be given access to the fund alone.
+This repository holds the **method** (rules, reference code and tests) and the **Crowdlock app**. **The Kop Fund no longer lives here**: since 8 November 2026 it has its own repository, https://github.com/Jimbus9/the-kop-fund (site https://thekopfund.org/), so that its maintainers can be given access to the fund alone.
 
 1. **Crowdlock** — the method. A set of published rules for a fund that nobody pools money into: fans lock their own bitcoin, and a purchase is funded by each fan signing their own locked money into it. Anyone can copy it.
 2. **The Crowdlock app** — a phone wallet that follows the method. It works with any Crowdlock, and any founder can start one.
