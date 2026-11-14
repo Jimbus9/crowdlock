@@ -15,7 +15,7 @@ const RANK = { takeHome: 5, commit: 4, lock: 3, blocked: 2, getBitcoin: 2, rest:
  *   crowdlocks: Array<{
  *     url: string, name: string, member: boolean, canLock: boolean, minimum: bigint,
  *     locks: Array<{ state: string, confirmed: bigint, arriving: bigint, locktime: number }>,
- *     openProposal: null | { title: string }, committed: boolean,
+ *     openProposal: null | { title: string, hash?: string }, committed: boolean,
  *   }>,
  * }} state  Crowdlocks on this app's network that passed their checks, in list order.
  * @returns {{ step: number, kind: string, url?: string, name?: string, sats?: bigint, need?: bigint, title?: string, opens?: number }}
@@ -40,7 +40,7 @@ function forCrowdlock(c, waiting) {
   if (home.length) return { step: 6, kind: "takeHome", ...at, sats: home.reduce((n, l) => n + l.confirmed, 0n) };
 
   const locked = c.locks.filter((l) => l.state === "locked" && l.confirmed > 0n);
-  if (c.openProposal && !c.committed && locked.length) return { step: 5, kind: "commit", ...at, title: c.openProposal.title };
+  if (c.openProposal && !c.committed && locked.length) return { step: 5, kind: "commit", ...at, title: c.openProposal.title, hash: c.openProposal.hash };
 
   const enough = waiting > 0n && waiting >= c.minimum;
   if (enough && c.canLock) return { step: 4, kind: "lock", ...at, sats: waiting };
