@@ -87,6 +87,8 @@ type Screen =
   | { name: "addMoney"; words: string }
   | { name: "lock"; words: string; url: string }
   | { name: "sign"; words: string; url: string }
+  | { name: "allLocks"; words: string; url: string }
+  | { name: "allProposals"; words: string; url: string }
   | { name: "share"; words: string; url: string }
   | { name: "lookAfter"; words: string; url: string }
   | { name: "proposal"; words: string; url: string; hash: string }
@@ -343,6 +345,8 @@ export default function App() {
             {screen.name === "takeHome" && <HomeFlow words={screen.words} url={screen.url} address={screen.address} again={screen.again} go={setScreen} />}
             {screen.name === "proposal" && <ProposalScreen words={screen.words} url={screen.url} hash={screen.hash} go={setScreen} />}
             {screen.name === "commit" && <CommitFlow words={screen.words} url={screen.url} hash={screen.hash} go={setScreen} />}
+            {screen.name === "allLocks" && <AllOf what="locks" words={screen.words} url={screen.url} go={setScreen} />}
+            {screen.name === "allProposals" && <AllOf what="proposals" words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "sign" && <SignScreen words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "share" && <ShareScreen url={screen.url} />}
             {screen.name === "lookAfter" && <LookAfterScreen words={screen.words} url={screen.url} />}
@@ -1771,6 +1775,24 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
   );
 }
 
+/** Every lock, or every proposal, of one Crowdlock: the full list its page keeps short. */
+function AllOf({ what, words, url, go }: { what: "locks" | "proposals"; words: string; url: string; go: Go }) {
+  const account = useMemo(() => walletAccount(words), [words]);
+  const [c, setC] = useState<Loaded | null>(null);
+  const load = useCallback(async () => { setC(await loadCrowdlock(url)); }, [url]);
+  useEffect(() => { load(); }, [load]);
+  if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
+  if (!c.ok) return <Text style={s.error}>This Crowdlock failed its checks.</Text>;
+  return (
+    <View>
+      <Text style={s.kick}>{c.crowdlock.name}</Text>
+      {what === "locks"
+        ? <MyLocks all account={account} c={c} onChange={load} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} />
+        : <Proposals all c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} />}
+    </View>
+  );
+}
+
 function ShareScreen({ url }: { url: string }) {
   const [c, setC] = useState<Loaded | null>(null);
   useEffect(() => { loadCrowdlock(url).then(setC); }, [url]);
@@ -2072,9 +2094,9 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         <Btn label="Go on to sign" onPress={() => go({ name: "sign", words, url })} />
       </>}
 
-      {me && here && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} />}
+      {me && here && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} onAll={() => go({ name: "allLocks", words, url })} />}
 
-      {here && <Proposals c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} />}
+      {here && <Proposals c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} onAll={() => go({ name: "allProposals", words, url })} />}
 
       <Text style={s.h2}>More about this Crowdlock</Text>
       {me && (showText
@@ -2100,7 +2122,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 type LockTerms = { address: string; locktime: number; cosignerPubkey: string };
 type LockRow = LockTerms & { state: string; confirmed: bigint; arriving: bigint; onRegister: boolean; note?: string };
 
-function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { account: any; c: Extract<Loaded, { ok: true }>; onChange: () => void; onLock: () => void; onHome: (address: string, again?: boolean) => void; paused?: boolean }) {
+function MyLocks({ account, c, onChange, onLock, onHome, onAll, all = false, paused = false }: { account: any; c: Extract<Loaded, { ok: true }>; onChange: () => void; onLock: () => void; onHome: (address: string, again?: boolean) => void; onAll?: () => void; all?: boolean; paused?: boolean }) {
   // New locks name the newest key; older ones stay listed for the locks that name them.
   const cosigner: string | undefined = newestCosigner(c.crowdlock);
   // A Ledger can't take home a lock whose co-signer xpub it was never given.
@@ -2168,13 +2190,19 @@ function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { acc
 
   const ready = waiting !== null && waiting.confirmed >= minimum && waiting.confirmed > 0n;
 
+  // The Crowdlock's page lists only locks that hold money. Ones taken home, or
+  // never paid into, are history: they sit behind one row, on a page of their own.
+  const live = (r: LockRow) => r.state === "locked" || r.state === "arriving" || r.state === "lapsed";
+  const shown = rows === null ? null : all ? rows : rows.filter(live);
+  const past = rows === null ? 0 : rows.filter((r) => !live(r)).length;
+
   return (
     <View>
-      <Text style={s.h2}>Your locks</Text>
+      <Text style={all ? s.h1 : s.h2}>{all ? "All your locks" : "Your locks"}</Text>
       <LedgerHint account={account} />
       {account.kind === "ledger" && !xpubForKey(c.crowdlock, cosigner) && <Text style={s.error}>This Crowdlock's co-signer hasn't published the xpub a Ledger needs, so a Ledger can't lock here yet: it couldn't take the lock home. Ask its founder to add it.</Text>}
 
-      {waiting === null ? <ActivityIndicator /> : (waiting as any).failed ? null : ready ? (
+      {all ? null : waiting === null ? <ActivityIndicator /> : (waiting as any).failed ? null : ready ? (
         <View style={s.panel}>
           <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting, enough for a lock that counts.</Text>
           {paused && <Text style={s.note}>New locks are paused until you've looked at the changed co-signer keys above.</Text>}
@@ -2187,10 +2215,11 @@ function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { acc
             : `${btc(waiting.confirmed)} waiting. ${btc(minimum - waiting.confirmed)} more and you can lock it.`}
         </Text>
       )}
-      {waiting && waiting.arriving > 0n && <Text style={s.note}>+ {btc(waiting.arriving)} arriving — it can be locked once it confirms.</Text>}
+      {!all && waiting && waiting.arriving > 0n && <Text style={s.note}>+ {btc(waiting.arriving)} arriving — it can be locked once it confirms.</Text>}
       {message && <Text style={message.ok ? s.good : s.error}>{message.text}</Text>}
 
-      {rows === null ? null : rows.length === 0 ? null : rows.map((r) => (
+      {all && rows !== null && rows.length === 0 && <Text style={s.note}>You have no locks in this Crowdlock yet.</Text>}
+      {shown === null ? null : shown.map((r) => (
         <View key={r.address} style={s.card}>
           <Text style={s.cardTitle}>{r.state === "withdrawn" || r.state === "empty" ? "" : `${btc(r.confirmed > 0n ? r.confirmed : r.arriving)} · `}{STATE[r.state] ?? r.state}</Text>
           <Text style={s.note}>
@@ -2200,13 +2229,16 @@ function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { acc
           </Text>
           {r.confirmed > 0n && <Text style={r.onRegister ? s.good : s.note}>{r.note ?? (r.onRegister ? "On the register" : "Goes on the register once it confirms")}</Text>}
           {r.state === "arriving" && <Text style={s.note}>Goes on the register once it confirms.</Text>}
-          <Text style={[s.mono, { fontSize: 12 }]} selectable>{r.address}</Text>
+          {all && <Text style={[s.mono, { fontSize: 12 }]} selectable>{r.address}</Text>}
           {r.state === "lapsed" && <>
             <Button label="Take it home" onPress={() => onHome(r.address)} />
             <Button label="Lock it again" kind="plain" disabled={paused || noLedgerXpub} onPress={() => onHome(r.address, true)} />
           </>}
         </View>
       ))}
+      {!all && onAll && rows !== null && rows.length > 0 && (
+        <NavRow title="All your locks" sub={past > 0 ? `${rows.length} in all, ${past} already taken home. With each lock's address.` : "With each lock's address"} onPress={onAll} />
+      )}
     </View>
   );
 }
@@ -2483,6 +2515,9 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
   const [status, setStatus] = useState<string>("unknown");
   const [published, setPublished] = useState<string | null>(null);
   const [open, setOpen] = useState(!!alone);
+  // On its own page, each job has a row; this is the one that is open.
+  const [job, setJob] = useState<null | "update" | "keys" | "destinations" | "proposal" | "maintainers">(null);
+  useBack(() => { if (alone && job) { setJob(null); return true; } return false; });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const { withSignIn, codeView } = useGitHub();
@@ -2528,23 +2563,49 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
     setBusy(false);
   };
 
+  const updateBox = <>
+    {status === "behind" && <View style={s.panel}>
+      <Text style={s.p}>What the update brings:</Text>
+      {changesSince(published, template.changes).map((x: any) => <Text key={x.version} style={s.note}>• {x.change}</Text>)}
+      <Text style={s.note}>It changes only the inbox's code, in one commit anyone can read. The declaration, register and settings are untouched.</Text>
+      <Button label={busy ? "Updating…" : "Update it"} disabled={busy} onPress={update} />
+    </View>}
+    {status === "current" && <Text style={s.good}>Its inbox is up to date.</Text>}
+    {status !== "behind" && status !== "current" && <Text style={s.note}>Nothing to update just now.</Text>}
+    {codeView}
+    {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+  </>;
+  const here = c.crowdlock.network === NETWORK;
+
+  // On its own page: a list of jobs, then one job at a time.
+  if (alone) return job === null ? (
+    <View>
+      <NavRow title="Update it" sub={status === "behind" ? "An update is available" : status === "current" ? "Its inbox is up to date" : "Keep its inbox on the newest code"} state={status === "behind" ? { text: "Update available", good: false } : undefined} onPress={() => setJob("update")} />
+      <NavRow title="Co-signer keys" sub="The keys that can add the second signature to a purchase" onPress={() => setJob("keys")} />
+      {here && <NavRow title="Destinations" sub="The addresses a proposal is allowed to pay" onPress={() => setJob("destinations")} />}
+      {here && <NavRow title="Write a proposal" sub="Put a purchase to the members" onPress={() => setJob("proposal")} />}
+      <NavRow title="Maintainers" sub="Other people who can help run it" onPress={() => setJob("maintainers")} />
+    </View>
+  ) : (
+    <View>
+      <Btn kind="link" label="‹ All the jobs" onPress={() => setJob(null)} />
+      {job === "update" && <><Text style={s.h2}>Update it</Text><Text style={s.note}>A Crowdlock's inbox is the small program, in its own GitHub account, that collects new members, locks and commitments. The app can bring it up to the newest version.</Text>{updateBox}</>}
+      {job === "keys" && <><CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
+      {job === "destinations" && <><Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
+      {job === "proposal" && <><WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
+      {job === "maintainers" && <><Text style={s.h2}>Maintainers</Text><MaintainerAdvice /><MaintainerForm owner={where.owner} repo={where.repo} /></>}
+    </View>
+  );
+
   return (
     <View>
-      {!alone && <Text style={s.h2}>Look after this Crowdlock</Text>}
+      <Text style={s.h2}>Look after this Crowdlock</Text>
       {status === "behind" && <Text style={s.note}>An update is available for this Crowdlock's inbox.</Text>}
       {!open ? <Button label="For its founder and maintainers" kind="plain" onPress={() => setOpen(true)} /> : <>
-        {status === "behind" && <View style={s.panel}>
-          <Text style={s.p}>What the update brings:</Text>
-          {changesSince(published, template.changes).map((x: any) => <Text key={x.version} style={s.note}>• {x.change}</Text>)}
-          <Text style={s.note}>It changes only the inbox's code, in one commit anyone can read. The declaration, register and settings are untouched.</Text>
-          <Button label={busy ? "Updating…" : "Update it"} disabled={busy} onPress={update} />
-        </View>}
-        {status === "current" && <Text style={s.good}>Its inbox is up to date.</Text>}
-        {codeView}
-        {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+        {updateBox}
         <CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />
-        {c.crowdlock.network === NETWORK && <Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />}
-        {c.crowdlock.network === NETWORK && <WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
+        {here && <Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />}
+        {here && <WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
         <Text style={s.label}>Maintainers</Text>
         <MaintainerAdvice />
         <MaintainerForm owner={where.owner} repo={where.repo} />
@@ -2635,21 +2696,38 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
   return pile;
 }
 
-function Proposals({ c, account, onOpen }: { c: Extract<Loaded, { ok: true }>; account: any; onOpen: (hash: string) => void }) {
+function Proposals({ c, account, onOpen, onAll, all = false }: { c: Extract<Loaded, { ok: true }>; account: any; onOpen: (hash: string) => void; onAll?: () => void; all?: boolean }) {
   const list: any[] = c.proposals ?? [];
+  // Which proposals are finished: paid in full, declared dead, or past their dates.
+  const [ended, setEnded] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let live = true;
+    for (const p of list) {
+      readPile(c, p, account).then((x) => {
+        if (live && (x.paid >= p.target.sats || !!x.notice)) setEnded((old) => ({ ...old, [p.hash]: true }));
+      }).catch(() => {});
+    }
+    return () => { live = false; };
+  }, [c]);
   if (!c.crowdlock.register.proposals && list.length === 0) return null;
+  const finished = (p: any) => !!ended[p.hash] || phaseOf(p) === "over";
+  const newest = list.slice().reverse();
+  const shown = all ? newest : newest.filter((p) => !finished(p));
+  const past = newest.length - newest.filter((p) => !finished(p)).length;
   return (
     <View>
-      <Text style={s.h2}>Proposals</Text>
+      <Text style={all ? s.h1 : s.h2}>{all ? "All proposals" : "Proposals"}</Text>
       {(c.proposalProblems ?? []).map((x: string, i: number) => <Text key={i} style={s.error}>{x}</Text>)}
       {list.length === 0 && <Text style={s.note}>No proposals yet. A proposal is a purchase the members are asked to pay for together. When one is published, you can commit your locked bitcoin to it here. Nothing moves unless it reaches its target.</Text>}
-      {list.slice().reverse().map((p) => (
+      {!all && list.length > 0 && shown.length === 0 && <Text style={s.note}>No proposal is open just now. When one is published, it shows here.</Text>}
+      {shown.map((p) => (
         <Pressable key={p.hash} accessibilityRole="button" onPress={() => onOpen(p.hash)} style={s.card}>
           <Text style={[s.p, s.bold]}>{p.title}</Text>
           <ProposalStatus c={c} p={p} account={account} />
           <Text style={s.link}>Read it and see who's committed →</Text>
         </Pressable>
       ))}
+      {!all && onAll && past > 0 && <NavRow title="Past proposals" sub={`${past} finished: paid, declared dead, or over`} onPress={onAll} />}
     </View>
   );
 }
