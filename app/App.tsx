@@ -2975,7 +2975,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         setTitle(t); setChecked(null);
       }} />
       <Text style={s.label}>The declaration — what people sign</Text>
-      <Text style={s.note}>Replace the bracketed part with what you're raising money for. Keep the no-returns line exactly as it is: it's the one rule every Crowdlock shares. Once anyone signs, these words can never change.</Text>
+      <Text style={s.note}>Replace the bracketed part with what you're raising money for. Leave the line about returns as it is. It's what makes this a Crowdlock. Investments that pay returns have legal rules to follow, and Crowdlock follows none of them. Once anyone signs, these words can never change.</Text>
       <Input style={[s.input, { minHeight: 240, textAlignVertical: "top" }]} multiline value={text} onChangeText={(t) => { setText(t); setChecked(null); }} />
 
       {network === "mainnet" ? <>

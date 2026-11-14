@@ -41,7 +41,7 @@ export function declarationSkeleton(title = "OUR DECLARATION") {
     "",
     "[Write it here, in plain words. Say what the money will buy, who will hold it, and what happens if it never gets bought.]",
     "",
-    "THE RULE THAT DOES NOT CHANGE",
+    "WHAT SUPPORTERS GET BACK",
     "",
     NO_RETURNS,
     "",
@@ -173,7 +173,7 @@ export function buildCrowdlock({ name, about, title, declarationText, network, m
   need(about.length >= 10 && about.length <= 300, "Say in a sentence what it is for (10 to 300 characters).");
   need(title.length >= 3 && title.length <= 80, "Give the declaration a title of 3 to 80 characters.");
   need(!/[()\n]/.test(title), "The declaration's title can't contain brackets — it goes inside what members sign.");
-  need(text.includes(NO_RETURNS), "The declaration must keep the no-returns line exactly as it is. It's the one rule every Crowdlock shares.");
+  need(text.includes(NO_RETURNS), "The line about returns has been changed. Put it back as it was: it's what makes this a Crowdlock.");
   need(!text.includes("[Write it here"), "Replace the [Write it here…] part with what you're raising money for.");
   need(text.length <= 20000, "The declaration is too long — keep it under 20,000 characters.");
   need(network === "mainnet" || network === "testnet4", "Choose real or test bitcoin.");
