@@ -67,7 +67,7 @@ import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
   loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed, loadLook, saveLook, moveSavedRecords } from "./src/storage";
 import type { FeeSpeed } from "./src/storage";
-import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB } from "./src/config";
+import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB, EXPLORER_BACKUP_WEB } from "./src/config";
 import { askAfresh } from "./src/wallet/esplora.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
 import { banner, font, gap, radius, setLook, size, themeFor, useLook, useTheme } from "./src/ui/theme";
@@ -998,6 +998,11 @@ function About() {
       <Text style={s.p}>This is not an investment. There is no return, no dividend and no payout, now or ever. Bitcoin rises and falls, and bitcoin you lock can fall in value while it is locked. Nothing here is legal or financial advice.</Text>
       <Text style={s.label}>Where the app reads the blockchain</Text>
       <Text style={s.mono} selectable>{EXPLORER_WEB}</Text>
+      {EXPLORER_BACKUP_WEB && <>
+        <Text style={s.note}>If that one doesn't answer, the app asks this one instead:</Text>
+        <Text style={s.mono} selectable>{EXPLORER_BACKUP_WEB}</Text>
+        <Text style={s.note}>Neither can move your money. The app believes whichever answers about balances and the time on the chain.</Text>
+      </>}
     </View>
   );
 }

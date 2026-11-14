@@ -290,6 +290,121 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   check("…one just past its date, or still ahead of it, is read every time", times("tb1qrecent") === 2 && times("tb1qopen") === 2);
 }
 
+// A backup explorer, for real bitcoin: when the main one is silent, busy or
+// broken, the other is asked. Neither can move money; nothing gets a backup
+// unless it is given one.
+{
+  const { BACKUP_EXPLORERS, EXPLORERS } = await import("../src/wallet/esplora.mjs");
+  const { committedTotal } = await import("../src/crowdlocks.mjs");
+  const never = (init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+  const two = (main, fetchImpl, more = {}) => esploraChain(main, fetchImpl, 50, { backup: "https://b", preferMs: 80, downMs: 80, ...more });
+  const coin = [{ txid: "aa", vout: 0, value: 5000, status: { confirmed: true } }];
+
+  let log = [];
+  let mainMode = "silent";
+  const net = async (url, init) => {
+    url = String(url); log.push(url);
+    if (url.startsWith("https://b")) {
+      if (url.endsWith("/fee-estimates")) return Response.json({ "1": 12.3, "2": 12.3, "3": 6.1, "6": 2.2, "144": 1.01 });
+      return Response.json(coin);
+    }
+    if (mainMode === "silent") return never(init);
+    if (mainMode === "busy") return new Response("slow down", { status: 429 });
+    if (mainMode === "broken") return new Response("bad gateway", { status: 502 });
+    if (mainMode === "no") return new Response("Transaction not found", { status: 404 });
+    return Response.json([]);
+  };
+  const toMain = () => log.filter((u) => u.startsWith("https://m")).length;
+  const toBackup = () => log.filter((u) => u.startsWith("https://b")).length;
+
+  const c = two("https://m1", net);
+  const t0 = Date.now();
+  const got = await c.utxos("tb1qa");
+  check("When the main explorer is silent the backup is asked, and answers", got.length === 1 && got[0].value === 5000 && toBackup() === 1 && Date.now() - t0 < 100, log.join(" "));
+  log = [];
+  await c.utxos("tb1qb");
+  check("…and the next question goes straight to the backup", toMain() === 0 && toBackup() === 1, log.join(" "));
+  await new Promise((r) => setTimeout(r, 100));
+  mainMode = "fine"; log = [];
+  const back = await c.utxos("tb1qc");
+  check("…until a minute has passed, when the main one is asked first again", back.length === 0 && log[0].startsWith("https://m1") && toBackup() === 0, log.join(" "));
+
+  mainMode = "busy"; log = [];
+  let waited = false;
+  const viaBusy = await two("https://m2", net, { wait: async () => { waited = true; } }).utxos("tb1qa");
+  check("A busy main explorer is passed over at once, without waiting it out", viaBusy.length === 1 && !waited && toMain() === 1 && toBackup() === 1);
+  mainMode = "broken"; log = [];
+  check("…and so is a broken one", (await two("https://m3", net).utxos("tb1qa")).length === 1 && toBackup() === 1);
+  mainMode = "no"; log = [];
+  let said = null;
+  try { await two("https://m4", net).txHex("ff"); } catch (e) { said = e.message; }
+  check("A plain 'no' is an answer: the backup isn't asked to contradict it", /answered 404/.test(said ?? "") && toBackup() === 0, said ?? "NO ERROR");
+
+  mainMode = "silent"; log = [];
+  const fees = await two("https://m5", net).feeRates();
+  check("The backup's fee rates are read in its own wording", fees.fast === 13 && fees.normal === 7 && fees.slow === 3 && log.some((u) => u === "https://b/fee-estimates"), JSON.stringify(fees));
+
+  // Both silent: one error, in the time it names, then fail fast as before.
+  const dead = async (url, init) => never(init);
+  const d = two("https://m6", dead);
+  let why = null; const t1 = Date.now();
+  try { await d.utxos("tb1qa"); } catch (e) { why = e.message; }
+  const t2 = Date.now();
+  let next = null;
+  try { await d.utxos("tb1qb"); } catch (e) { next = e.message; }
+  check("With both silent the fan is told once, in the time named, and the rest fail at once",
+    /didn't answer/.test(why ?? "") && t2 - t1 < 200 && next === why && Date.now() - t2 < 20, why ?? "NO ERROR");
+
+  // Sending. The same signed payment is offered to the backup only when the
+  // main explorer didn't take it; a refusal is a refusal.
+  let sends = [];
+  const sender = (mainSays, backupSays) => async (url, init) => {
+    url = String(url);
+    if (init?.method !== "POST") return Response.json([]);
+    sends.push(url);
+    const says = url.startsWith("https://b") ? backupSays : mainSays;
+    if (says === "silent") return never(init);
+    if (says === "ok") return new Response("txid123");
+    if (says === "has it") return new Response('sendrawtransaction RPC error: {"code":-27,"message":"Transaction already in block chain"}', { status: 400 });
+    if (says === "has it unconfirmed") return new Response('sendrawtransaction RPC error: {"code":-25,"message":"txn-already-in-mempool"}', { status: 400 });
+    return new Response('sendrawtransaction RPC error: {"code":-26,"message":"min relay fee not met"}', { status: 400 });
+  };
+  const sent = await two("https://s1", sender("silent", "ok")).broadcast("00");
+  check("A payment the main explorer didn't take is sent through the backup", sent === "txid123" && sends.length === 2 && sends[1] === "https://b/tx", sends.join(" "));
+  sends = [];
+  let threw = null;
+  try { await two("https://s2", sender("silent", "has it")).broadcast("00"); } catch (e) { threw = e.message; }
+  let threw2 = null;
+  try { await two("https://s3", sender("silent", "has it unconfirmed")).broadcast("00"); } catch (e) { threw2 = e.message; }
+  check("If the backup already has it, the main one did pass it on: that is sent, not an error", threw === null && threw2 === null, threw ?? threw2 ?? "");
+  sends = [];
+  let refused = null;
+  try { await two("https://s4", sender("refuse", "ok")).broadcast("00"); } catch (e) { refused = e.message; }
+  check("A payment the network refuses is not offered to the backup", /the network refused it: .*min relay fee/.test(refused ?? "") && sends.length === 1, `${refused} | ${sends.join(" ")}`);
+  sends = [];
+  let bothRefuse = null;
+  try { await two("https://s5", sender("silent", "refuse")).broadcast("00"); } catch (e) { bothRefuse = e.message; }
+  check("…and a refusal from the backup is passed on as a refusal", /the network refused it/.test(bothRefuse ?? ""), bothRefuse ?? "NO ERROR");
+
+  // Who gets one.
+  log = [];
+  const unreachable = async (url) => { log.push(String(url)); throw new TypeError("Network request failed"); };
+  try { await esploraChain("https://mempool.space/api", unreachable, 50).utxos("bc1qa"); } catch {}
+  check("Nothing gets a backup unless it is given one", log.length === 2 && log.every((u) => u.startsWith("https://mempool.space/api")), log.join(" "));
+  check("Real bitcoin has a backup explorer and the test network has none",
+    BACKUP_EXPLORERS[EXPLORERS.mainnet] === "https://blockstream.info/api" && BACKUP_EXPLORERS[EXPLORERS.testnet4] === undefined);
+  const mainDown = async (url) => {
+    url = String(url);
+    if (url.startsWith("https://mempool.space")) throw new TypeError("Network request failed");
+    return Response.json(url.startsWith("https://blockstream.info/api/address/bc1qlock/utxo") ? [{ txid: "aa", vout: 0, value: 250000, status: { confirmed: true } }] : []);
+  };
+  const total = await committedTotal({
+    crowdlock: { chain_api: "https://mempool.space/api", minimum_counted_lock_sats: 200000 },
+    register: { locks: [{ address: "bc1qlock", locktime: 4000000000, member: "bc1qm" }] },
+  }, mainDown);
+  check("A Crowdlock's total is still counted when its explorer is down, from the backup", total.sats === 250000n && total.members === 1, String(total.sats));
+}
+
 // Every co-signer key this repository publishes must be a real point on the
 // curve: one that only looks right would make every lock naming it impossible
 // to spend by the purchase route, and nothing would say so until it was tried.

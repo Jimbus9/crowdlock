@@ -59,7 +59,7 @@ export function askAfresh(rawFetch = globalThis.fetch) {
 }
 
 export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = TIMEOUT_MS,
-  { rememberMs = REMEMBER_MS, retries = RETRIES, wait = pause, minFee = 1, downMs = DOWN_MS } = {}) {
+  { rememberMs = REMEMBER_MS, retries = RETRIES, wait = pause, minFee = 1, downMs = DOWN_MS, backup = "", preferMs = PREFER_MS } = {}) {
   const fetchImpl = withTimeout(rawFetch, timeoutMs);
   const firstTry = withTimeout(rawFetch, timeoutMs * FIRST_TRY, timeoutMs);
   const secondTry = withTimeout(rawFetch, timeoutMs * (1 - FIRST_TRY), timeoutMs);
@@ -67,9 +67,18 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
   const memory = memories.get(rawFetch);
   // Whether this explorer has just gone unanswered, shared by every screen.
   const downKey = `down ${baseUrl}`;
-  const ask = async (url, as) => {
-    const down = memory.get(downKey);
-    if (down && Date.now() - down.at < downMs) throw new Error(down.why);
+  // With a backup explorer, which of the two answered last. While the first is
+  // failing, questions go straight to the backup rather than waiting on it.
+  const preferKey = `prefer ${baseUrl}`;
+  const sources = backup ? [baseUrl, backup] : [baseUrl];
+  const backupFirst = () => { const p = memory.get(preferKey); return !!p && Date.now() - p.at < preferMs; };
+  const order = () => (sources.length === 2 && backupFirst() ? [1, 0] : sources.map((_, i) => i));
+  const answered = (i) => { memory.delete(downKey); if (i === 1) memory.set(preferKey, { at: Date.now() }); else memory.delete(preferKey); };
+  const read = (res, as) => (as === "json" ? res.json() : res.text());
+
+  // One explorer: ask, and if it doesn't answer, ask once more.
+  const askOne = async (path, as) => {
+    const url = `${baseUrl}${path}`;
     let unanswered = 0;
     for (let attempt = 0; ; ) {
       let res;
@@ -80,7 +89,7 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
         throw e;
       }
       memory.delete(downKey);
-      if (res.ok) return as === "json" ? res.json() : res.text();
+      if (res.ok) return read(res, as);
       if (!busy(res.status)) throw new Error(`the block explorer answered ${res.status}`);
       if (attempt >= retries) throw new Error(BUSY);
       // Honour the explorer's own "try again in N seconds", within reason.
@@ -89,13 +98,39 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
       attempt++;
     }
   };
+
+  // Two explorers: the second try goes to the other one. An explorer that is
+  // silent, busy or broken (a 5xx) is passed over; any other answer, a "no
+  // such transaction" included, is an answer, and the other would say the same.
+  // `only` asks just one of them, for the few questions they word differently.
+  const askEither = async (path, as, only) => {
+    const turn = only === undefined ? order() : [only];
+    let last = null;
+    for (const [n, i] of turn.entries()) {
+      let res;
+      try { res = await (n === 0 ? firstTry : secondTry)(`${sources[i]}${path}`); }
+      catch (e) { if (!e.unanswered) throw e; last = e; continue; }
+      if (res.ok) { answered(i); return read(res, as); }
+      if (busy(res.status)) { last = new Error(BUSY); continue; }
+      if (res.status >= 500) { last = new Error(`the block explorer answered ${res.status}`); continue; }
+      throw new Error(`the block explorer answered ${res.status}`);
+    }
+    if (last.unanswered && only === undefined) memory.set(downKey, { at: Date.now(), why: last.message });
+    throw last;
+  };
+
+  const ask = async (path, as, only) => {
+    const down = memory.get(downKey);
+    if (down && Date.now() - down.at < downMs) throw new Error(down.why);
+    return sources.length === 2 ? askEither(path, as, only) : askOne(path, as);
+  };
   // `forGood`: an answer that can never change (a block by its hash) is asked once and kept for as long as the app is open.
-  const get = (path, as = "json", forGood = false) => {
+  const get = (path, as = "json", forGood = false, only = undefined) => {
     const url = `${baseUrl}${path}`;
     const key = `${forGood ? "kept " : ""}${as} ${url}`;
     const held = memory.get(key);
     if (held && (forGood || Date.now() - held.at < rememberMs)) return held.answer;
-    const answer = ask(url, as);
+    const answer = ask(path, as, only);
     memory.set(key, { at: Date.now(), answer });
     answer.catch(() => { if (memory.get(key)?.answer === answer) memory.delete(key); });
     return answer;
@@ -133,8 +168,17 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
      * fall out of order.
      */
     async feeRates() {
+      // The two explorers word this one differently: the first gives three
+      // named rates, the backup a rate for each number of blocks to wait.
+      const named = () => get("/v1/fees/recommended", "json", false, backup ? 0 : undefined);
+      const byBlocks = async () => {
+        const e = await get("/fee-estimates", "json", false, 1);
+        return { fastestFee: e?.["1"] ?? e?.["2"], halfHourFee: e?.["3"], hourFee: e?.["6"] };
+      };
       let f = null;
-      try { f = await get("/v1/fees/recommended"); } catch {}
+      for (const way of !backup ? [named] : backupFirst() ? [byBlocks, named] : [named, byBlocks]) {
+        try { f = await way(); break; } catch {}
+      }
       const at = (v, fallback) => Math.max(minFee, Math.ceil(Number(v) > 0 ? Number(v) : fallback));
       const slow = at(f?.hourFee, 1);
       const normal = Math.max(slow, at(f?.halfHourFee, 2));
@@ -146,16 +190,52 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
       const r = await this.feeRates();
       return r[speed] ?? r.normal;
     },
+    /**
+     * Send a payment. With one explorer it is sent once. With a backup, a
+     * payment the first explorer didn't take (silent, busy or broken) is
+     * offered to the other: it is the same signed payment, so it can only ever
+     * be paid once, whichever of them passes it on, or both.
+     */
     async broadcast(hex) {
-      const res = await fetchImpl(`${baseUrl}/tx`, { method: "POST", body: hex });
-      forget();
-      const text = await res.text();
-      if (busy(res.status)) throw new Error(`${BUSY} — nothing was sent`);
-      if (!res.ok) throw new Error(`the network refused it: ${text.slice(0, 160)}`);
-      return text.trim(); // the txid
+      let last = null;
+      const turn = order();
+      for (const [n, i] of turn.entries()) {
+        let res;
+        try { res = await fetchImpl(`${sources[i]}/tx`, { method: "POST", body: hex }); }
+        catch (e) { forget(); if (!e.unanswered || n === turn.length - 1) throw e; last = e; continue; }
+        forget();
+        const text = await res.text();
+        if (res.ok) { answered(i); return text.trim(); } // the txid
+        // The other explorer already has it: the first one did pass it on.
+        if (last && ALREADY_SENT.test(text)) return "";
+        const more = n < turn.length - 1;
+        if (busy(res.status)) { last = new Error(`${BUSY} — nothing was sent`); if (more) continue; throw last; }
+        if (res.status >= 500 && more) { last = new Error(`the block explorer answered ${res.status}`); continue; }
+        throw new Error(`the network refused it: ${text.slice(0, 160)}`);
+      }
+      throw last;
     },
   };
 }
+
+// What an explorer says when offered a payment the network already has.
+const ALREADY_SENT = /already in (the )?(block ?chain|mempool|utxo set)|txn-already-(known|in-mempool)/i;
+
+// How long the backup stays first in line after the main explorer fails.
+export const PREFER_MS = 60000;
+
+/**
+ * A second explorer the app may ask when the first is silent, busy or broken,
+ * by the first one's address. Real bitcoin only: nobody else runs a public
+ * one for testnet4. Both speak the same language (mempool.space's is built on
+ * Blockstream's). Neither can move money; each is believed about balances and
+ * the chain's clock while it is the one answering. A caller opts in by passing
+ * `backup`; nothing gets one by default.
+ * @type {Record<string, string>}
+ */
+export const BACKUP_EXPLORERS = {
+  "https://mempool.space/api": "https://blockstream.info/api",
+};
 
 /** Public explorers by network. A fan can swap in their own. */
 export const EXPLORERS = {

@@ -21,7 +21,7 @@
 
 import { checkCrowdlock, checkRegisterFiles, membershipStatement } from "../../method/js/crowdlock.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
-import { esploraChain } from "./wallet/esplora.mjs";
+import { esploraChain, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
 import { earlyReleases } from "../../method/js/release.mjs";
 import { checkCosignerXpubs } from "./wallet/core.mjs";
 
@@ -170,7 +170,7 @@ export function membershipOf(register, address) {
  */
 export async function committedTotal(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000)) {
   const { crowdlock, register } = loaded;
-  const chain = esploraChain(crowdlock.chain_api, fetchImpl);
+  const chain = esploraChain(crowdlock.chain_api, fetchImpl, undefined, { backup: BACKUP_EXPLORERS[crowdlock.chain_api] ?? "" });
   const seen = new Set();
   const committed = new Set();
   let sats = 0n, counted = 0;
@@ -199,7 +199,7 @@ const closedRecords = new Map();
  */
 export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000)) {
   const { crowdlock, register, destinations } = loaded;
-  const chain = esploraChain(crowdlock.chain_api, fetchImpl);
+  const chain = esploraChain(crowdlock.chain_api, fetchImpl, undefined, { backup: BACKUP_EXPLORERS[crowdlock.chain_api] ?? "" });
   const seen = new Set();
   const releases = [];
   let unreadable = 0;
