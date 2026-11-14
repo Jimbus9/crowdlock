@@ -7,7 +7,7 @@
 /** The Crowdlocks this build starts with. Anything else, the fan adds. */
 export const STARTING_LIST = [
   "https://thekopfund.org/crowdlocks/kop-fund.json",
-  "https://jimbus9.github.io/crowdlock/crowdlocks/kop-fund-testnet4.json",
+  "https://crowdlock.org/crowdlocks/kop-fund-testnet4.json",
 ];
 
 /**
@@ -21,6 +21,8 @@ export const MOVED_ADDRESSES = [
   ["https://jimbus9.github.io/fanfund/", "https://jimbus9.github.io/crowdlock/"],
   // 13 November 2026: The Kop Fund moved to its own domain.
   ["https://jimbus9.github.io/the-kop-fund/", "https://thekopfund.org/"],
+  // 14 November 2026: the method's site moved to its own domain.
+  ["https://jimbus9.github.io/crowdlock/", "https://crowdlock.org/"],
 ];
 
 /**
@@ -30,6 +32,7 @@ export const MOVED_ADDRESSES = [
  */
 export const OWN_DOMAINS = {
   "https://thekopfund.org/": { owner: "Jimbus9", repo: "the-kop-fund" },
+  "https://crowdlock.org/": { owner: "Jimbus9", repo: "crowdlock" },
 };
 
 /** Where the app links the counting rule: the method's published spec. */

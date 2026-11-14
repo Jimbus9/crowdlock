@@ -14,7 +14,7 @@ import { join, dirname } from "node:path";
 import { loadCrowdlock, baseFor, membershipOf, committedTotal, submitJoin, STARTING_LIST, shortBtc, poundsPerBtc, COUNTING_RULE_URL, submitLock, locksOnRegister, openLinkFor, fileUrlFromOpenLink, shareLinkFor, rankFound, matchesSearch } from "../src/crowdlocks.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SITE = "https://jimbus9.github.io/crowdlock/";
+const SITE = "https://crowdlock.org/";
 // The Kop Fund has its own site; the tests serve its frozen copy (method/fixtures/the-kop-fund).
 const KOP_SITE = "https://thekopfund.org/";
 const KOP_FIX = join(REPO, "method/fixtures/the-kop-fund");
@@ -83,7 +83,7 @@ swappedReg.declaration.sha256 = "0".repeat(64);
 await refuses("A register that names a different declaration",
   loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, siteFetch({ "crowdlocks/test/registrations.json": JSON.stringify(swappedReg) })),
   "");
-await refuses("A link that is not https", loadCrowdlock("http://jimbus9.github.io/crowdlock/crowdlocks/kop-fund.json", siteFetch()), "https");
+await refuses("A link that is not https", loadCrowdlock("http://crowdlock.org/crowdlocks/kop-fund.json", siteFetch()), "https");
 await refuses("Something that is not a link", loadCrowdlock("the kop fund please", siteFetch()), "not a link");
 await refuses("A link to nothing, said plainly", loadCrowdlock(`${SITE}crowdlocks/nonesuch.json`, siteFetch()), "no Crowdlock file at that link");
 
@@ -334,6 +334,11 @@ console.log("-".repeat(80));
   check("Both old addresses move to the ones on the starting list",
     movedUrl(OLD_KOP, MOVED_ADDRESSES) === NEW_KOP && movedUrl(OLD_TEST, MOVED_ADDRESSES) === NEW_TEST);
   check("…and nothing else moves", movedUrl(OTHER, MOVED_ADDRESSES) === OTHER && movedUrl(NEW_KOP, MOVED_ADDRESSES) === NEW_KOP);
+  check("The github.io test address moves to crowdlock.org too (and fanfund follows both moves)",
+    movedUrl("https://jimbus9.github.io/crowdlock/crowdlocks/kop-fund-testnet4.json", MOVED_ADDRESSES) === NEW_TEST
+    && NEW_TEST === "https://crowdlock.org/crowdlocks/kop-fund-testnet4.json");
+  check("A loop in the list of moves can't hang the app",
+    typeof movedUrl("https://a.example/x", [["https://a.example/", "https://b.example/"], ["https://b.example/", "https://a.example/"]]) === "string");
 
   const realLock = { crowdlock: OLD_KOP, address: "bc1qreal", locktime: 1826000000, cosignerPubkey: "02aa" };
   const testLock = { crowdlock: OLD_TEST, address: "tb1qtest", locktime: 1763100000, cosignerPubkey: "02bb" };

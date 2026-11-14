@@ -132,7 +132,7 @@ ${links.map((l) => `<h2>${esc(l.label)}</h2>
 <p><a class="btn" href="crowdlock://add?url=${encodeURIComponent(l.url)}">Open in the Crowdlock app</a></p>
 <p class="note">Or, in the app, tap <em>Add a Crowdlock</em> and paste: <code>${esc(l.url)}</code></p>
 <p class="note"><a href="${esc(l.declaration)}">Read the declaration</a> · <a href="${esc(l.register)}">The register</a> — every signature and lock, checkable by anyone.</p>`).join("\n")}
-<p class="note">Started with the Crowdlock app. The method is published at <a href="https://jimbus9.github.io/crowdlock/spec/">jimbus9.github.io/crowdlock/spec</a>.</p>
+<p class="note">Started with the Crowdlock app. The method is published at <a href="https://crowdlock.org/spec/">crowdlock.org/spec</a>.</p>
 </body>
 </html>
 `;

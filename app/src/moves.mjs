@@ -14,8 +14,16 @@
 
 /** The address `url` has moved to, or `url` itself if it hasn't moved. */
 export function movedUrl(url, moves) {
-  const u = String(url ?? "");
-  for (const [from, to] of moves ?? []) if (u.startsWith(from)) return to + u.slice(from.length);
+  let u = String(url ?? "");
+  // A move can land on an address that has moved again since (fanfund →
+  // jimbus9.github.io/crowdlock → crowdlock.org), so follow them to the end.
+  // Bounded by the length of the list, so a loop in it can't hang the app.
+  const list = moves ?? [];
+  for (let hop = 0; hop <= list.length; hop++) {
+    const m = list.find(([from]) => u.startsWith(from));
+    if (!m) break;
+    u = m[1] + u.slice(m[0].length);
+  }
   return u;
 }
 
