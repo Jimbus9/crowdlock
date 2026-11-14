@@ -455,15 +455,34 @@ export async function buildLock({ account, chain, lock, feeRate, amount = "all" 
  *   "lapsed"     confirmed money, date passed — the owner may take it home
  *   "withdrawn"  it held money once and is empty now
  * `medianTime` is the chain's own clock, the one its date is judged by.
+ *
+ * Two ways to ask less of the block explorer, both the caller's choice:
+ *   `quick`     don't ask whether an empty lock ever held money (a screen
+ *               that doesn't show empty locks has no use for the answer); an
+ *               empty lock is then reported as "withdrawn".
+ *   `finished`  a Map the caller keeps. A lock found empty after its date is
+ *               over: it is noted there and not asked about again, so a page
+ *               doesn't re-ask about every lock a fan ever took home. The
+ *               caller empties the Map when the fan asks to check again, which
+ *               is when money sent to an old lock's address would be found.
+ *
+ * @param {{ chain: any, lock: any, medianTime: number, quick?: boolean, finished?: Map<string, string> | null }} args
  */
-export async function lockState({ chain, lock, medianTime }) {
-  const coins = await chain.utxos(lock.address);
+export async function lockState({ chain, lock, medianTime, quick = false, finished = null }) {
+  const over = lock.locktime <= medianTime;
+  const noted = over ? finished?.get(lock.address) : undefined;
+  // Already known to be finished, and known how (or this screen doesn't care how).
+  if (noted && (noted !== "unasked" || quick)) return { state: noted === "empty" ? "empty" : "withdrawn", confirmed: 0n, arriving: 0n };
+  const coins = noted ? [] : await chain.utxos(lock.address);
   const confirmed = coins.filter((c) => c.confirmed).reduce((s, c) => s + BigInt(c.value), 0n);
   const arriving = coins.filter((c) => !c.confirmed).reduce((s, c) => s + BigInt(c.value), 0n);
   let state;
-  if (confirmed > 0n) state = lock.locktime > medianTime ? "locked" : "lapsed";
+  if (confirmed > 0n) state = over ? "lapsed" : "locked";
   else if (arriving > 0n) state = "arriving";
-  else state = (await chain.everFunded(lock.address)) ? "withdrawn" : "empty";
+  else {
+    state = quick || (await chain.everFunded(lock.address)) ? "withdrawn" : "empty";
+    if (over) finished?.set(lock.address, quick ? "unasked" : state);
+  }
   return { state, confirmed, arriving };
 }
 

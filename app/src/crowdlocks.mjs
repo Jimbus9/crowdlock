@@ -188,6 +188,9 @@ export async function committedTotal(loaded, fetchImpl = globalThis.fetch, now =
   return { sats, locks: counted, members: committed.size };
 }
 
+const CLOSED_AFTER = 3 * 3600;
+const closedRecords = new Map();
+
 /**
  * The co-signer's record: every lock on the register that the co-signer helped
  * open before its date, other than to pay a listed destination. Read from the
@@ -205,7 +208,19 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
     if (seen.has(address)) continue;
     seen.add(address);
     try {
-      for (const r of earlyReleases(lock, await chain.txs(lock.address), destinations ?? null, now)) {
+      // Only a spend before the lock's date can be a release, so once a lock is
+      // well past its date its record is closed: what was read then is kept for
+      // as long as the app is open, and a page doesn't re-ask about every lock
+      // the register has ever held. (The margin covers how far a block's own
+      // time can sit from the real time.)
+      const key = `${crowdlock.chain_api} ${address}`;
+      const closed = lock.locktime + CLOSED_AFTER < now;
+      let txs = closed ? closedRecords.get(key) : undefined;
+      if (!txs) {
+        txs = await chain.txs(lock.address);
+        if (closed) closedRecords.set(key, txs);
+      }
+      for (const r of earlyReleases(lock, txs, destinations ?? null, now)) {
         releases.push({ address: lock.address, member: lock.member ?? null, ...r });
       }
     } catch { unreadable++; }

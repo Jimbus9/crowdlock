@@ -68,6 +68,7 @@ import {
   loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed, loadLook, saveLook, moveSavedRecords } from "./src/storage";
 import type { FeeSpeed } from "./src/storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB } from "./src/config";
+import { askAfresh } from "./src/wallet/esplora.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
 import { banner, font, gap, radius, setLook, size, themeFor, useLook, useTheme } from "./src/ui/theme";
 import type { Look, Theme } from "./src/ui/theme";
@@ -245,7 +246,8 @@ export default function App() {
   const lastRun = useRef(0);
   const runAll = useCallback(async (spin: boolean) => {
     lastRun.current = Date.now();
-    if (spin) setRefreshing(true);
+    // Asked for by hand: really ask, about everything, old locks included.
+    if (spin) { askAfresh(); finishedLocks.clear(); setRefreshing(true); }
     await Promise.all([...refreshers.current].map((f) => Promise.resolve().then(f).catch(() => {})));
     setCheckedAt(Date.now());
     if (spin) setRefreshing(false);
@@ -590,9 +592,13 @@ async function inPile(c: Extract<Loaded, { ok: true }>, p: any, publicKey: strin
 
 // Home asks the block explorer as little as it can: the balance, the
 // network's clock, and one question per lock. Whether an empty lock was ever
-// funded doesn't matter here (it isn't shown), so that second question is
-// answered without asking. The Crowdlock's own page still asks everything.
-const quickChain = { utxos: (address: string) => chain.utxos(address), everFunded: async () => true };
+// funded doesn't matter here (it isn't shown), so that second question isn't
+// asked (`quick`). The Crowdlock's own page still asks everything.
+//
+// Locks found empty after their date are noted here and not asked about again
+// (see lockState), so nobody waits while the app re-asks about every lock they
+// ever took home. "Check now" and pulling down empty it and ask everything.
+const finishedLocks = new Map<string, string>();
 
 function useOverview(account: any): Overview {
   const held = lastOverview && lastOverview.address === account.address ? lastOverview : null;
@@ -634,7 +640,7 @@ function useOverview(account: any): Overview {
         for (const l of terms) {
           if (!alive.current) return;   // Home has been left: stop asking
           try {
-            const st = await lockState({ chain: quickChain, lock: l, medianTime });
+            const st = await lockState({ chain, lock: l, medianTime, quick: true, finished: finishedLocks });
             if (st.confirmed > 0n || st.arriving > 0n) mine.push({ crowdlock: c.url, name: c.crowdlock.name, address: l.address, locktime: l.locktime, ...st });
           } catch { missed++; }
         }
@@ -1243,7 +1249,7 @@ function HomeFlow({ words, url, address, again, go }: { words: string; url: stri
         for (const l of saved) if (!all.some((x) => x.address === l.address)) all.push(l);
         const out: LockRow[] = [];
         for (const l of all) {
-          const st = await lockState({ chain, lock: l, medianTime });
+          const st = await lockState({ chain, lock: l, medianTime, finished: finishedLocks });
           if (st.state === "lapsed") out.push({ ...l, ...st, onRegister: onReg.some((x) => x.address === l.address) });
         }
         out.sort((a, b) => a.locktime - b.locktime);
@@ -1916,7 +1922,7 @@ function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { acc
       for (const l of saved) if (!all.some((x) => x.address === l.address)) all.push(l);
       const out: LockRow[] = [];
       for (const l of all) {
-        const st = await lockState({ chain, lock: l, medianTime });
+        const st = await lockState({ chain, lock: l, medianTime, finished: finishedLocks });
         const row: LockRow = { ...l, ...st, onRegister: onReg.some((x) => x.address === l.address) };
         // A lock with confirmed money that the register does not have yet is
         // sent to it now, every time this page opens, until it is taken.

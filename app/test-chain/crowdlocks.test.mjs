@@ -190,6 +190,106 @@ try { await fc.utxos("tb1qa"); } catch {}
 await fc.utxos("tb1qa");
 check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
 
+// The explorer going quiet. One unanswered question is usually a hiccup, so a
+// question is asked twice before giving up; once it has given up, the
+// questions queued behind it fail at once rather than each waiting in turn.
+{
+  const { askAfresh } = await import("../src/wallet/esplora.mjs");
+  const { lockState } = await import("../src/wallet/core.mjs");
+  const never = (init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+  let n = 0;
+  const hiccup = async (url, init) => (++n === 1 ? never(init) : Response.json([]));
+  const got = await esploraChain("https://h", hiccup, 50).utxos("tb1qa");
+  check("A question that goes unanswered once is asked again, and answered", Array.isArray(got) && n === 2, `${n} calls`);
+
+  n = 0;
+  const dead = async (url, init) => { n++; return never(init); };
+  const d = esploraChain("https://d", dead, 50, { downMs: 80 });
+  let why = null;
+  const t0 = Date.now();
+  try { await d.utxos("tb1qa"); } catch (e) { why = e.message; }
+  const took = Date.now() - t0;
+  check("One that stays quiet is given up on after two tries, inside the time it names", /didn't answer within 0.05 seconds/.test(why ?? "") && n === 2 && took < 200, `${n} calls, ${took} ms, ${why}`);
+  let next = null;
+  const t1 = Date.now();
+  try { await d.utxos("tb1qb"); } catch (e) { next = e.message; }
+  check("The questions queued behind it fail at once, without asking", next === why && n === 2 && Date.now() - t1 < 20, `${n} calls`);
+  await new Promise((r) => setTimeout(r, 100));
+  try { await d.utxos("tb1qb"); } catch {}
+  check("…and a moment later the explorer is asked again", n === 4, `${n} calls`);
+  try { await d.utxos("tb1qc"); } catch {}
+  askAfresh(dead);
+  try { await d.utxos("tb1qc"); } catch {}
+  check("Checking again by hand asks straight away", n === 6, `${n} calls`);
+
+  n = 0;
+  let sendErr = null;
+  try { await esploraChain("https://s", dead, 50).broadcast("00"); } catch (e) { sendErr = e.message; }
+  check("A payment is only ever sent once, answered or not", n === 1 && /didn't answer/.test(sendErr ?? ""), `${n} calls`);
+
+  // Asking less. A block never changes, so the clock's second question is asked once.
+  const asked = [];
+  const tip = async (url) => { asked.push(String(url)); return String(url).endsWith("/blocks/tip/hash") ? new Response("abc") : Response.json({ mediantime: 1000 }); };
+  const tc = esploraChain("https://t", tip, 50);
+  await tc.medianTime(); askAfresh(tip); const mt = await tc.medianTime();
+  check("Checking again re-reads the chain's tip but not a block it already has",
+    mt === 1000 && asked.filter((u) => u.endsWith("/blocks/tip/hash")).length === 2 && asked.filter((u) => u.includes("/block/abc")).length === 1, asked.join(" "));
+
+  // A lock found empty after its date is finished: it isn't asked about again
+  // until the fan checks by hand (the caller empties the note then).
+  const q = [];
+  const coinsAt = { tb1qlive: [{ txid: "aa", vout: 0, value: 5000, confirmed: true }] };
+  const fakeChain = {
+    utxos: async (a) => { q.push(`utxos ${a}`); return coinsAt[a] ?? []; },
+    everFunded: async (a) => { q.push(`ever ${a}`); return a !== "tb1qnever"; },
+  };
+  const finished = new Map();
+  const past = { address: "tb1qhome", locktime: 500 }, never2 = { address: "tb1qnever", locktime: 500 };
+  const ahead = { address: "tb1qahead", locktime: 5000 }, live = { address: "tb1qlive", locktime: 500 };
+  const st = (lock, quick = false) => lockState({ chain: fakeChain, lock, medianTime: 1000, quick, finished });
+  const first = await st(past);
+  const again2 = await st(past);
+  check("A lock taken home is asked about once, then remembered as taken home",
+    first.state === "withdrawn" && again2.state === "withdrawn" && q.length === 2, q.join(", "));
+  q.length = 0;
+  const e1 = await st(never2), e2 = await st(never2);
+  check("…and one that never held money is remembered as empty", e1.state === "empty" && e2.state === "empty" && q.length === 2, q.join(", "));
+  q.length = 0;
+  await st(ahead); await st(ahead); await st(live); await st(live);
+  check("A lock whose date is ahead, or that still holds money, is asked about every time",
+    q.filter((x) => x === "utxos tb1qahead").length === 2 && q.filter((x) => x === "utxos tb1qlive").length === 2, q.join(", "));
+  finished.clear(); q.length = 0;
+  const quick1 = await st(past, true), quick2 = await st(past, true);
+  check("Home's quick look asks one question the first time and none after", quick1.state === "withdrawn" && quick2.state === "withdrawn" && q.join() === "utxos tb1qhome", q.join(", "));
+  q.length = 0;
+  const full = await st(never2, true).then(() => st(never2));
+  check("A page that needs the whole answer asks only for the part Home skipped", full.state === "empty" && q.join() === "utxos tb1qnever,ever tb1qnever", q.join(", "));
+  finished.clear(); q.length = 0;
+  coinsAt.tb1qhome = [{ txid: "bb", vout: 0, value: 7000, confirmed: true }];
+  const found = await st(past);
+  check("Checking by hand finds money sent to an old lock", found.state === "lapsed" && found.confirmed === 7000n);
+  const plain = await lockState({ chain: fakeChain, lock: never2, medianTime: 1000 });
+  check("Without a note to keep, a lock is read as it always was", plain.state === "empty");
+
+  // The co-signer's record: a lock well past its date has a closed record.
+  const { coSignerRecord } = await import("../src/crowdlocks.mjs");
+  const now = 2000000000;
+  const old = { address: "tb1qold", locktime: now - 4 * 3600, member: "tb1qm" };
+  const recent = { address: "tb1qrecent", locktime: now - 3600, member: "tb1qm" };
+  const open = { address: "tb1qopen", locktime: now + 3600, member: "tb1qm" };
+  const early = { txid: "e9", status: { confirmed: true, block_time: now - 5 * 3600 }, vin: [{ prevout: { scriptpubkey_address: "tb1qold", value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
+  const seenUrls = [];
+  const recFetch = async (url) => { seenUrls.push(String(url)); return Response.json(String(url).includes("tb1qold") ? [early] : []); };
+  const reg = { crowdlock: { chain_api: "https://closed" }, register: { locks: [old, recent, open] }, destinations: { entries: [] } };
+  const r1 = await coSignerRecord(reg, recFetch, now);
+  askAfresh(recFetch);
+  const r2 = await coSignerRecord(reg, recFetch, now);
+  const times = (a) => seenUrls.filter((u) => u.includes(a)).length;
+  check("A lock well past its date has its record read once; it still shows what was found",
+    times("tb1qold") === 1 && r1.releases.length === 1 && r2.releases.length === 1 && r2.releases[0].txid === "e9", seenUrls.join(" "));
+  check("…one just past its date, or still ahead of it, is read every time", times("tb1qrecent") === 2 && times("tb1qopen") === 2);
+}
+
 // Every co-signer key this repository publishes must be a real point on the
 // curve: one that only looks right would make every lock naming it impossible
 // to spend by the purchase route, and nothing would say so until it was tried.
