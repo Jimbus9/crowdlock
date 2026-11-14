@@ -56,5 +56,14 @@ check("Several Crowdlocks: the most pressing step wins, and names its Crowdlock"
 s = nextStep({ waiting: 0n, crowdlocks: [cl({ member: false }), cl({ url: "b", name: "B" })] });
 check("Joined one of two: the step is for the one joined", s.step === 3 && s.name === "B");
 
+s = nextStep({ waiting: 900000n, crowdlocks: [cl(), cl({ url: "b", name: "B" })] });
+check("Two joined Crowdlocks could both take the lock: Home names neither and offers the choice", s.kind === "lock" && !s.url && !s.name && s.options.length === 2 && s.options[1].name === "B");
+
+s = nextStep({ waiting: 900000n, crowdlocks: [cl(), cl({ url: "b", name: "B", canLock: false })] });
+check("Two joined, only one can take a lock: it is named, with no choice to make", s.kind === "lock" && s.name === "A" && !s.options);
+
+s = nextStep({ waiting: 900000n, crowdlocks: [cl(), cl({ url: "b", name: "B", member: false })] });
+check("One joined, one not: the lock is for the one joined", s.kind === "lock" && s.name === "A" && !s.options);
+
 if (failed) { console.error(`\n${failed} check(s) failed.`); process.exit(1); }
 console.log("\nHome offers the right step for where someone is.");

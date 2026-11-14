@@ -86,6 +86,7 @@ type Screen =
   | { name: "home"; words: string }
   | { name: "addMoney"; words: string }
   | { name: "lock"; words: string; url: string }
+  | { name: "chooseLock"; words: string; options: { url: string; name: string }[] }
   | { name: "sign"; words: string; url: string }
   | { name: "allLocks"; words: string; url: string }
   | { name: "allProposals"; words: string; url: string }
@@ -347,6 +348,14 @@ export default function App() {
             {screen.name === "commit" && <CommitFlow words={screen.words} url={screen.url} hash={screen.hash} go={setScreen} />}
             {screen.name === "allLocks" && <AllOf what="locks" words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "allProposals" && <AllOf what="proposals" words={screen.words} url={screen.url} go={setScreen} />}
+            {screen.name === "chooseLock" && (
+              <View>
+                <Text style={s.kick}>Step 4 of 6: Lock</Text>
+                <Text style={s.h1}>Lock for which Crowdlock?</Text>
+                <Text style={s.p}>Your waiting bitcoin belongs to no Crowdlock until you choose. A lock counts for one Crowdlock only, and it can't be moved to another before its date.</Text>
+                {screen.options.map((o) => <NavRow key={o.url} title={o.name} sub="Lock for this one" onPress={() => setScreen({ name: "lock", words: screen.words, url: o.url })} />)}
+              </View>
+            )}
             {screen.name === "sign" && <SignScreen words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "share" && <ShareScreen url={screen.url} />}
             {screen.name === "lookAfter" && <LookAfterScreen words={screen.words} url={screen.url} />}
@@ -748,7 +757,11 @@ function stepWords(step: any, o: Overview, words: string, go: Go): { title: stri
         + (o.balance && o.balance.arriving > 0n ? ` ${btc(o.balance.arriving)} is on its way and counts once it confirms.` : ""),
       button: "Add money", onPress: () => go({ name: "addMoney", words }),
     };
-    case "lock": return {
+    case "lock": return step.options ? {
+      title: "Lock your bitcoin",
+      text: `You have ${btc(step.sats)} waiting. You have joined ${step.options.length} Crowdlocks, so choose which one to lock it for.`,
+      button: "Choose a Crowdlock", onPress: () => go({ name: "chooseLock", words, options: step.options }),
+    } : {
       title: "Lock your bitcoin",
       text: `You have ${btc(step.sats)} waiting. Lock it for ${step.name}.`,
       button: "Lock my bitcoin", onPress: () => go({ name: "lock", words, url: step.url }),
@@ -1204,6 +1217,7 @@ function LockFlow({ words, url, go }: { words: string; url: string; go: Go }) {
     <View>
       <Text style={s.kick}>Step 4 of 6 · Lock · 1 of 3</Text>
       <Text style={s.h1}>How long?</Text>
+      <Text style={s.p}>You are locking for <Text style={s.bold}>{name}</Text>. If that is the wrong Crowdlock, go back.</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup">
         {lengths.map((y) => (
           <Pressable key={y} accessibilityRole="radio" accessibilityState={{ selected: years === y }} onPress={() => setYears(y)} style={[s.chip, years === y && s.chipOn]}>
@@ -1224,7 +1238,7 @@ function LockFlow({ words, url, go }: { words: string; url: string; go: Go }) {
     <View>
       <Text style={s.kick}>Step 4 of 6 · Lock · 2 of 3</Text>
       <Text style={s.h1}>How much?</Text>
-      <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting.</Text>
+      <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting. You are locking for <Text style={s.bold}>{name}</Text>.</Text>
       <Text style={s.label}>Amount to lock, in BTC</Text>
       <Input style={s.input} keyboardType="decimal-pad" placeholder="Everything waiting" value={amountText} onChangeText={setAmountText} />
       <Text style={chosen.problem ? s.error : s.note}>

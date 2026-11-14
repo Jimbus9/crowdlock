@@ -18,7 +18,7 @@ const RANK = { takeHome: 5, commit: 4, lock: 3, blocked: 2, getBitcoin: 2, rest:
  *     openProposal: null | { title: string, hash?: string }, committed: boolean,
  *   }>,
  * }} state  Crowdlocks on this app's network that passed their checks, in list order.
- * @returns {{ step: number, kind: string, url?: string, name?: string, sats?: bigint, need?: bigint, title?: string, opens?: number }}
+ * @returns {{ step: number, kind: string, url?: string, name?: string, sats?: bigint, need?: bigint, title?: string, opens?: number, options?: Array<{ url: string, name: string }> }}
  */
 export function nextStep({ waiting, crowdlocks }) {
   if (crowdlocks.length === 0) return { step: 1, kind: "find" };
@@ -29,6 +29,12 @@ export function nextStep({ waiting, crowdlocks }) {
   for (const c of joined) {
     const one = forCrowdlock(c, waiting);
     if (!best || RANK[one.kind] > RANK[best.kind]) best = one;
+  }
+  // Waiting money belongs to no Crowdlock until its owner picks one. If more
+  // than one joined Crowdlock could take the lock, Home must ask, never choose.
+  if (best.kind === "lock") {
+    const options = joined.filter((c) => forCrowdlock(c, waiting).kind === "lock").map((c) => ({ url: c.url, name: c.name }));
+    if (options.length > 1) return { step: 4, kind: "lock", sats: best.sats, options };
   }
   return best;
 }
