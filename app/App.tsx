@@ -86,13 +86,16 @@ type Screen =
   | { name: "home"; words: string }
   | { name: "addMoney"; words: string }
   | { name: "lock"; words: string; url: string }
+  | { name: "sign"; words: string; url: string }
+  | { name: "share"; words: string; url: string }
+  | { name: "lookAfter"; words: string; url: string }
   | { name: "proposal"; words: string; url: string; hash: string }
   | { name: "commit"; words: string; url: string; hash: string }
   | { name: "takeHome"; words: string; url: string; address?: string; again?: boolean }
   | { name: "feeSpeed"; words: string }
   | { name: "wallet"; words: string }
   | { name: "founders"; words: string }
-  | { name: "help"; words?: string }
+  | { name: "help"; words?: string; from?: string }
   | { name: "about"; words: string }
   | { name: "send"; words: string }
   | { name: "crowdlock"; words: string; url: string }
@@ -316,7 +319,7 @@ export default function App() {
             title={onTabs ? TAB_TITLE[tab] : screen.name === "welcome" ? "Crowdlock" : undefined}
             showLogo={(onTabs && tab === "home") || screen.name === "welcome"}
             onBack={stack.length > 1 ? goBack : undefined}
-            onHelp={screen.name === "help" ? undefined : () => setScreen({ name: "help", words })}
+            onHelp={screen.name === "help" ? undefined : () => setScreen({ name: "help", words, from: screen.name === "home" ? tab : screen.name })}
           />
         )}
         <BackCtx.Provider value={backCtx}><RefreshCtx.Provider value={refreshCtx}>
@@ -340,11 +343,14 @@ export default function App() {
             {screen.name === "takeHome" && <HomeFlow words={screen.words} url={screen.url} address={screen.address} again={screen.again} go={setScreen} />}
             {screen.name === "proposal" && <ProposalScreen words={screen.words} url={screen.url} hash={screen.hash} go={setScreen} />}
             {screen.name === "commit" && <CommitFlow words={screen.words} url={screen.url} hash={screen.hash} go={setScreen} />}
+            {screen.name === "sign" && <SignScreen words={screen.words} url={screen.url} go={setScreen} />}
+            {screen.name === "share" && <ShareScreen url={screen.url} />}
+            {screen.name === "lookAfter" && <LookAfterScreen words={screen.words} url={screen.url} />}
             {screen.name === "send" && <Send words={screen.words} go={setScreen} />}
             {screen.name === "feeSpeed" && <FeeSpeedScreen />}
             {screen.name === "wallet" && <WalletScreen words={screen.words} go={setScreen} />}
             {screen.name === "founders" && <Founders words={screen.words} go={setScreen} />}
-            {screen.name === "help" && <Help />}
+            {screen.name === "help" && <Help from={screen.from} />}
             {screen.name === "about" && <About />}
             {screen.name === "crowdlock" && <CrowdlockScreen words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "addCrowdlock" && <AddCrowdlock key={screen.link ?? "add"} words={screen.words} link={screen.link} go={setScreen} />}
@@ -937,16 +943,8 @@ function WalletScreen({ words, go }: { words: string; go: Go }) {
     setChecking(false);
   };
 
-  const remove = () => Alert.alert(
-    "Remove this wallet from the phone?",
-    account.kind === "ledger"
-      ? "Your Ledger keeps the key — this only forgets it on this phone. You can connect it again any time."
-      : "Only do this if your 12 words are written down. Without them the money cannot be recovered.",
-    [
-      { text: "Cancel", style: "cancel" },
-      { text: "Remove", style: "destructive", onPress: async () => { await forgetWords(); await forgetAddedCrowdlocks(); await forgetSavedLocks(); await forgetLedgerStore(); go({ name: "welcome" }); } },
-    ],
-  );
+  const [asking, setAsking] = useState(false);
+  const remove = async () => { await forgetWords(); await forgetAddedCrowdlocks(); await forgetSavedLocks(); await forgetLedgerStore(); go({ name: "welcome" }); };
 
   return (
     <View>
@@ -962,7 +960,14 @@ function WalletScreen({ words, go }: { words: string; go: Go }) {
         <Text style={s.note}>Checks it's the same Ledger, gives the same address, and can still sign. It signs a harmless dated message you approve on its screen; nothing is sent.</Text>
       </>}
       {account.kind !== "ledger" && <Btn label="Use a Ledger instead" onPress={() => go({ name: "ledgerSetup", from: words })} />}
-      <Btn kind="danger" label="Remove wallet from this phone" onPress={remove} />
+      {asking
+        ? <Confirm
+            title="Remove this wallet from the phone?"
+            text={account.kind === "ledger"
+              ? "Your Ledger keeps the key. This only forgets it on this phone. You can connect it again any time."
+              : "Only do this if your recovery words are written down. Without them the money cannot be recovered."}
+            yes="Remove this wallet" onYes={remove} onCancel={() => setAsking(false)} />
+        : <Btn kind="danger" label="Remove wallet from this phone" onPress={() => setAsking(true)} />}
     </View>
   );
 }
@@ -975,7 +980,8 @@ function Founders({ words, go }: { words: string; go: Go }) {
       <NavRow title="Start a Crowdlock" sub="Write what it is for; the app sets it up in your own GitHub account" onPress={() => go({ name: "startCrowdlock", words })} />
       <NavRow title="Make a co-signer key" sub="The key that adds the second signature to a funded purchase" onPress={() => go({ name: "cosignerKey", words })} />
       <Text style={s.h2}>Look after a Crowdlock</Text>
-      <Text style={s.p}>Updating one, adding co-signer keys, destinations, proposals and maintainers all live on the Crowdlock's own page. Open it from Crowdlocks, then go to "Look after this Crowdlock".</Text>
+      <Text style={s.p}>Update it, add co-signer keys and destinations, publish a proposal, add maintainers. Pick the Crowdlock:</Text>
+      <LookAfterList words={words} go={go} />
       <Text style={s.p}>Co-signing a purchase, and declaring a proposal dead, are on the proposal itself, under "For the co-signer".</Text>
     </View>
   );
@@ -1009,10 +1015,11 @@ const WORDS_MEAN: [string, string][] = [
   ["Test network", "A practice copy of bitcoin. Its coins are worthless."],
 ];
 
-function Help() {
+function Help({ from }: { from?: string }) {
   return (
     <View>
       <Text style={s.h1}>Help</Text>
+      {from && HELP_FOR[from] && <Card><Text style={s.kick}>The screen you were on</Text><Text style={[s.p, { marginBottom: 0 }]}>{HELP_FOR[from]}</Text></Card>}
       <Text style={s.h2}>The six steps</Text>
       {SIX_STEPS.map(([name, text], i) => (
         <Text key={name} style={s.p}><Text style={s.bold}>{i + 1}. {name}. </Text>{text}</Text>
@@ -1668,6 +1675,171 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
   );
 }
 
+// ---------------------------------------------------------------------------
+// A yes-or-no before something that can't be undone, in the app's own look
+// (in place of the phone's pop-up box): what happens, then one clear button.
+// ---------------------------------------------------------------------------
+
+function Confirm({ title, text, yes, onYes, onCancel }: { title: string; text: string; yes: string; onYes: () => void; onCancel: () => void }) {
+  return (
+    <View>
+      <Warning level="stop" title={title}>{text}</Warning>
+      <Btn kind="danger" label={yes} onPress={onYes} />
+      <Btn kind="second" label="Cancel" onPress={onCancel} />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: sign and join. Its own page, with its two warnings above the button.
+// The signing and sending are the same calls as before.
+// ---------------------------------------------------------------------------
+
+function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) {
+  const account = useMemo(() => walletAccount(words), [words]);
+  const [c, setC] = useState<Loaded | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const load = useCallback(async () => { setC(await loadCrowdlock(url)); }, [url]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
+  if (!c.ok) return (
+    <View>
+      <Text style={s.h1}>This Crowdlock failed its checks</Text>
+      {c.problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}
+    </View>
+  );
+  const name: string = c.crowdlock.name;
+  const back = () => go({ name: "crowdlock", words, url });
+  const me = membershipOf(c.register, account.address);
+
+  const join = async () => {
+    setBusy(true); setResult(null);
+    let signature: string;
+    try { signature = await signStatementWith(account, c.statement); }
+    catch (e: any) { setResult({ ok: false, text: String(e.message ?? e) }); setBusy(false); return; }
+    // A Crowdlock that names relays takes its members from there: posted
+    // publicly, collected by its own repository within a few minutes.
+    if (Array.isArray(c.crowdlock.relays)) {
+      const p = await postToRelays(c.crowdlock, { type: "join", address: account.address, signature });
+      setResult(p.ok
+        ? { ok: true, text: "Signed and sent. You'll be on the register within a few minutes." }
+        : { ok: false, text: "It couldn't be sent just now. Your signature is fine. Check your connection, or turn off any VPN, and try again." });
+      setBusy(false);
+      return;
+    }
+    const r = await submitJoin(c.crowdlock, { address: account.address, signature });
+    setResult(r.ok ? { ok: true, text: `You are member ${r.n}.` } : { ok: false, text: r.error + (r.alternative ? ` You can still ${r.alternative}.` : "") });
+    setBusy(false);
+    if (r.ok) setTimeout(load, 4000);
+  };
+
+  if (me || result?.ok) return (
+    <View>
+      <Text style={s.kick}>Step 2 of 6: Sign</Text>
+      <Text style={s.h1}>{me ? "You have joined" : "Signed"}</Text>
+      <Text style={s.good}>{me ? `You are member ${me.n} of ${name}. Signed ${me.signed}.` : result!.text}</Text>
+      <Text style={s.p}>Next is getting bitcoin into this wallet, then locking it. There is no hurry.</Text>
+      <Btn label={`Back to ${name}`} onPress={back} />
+    </View>
+  );
+  if (c.crowdlock.network !== NETWORK) return (
+    <View>
+      <Text style={s.h1}>Sign and join</Text>
+      <Text style={s.error}>This Crowdlock uses a different network from this app.</Text>
+    </View>
+  );
+
+  return (
+    <View>
+      <Text style={s.kick}>Step 2 of 6: Sign</Text>
+      <Text style={s.h1}>Sign and join</Text>
+      <Text style={s.p}>Signing is free and moves no money. It proves this wallet agrees to {name}'s declaration, and the register checks it before adding you.</Text>
+      <Text style={s.label}>What you sign</Text>
+      <Text style={s.mono}>{c.statement}</Text>
+      <Warning level="know" title="Sign with a wallet you will keep">
+        The key you sign with is the key that will own your locks, if you ever lock bitcoin. Use a wallet you mean to keep, with its recovery words written down. Recovery words are the 12 or 24 words a wallet gives you when you set it up. They are its only backup.
+      </Warning>
+      <Warning level="stop" title="This is public, and it can't be taken back">
+        Your address and your signature go on a public register for anyone to see. Once they are published, you cannot unpublish them.
+      </Warning>
+      <LedgerHint account={account} />
+      {result && <Text style={s.error}>{result.text}</Text>}
+      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing and sending…") : "Sign and join"} disabled={busy} onPress={join} />
+    </View>
+  );
+}
+
+function ShareScreen({ url }: { url: string }) {
+  const [c, setC] = useState<Loaded | null>(null);
+  useEffect(() => { loadCrowdlock(url).then(setC); }, [url]);
+  if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
+  if (!c.ok) return <Text style={s.error}>This Crowdlock failed its checks, so it can't be shared from here.</Text>;
+  return (
+    <View>
+      <Text style={s.h1}>Share {c.crowdlock.name}</Text>
+      <Text style={s.p}>Anyone with the app can point their phone's camera at this code to open it.</Text>
+      <View style={s.qr}><QRCode value={openLinkFor(c.url)} size={200} /></View>
+      <Btn label="Share a link" onPress={() => Share.share({
+        message: `${c.crowdlock.name} — a Crowdlock. Nobody pools money, and nobody gets anything financial back. Have a look: ${shareLinkFor(c)}`,
+      })} />
+    </View>
+  );
+}
+
+function LookAfterScreen({ words, url }: { words: string; url: string }) {
+  const account = useMemo(() => walletAccount(words), [words]);
+  const [c, setC] = useState<Loaded | null>(null);
+  const load = useCallback(async () => { setC(await loadCrowdlock(url)); }, [url]);
+  useEffect(() => { load(); }, [load]);
+  if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
+  if (!c.ok) return <Text style={s.error}>This Crowdlock failed its checks, so nothing can be changed from here.</Text>;
+  return (
+    <View>
+      <Text style={s.kick}>For its founder and maintainers</Text>
+      <Text style={s.h1}>Look after {c.crowdlock.name}</Text>
+      <Text style={s.p}>Most members never need this page. Everything here needs the GitHub account of the founder or of a maintainer they have added.</Text>
+      {repoFromFileUrl(c.url)
+        ? <LookAfter c={c} account={account} onChange={load} alone />
+        : <Text style={s.note}>This Crowdlock isn't published from GitHub, so the app can't change it.</Text>}
+    </View>
+  );
+}
+
+/** More → For founders and co-signers: pick which Crowdlock to look after. */
+function LookAfterList({ words, go }: { words: string; go: Go }) {
+  const [items, setItems] = useState<Loaded[] | null>(null);
+  useEffect(() => { allLinks().then((links) => Promise.all(links.map((u) => loadCrowdlock(u)))).then(setItems).catch(() => setItems([])); }, []);
+  if (!items) return <ActivityIndicator style={{ marginVertical: 16 }} />;
+  const mine = items.filter((c) => c.ok && repoFromFileUrl(c.url)) as Extract<Loaded, { ok: true }>[];
+  if (mine.length === 0) return <Text style={s.note}>None of the Crowdlocks in your list can be looked after from the app.</Text>;
+  return <>{mine.map((c) => <NavRow key={c.url} title={c.crowdlock.name} sub="Updates, co-signer keys, destinations, proposals, maintainers" onPress={() => go({ name: "lookAfter", words, url: c.url })} />)}</>;
+}
+
+// What the Help button says about the screen it was pressed on.
+const HELP_FOR: Record<string, string> = {
+  home: "Home shows one next step and how much bitcoin you have waiting and locked. Do the step, or leave it: nothing here has a deadline except taking part in a purchase.",
+  bitcoin: "My bitcoin shows what is waiting (yours to lock or send) and every lock, with its date. Tap a lock marked \"Ready to take home\" to take it home or lock it again.",
+  crowdlocks: "Crowdlocks lists the ones you have joined or added. Tap one to read it, join it, lock for it, or see its proposals.",
+  more: "More holds Help, the fee speed, your wallet, and the pages for people who start or run a Crowdlock.",
+  crowdlock: "This is one Crowdlock's page. From the top: anything that needs your attention, what is locked in all, your own locks, and its proposals. Its declaration, sharing and upkeep are at the bottom.",
+  sign: "Signing puts your address on this Crowdlock's public register. It is free, it moves no money, and it can't be taken back.",
+  addMoney: "This is your wallet's address. Send bitcoin to it from wherever you buy bitcoin. It shows as \"arriving\" until the network confirms it, then as \"waiting\".",
+  lock: "Locking moves your waiting bitcoin into an address only you can open, and only after the date you choose. Three pages: how long, how much, then a check page. Nothing is sent before the last button.",
+  takeHome: "Once a lock's date has passed, it is yours to take home to your waiting balance, or to lock again. The date is judged by the bitcoin network's own clock, which runs about an hour behind.",
+  proposal: "A proposal is a purchase the members are asked to pay for together. You can commit locked bitcoin to it while it is gathering. Nothing moves unless it reaches its target.",
+  commit: "A commitment is your signed promise to pay towards a purchase from a lock. Tick one lock or several. It can't be withdrawn, and nothing moves unless the target is reached.",
+  send: "Send money out pays waiting bitcoin to any bitcoin address. A payment can't be called back, so check the address.",
+  feeSpeed: "A higher fee is quicker; a lower one is cheaper and can wait hours when the network is busy. The choice is used for every payment until you change it.",
+  wallet: "Your wallet is the key that owns your bitcoin. If it is kept on this phone, your recovery words on paper are its only backup.",
+  founders: "These pages are for someone starting a Crowdlock of their own or helping to run one. Most people never need them.",
+  lookAfter: "Looking after a Crowdlock means updating it, listing its co-signer keys and destinations, publishing proposals and adding maintainers. Each needs the founder's or a maintainer's GitHub account.",
+  share: "Sharing gives someone a link or a code that opens this Crowdlock in their app. It shares nothing about you.",
+  findCrowdlocks: "Find lists Crowdlocks that have announced themselves. Each one is checked on this phone before it is shown.",
+  addCrowdlock: "Paste a link to a Crowdlock's file to add it to your list. It is checked on this phone first.",
+};
+
 function Send({ words, go }: { words: string; go: Go }) {
   const account = useMemo(() => walletAccount(words), [words]);
   const [to, setTo] = useState("");
@@ -1777,7 +1949,7 @@ function CrowdlockList({ words, address, go }: { words: string; address: string;
           <Pressable key={c.url} style={s.card} onPress={() => go({ name: "crowdlock", words, url: c.url })}>
             <Text style={s.cardTitle}>{c.crowdlock.name}</Text>
             <Text style={s.note}>{totals[c.url]
-              ? `${btc(totals[c.url].sats)} locked · ${totals[c.url].members} committed member${totals[c.url].members === 1 ? "" : "s"}`
+              ? `${btc(totals[c.url].sats)} locked · ${totals[c.url].members} member${totals[c.url].members === 1 ? "" : "s"} with a lock that counts`
               : "Counting what is locked…"}</Text>
             <Text style={m ? s.good : s.link}>{m ? `You are member ${m.n}` : "Read the declaration and join →"}</Text>
           </Pressable>
@@ -1791,7 +1963,7 @@ function CrowdlockList({ words, address, go }: { words: string; address: string;
       ))}
       {broken.map((c) => (
         <View key={c.url} style={s.card}>
-          <Text style={s.error}>Refused: {c.url}</Text>
+          <Text style={s.error}>This Crowdlock failed its checks: {c.url}</Text>
           <Text style={s.note}>{c.problems[0]}</Text>
         </View>
       ))}
@@ -1805,8 +1977,6 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
   const [total, setTotal] = useState<{ sats: bigint; locks: number; members: number } | null>(null);
   const [showText, setShowText] = useState(false);
   const [gbp, setGbp] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [keyChange, setKeyChange] = useState<{ added: string[]; removed: string[] } | null>(null);
   const [record, setRecord] = useState<{ releases: any[]; unreadable: number } | null>(null);
 
@@ -1840,80 +2010,21 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
   if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
   if (!c.ok) return (
     <View>
-      <Text style={s.h1}>Refused</Text>
-      <Text style={s.p}>This Crowdlock failed its checks, so the app will not show it or let you sign anything for it.</Text>
+      <Text style={s.h1}>This Crowdlock failed its checks</Text>
+      <Text style={s.p}>So the app will not show it or let you sign anything for it.</Text>
       {c.problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}
     </View>
   );
 
   const me = membershipOf(c.register, account.address);
-  const join = async () => {
-    setBusy(true); setResult(null);
-    let signature: string;
-    try { signature = await signStatementWith(account, c.statement); }
-    catch (e: any) { setResult({ ok: false, text: String(e.message ?? e) }); setBusy(false); return; }
-    // A Crowdlock that names relays takes its members from there: posted
-    // publicly, collected by its own repository within a few minutes.
-    if (Array.isArray(c.crowdlock.relays)) {
-      const p = await postToRelays(c.crowdlock, { type: "join", address: account.address, signature });
-      setResult(p.ok
-        ? { ok: true, text: `Signed and posted to ${p.accepted} of ${p.total} relays. You'll be on the register within a few minutes — open this page again then.` }
-        : { ok: false, text: "No relay took it just now — your signature is fine. Check your connection, or turn off any VPN, and try again." });
-      setBusy(false);
-      return;
-    }
-    const r = await submitJoin(c.crowdlock, { address: account.address, signature });
-    setResult(r.ok ? { ok: true, text: `You are member ${r.n}.` } : { ok: false, text: r.error + (r.alternative ? ` You can still ${r.alternative}.` : "") });
-    setBusy(false);
-    if (r.ok) setTimeout(load, 4000);
-  };
+  const here = c.crowdlock.network === NETWORK;
 
   return (
     <View>
+      {!me && here && <Text style={s.kick}>Step 1 of 6: Understand</Text>}
       <Text style={s.h1}>{c.crowdlock.name}</Text>
       {c.crowdlock.about && <Text style={s.p}>{c.crowdlock.about}</Text>}
       {c.crowdlock.disclaimer && <Text style={s.note}>{c.crowdlock.disclaimer}</Text>}
-
-      <View style={s.panel}>
-        <Text style={s.big}>{total ? btc(total.sats) : "…"}</Text>
-        <Text style={s.note}>locked and counted{total ? ` · ${total.members} committed member${total.members === 1 ? "" : "s"}` : ""}</Text>
-        <Text style={s.good}>Checked on this phone: the declaration matches its fingerprint and the register agrees.</Text>
-      </View>
-
-      <Text style={s.p}>
-        A lock counts from <Text style={s.bold}>{shortBtc(c.crowdlock.minimum_counted_lock_sats)}</Text>
-        {gbp ? ` (about £${Math.round(Number(c.crowdlock.minimum_counted_lock_sats) / 1e8 * gbp)} today)` : ""}.
-        {" "}A smaller lock is still yours and still locked — it just isn't added to the total.
-      </Text>
-      <Pressable onPress={() => Linking.openURL(COUNTING_RULE_URL)}>
-        <Text style={s.link}>Why there is a minimum →</Text>
-      </Pressable>
-
-      <Text style={s.h2}>The declaration</Text>
-      {showText
-        ? <Text style={s.declaration}>{c.declarationText}</Text>
-        : <Button label="Read it in full" kind="plain" onPress={() => setShowText(true)} />}
-      <Text style={s.label}>What you sign</Text>
-      <Text style={s.mono}>{c.statement}</Text>
-
-      {me
-        ? <Text style={[s.good, { fontSize: 18, marginTop: 16 }]}>You are member {me.n}. Signed {me.signed}.</Text>
-        : c.crowdlock.network !== NETWORK
-          ? <Text style={s.note}>This Crowdlock uses a different network from this app.</Text>
-          : <>
-              <Text style={s.note}>Signing is free and moves no money. It proves this wallet agrees to the declaration, and the register checks it before adding you.</Text>
-              <LedgerHint account={account} />
-              <Button label={busy ? "Signing and sending…" : "Sign and join"} disabled={busy} onPress={join} />
-            </>}
-      {result && <Text style={result.ok ? s.good : s.error}>{result.text}</Text>}
-
-      {record && record.releases.length > 0 && <View style={s.panel}>
-        <Text style={s.error}>The co-signer has released {record.releases.length === 1 ? "a lock" : `${record.releases.length} locks`} early.</Text>
-        <Text style={s.note}>A lock can only open before its date with the co-signer's signature, and the co-signer is meant to sign only for a purchase. {record.releases.length === 1 ? "This one wasn't" : "These weren't"} — the money went somewhere other than a listed destination. The chain records it, so it can't be hidden.</Text>
-        {record.releases.map((r) => <Text key={r.txid + r.address} style={s.note}>• {btc(BigInt(r.sats))} on {new Date(r.at * 1000).toISOString().slice(0, 10)}{r.confirmed ? "" : " (not yet in a block)"}, co-signer {String(r.cosigner ?? "?").slice(0, 10)}…, paid to {String(r.paidTo ?? "?").slice(0, 12)}…</Text>)}
-        <Text style={s.note}>Ask the founder why. A co-signer who signs early releases makes the committed total untrustworthy.</Text>
-      </View>}
-      {record && record.releases.length === 0 && (c.register.locks ?? []).length > 0 && <Text style={s.note}>Co-signer: no early releases{record.unreadable ? ` (${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be checked just now)` : ""}.</Text>}
 
       {keyChange && <View style={s.panel}>
         <Text style={s.error}>This Crowdlock's co-signer keys have changed since you last looked.</Text>
@@ -1925,18 +2036,53 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         <Button label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
       </View>}
 
-      {me && c.crowdlock.network === NETWORK && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} />}
+      {record && record.releases.length > 0 && <View style={s.panel}>
+        <Text style={s.error}>The co-signer has released {record.releases.length === 1 ? "a lock" : `${record.releases.length} locks`} early.</Text>
+        <Text style={s.note}>A lock can only open before its date with the co-signer's signature, and the co-signer is meant to sign only for a purchase. {record.releases.length === 1 ? "This one wasn't" : "These weren't"} — the money went somewhere other than a listed destination. The chain records it, so it can't be hidden.</Text>
+        {record.releases.map((r) => <Text key={r.txid + r.address} style={s.note}>• {btc(BigInt(r.sats))} on {new Date(r.at * 1000).toISOString().slice(0, 10)}{r.confirmed ? "" : " (not yet in a block)"}, co-signer {String(r.cosigner ?? "?").slice(0, 10)}…, paid to {String(r.paidTo ?? "?").slice(0, 12)}…</Text>)}
+        <Text style={s.note}>Ask the founder why. A co-signer who signs early releases makes the locked total untrustworthy.</Text>
+      </View>}
 
-      {c.crowdlock.network === NETWORK && <Proposals c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} />}
+      <View style={s.panel}>
+        <Text style={s.big}>{total ? btc(total.sats) : "…"}</Text>
+        <Text style={s.note}>locked and counted{total ? ` · ${total.members} member${total.members === 1 ? "" : "s"} with a lock that counts` : ""}</Text>
+        <Text style={s.good}>Checked on this phone: the declaration matches its fingerprint and the register agrees.</Text>
+      </View>
+      <Text style={s.p}>
+        A lock counts from <Text style={s.bold}>{shortBtc(c.crowdlock.minimum_counted_lock_sats)}</Text>
+        {gbp ? ` (about £${Math.round(Number(c.crowdlock.minimum_counted_lock_sats) / 1e8 * gbp)} today)` : ""}.
+        {" "}A smaller lock is still yours and still locked. It just isn't added to the total.
+      </Text>
+      <Pressable onPress={() => Linking.openURL(COUNTING_RULE_URL)} style={{ minHeight: 48, justifyContent: "center" }}>
+        <Text style={s.link}>Why there is a minimum →</Text>
+      </Pressable>
 
-      <LookAfter c={c} account={account} onChange={load} />
+      {me && <Text style={[s.good, { fontSize: 18, marginTop: 8 }]}>You are member {me.n}. Signed {me.signed}.</Text>}
+      {!me && !here && <Text style={s.note}>This Crowdlock uses a different network from this app.</Text>}
+      {!me && here && <>
+        <Warning level="know" title="This is not an investment">
+          There is no return, no dividend and no payout, now or ever. If you hope to make money here, do not take part.
+        </Warning>
+        <Text style={s.p}>If it fails, every lock still comes home on its date, because the money never went anywhere else. There is no pot to lose.</Text>
+        <Text style={s.h2}>The declaration</Text>
+        <Text style={s.note}>These are the words you would sign. Read them first.</Text>
+        {showText
+          ? <Text style={s.declaration}>{c.declarationText}</Text>
+          : <Btn kind="second" label="Read it in full" onPress={() => setShowText(true)} />}
+        <Btn label="Go on to sign" onPress={() => go({ name: "sign", words, url })} />
+      </>}
 
-      <Text style={s.h2}>Share it</Text>
-      <Text style={s.p}>Anyone with the app can point their phone's camera at this code to open it.</Text>
-      <View style={s.qr}><QRCode value={openLinkFor(c.url)} size={200} /></View>
-      <Button label="Share a link" kind="plain" onPress={() => Share.share({
-        message: `${c.crowdlock.name} — a Crowdlock. Nobody pools money, and nobody gets anything financial back. Have a look: ${shareLinkFor(c)}`,
-      })} />
+      {me && here && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} />}
+
+      {here && <Proposals c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} />}
+
+      <Text style={s.h2}>More about this Crowdlock</Text>
+      {me && (showText
+        ? <><Text style={s.label}>The declaration you signed</Text><Text style={s.declaration}>{c.declarationText}</Text></>
+        : <NavRow title="The declaration" sub="The words you signed" onPress={() => setShowText(true)} />)}
+      {record && record.releases.length === 0 && (c.register.locks ?? []).length > 0 && <Text style={s.note}>Co-signer's record: no early releases{record.unreadable ? ` (${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be checked just now)` : ""}.</Text>}
+      <NavRow title="Share it" sub="A link or a code that opens it in someone's app" onPress={() => go({ name: "share", words, url })} />
+      {repoFromFileUrl(c.url) && <NavRow title="Look after it" sub="For its founder and maintainers" onPress={() => go({ name: "lookAfter", words, url })} />}
 
       <CheckedLine />
     </View>
@@ -1972,12 +2118,12 @@ function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { acc
   const publish = useCallback(async (l: LockTerms): Promise<{ ok: boolean; note: string }> => {
     const terms = { ownerPubkey: account.publicKey, ...l };
     if (viaRelays) {
-      if (posted.current.has(l.address)) return { ok: true, note: "Posted to the relays — on the register within a few minutes." };
+      if (posted.current.has(l.address)) return { ok: true, note: "Sent. It will be on the register within a few minutes." };
       const p = await postToRelays(c.crowdlock, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: l.cosignerPubkey, locktime: l.locktime, address: l.address });
       if (p.ok) posted.current.add(l.address);
       return p.ok
-        ? { ok: true, note: `Posted to ${p.accepted} of ${p.total} relays — on the register within a few minutes.` }
-        : { ok: false, note: "Not on the register yet: no relay answered. It will be tried again when you open this page." };
+        ? { ok: true, note: "Sent. It will be on the register within a few minutes." }
+        : { ok: false, note: "Not on the register yet: it couldn't be sent just now. It will be tried again when you open this page." };
     }
     const r = await submitLock(c.crowdlock, terms);
     return r.ok ? { ok: true, note: "Sent to the register just now — it appears within a minute." } : { ok: false, note: `Not on the register yet: ${r.error}` };
@@ -2053,7 +2199,7 @@ function MyLocks({ account, c, onChange, onLock, onHome, paused = false }: { acc
             {r.state === "locked" && r.locktime * 1000 < Date.now() ? " · date reached; the network's clock catches up within about an hour" : ""}
           </Text>
           {r.confirmed > 0n && <Text style={r.onRegister ? s.good : s.note}>{r.note ?? (r.onRegister ? "On the register" : "Goes on the register once it confirms")}</Text>}
-          {r.state === "arriving" && <Text style={s.note}>{viaRelays ? "Posted to the relays; goes on the register once it confirms." : "Goes on the register once it confirms."}</Text>}
+          {r.state === "arriving" && <Text style={s.note}>Goes on the register once it confirms.</Text>}
           <Text style={[s.mono, { fontSize: 12 }]} selectable>{r.address}</Text>
           {r.state === "lapsed" && <>
             <Button label="Take it home" onPress={() => onHome(r.address)} />
@@ -2110,9 +2256,9 @@ function AddCrowdlock({ words, go, link: given }: { words: string; go: Go; link?
   return (
     <View>
       <Text style={s.h1}>Add a Crowdlock</Text>
-      <Text style={s.p}>Paste the link to a Crowdlock's file. It is checked on this phone, the same way the register page checks it, before it is added.</Text>
+      <Text style={s.p}>Paste the link to a Crowdlock's file. It is checked on this phone before it is added.</Text>
       <Input style={s.input} autoCapitalize="none" autoCorrect={false} placeholder="https://…/crowdlocks/name.json" value={link} onChangeText={(t) => { setLink(t); setProblems(null); }} />
-      {problems && <><Text style={s.error}>Refused:</Text>{problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}</>}
+      {problems && <><Text style={s.error}>It failed its checks, so it wasn't added:</Text>{problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}</>}
       <Button label={busy ? "Checking…" : "Check and add"} disabled={busy || !link} onPress={() => add()} />
       <Text style={s.note}>Someone showing you a Crowdlock's QR code? Point your phone's own camera at it — it opens here by itself.</Text>
     </View>
@@ -2332,11 +2478,11 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
   </>;
 }
 
-function LookAfter({ c, account, onChange }: { c: Extract<Loaded, { ok: true }>; account: any; onChange: () => void }) {
+function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: true }>; account: any; onChange: () => void; alone?: boolean }) {
   const where = repoFromFileUrl(c.url);
   const [status, setStatus] = useState<string>("unknown");
   const [published, setPublished] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!alone);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const { withSignIn, codeView } = useGitHub();
@@ -2384,7 +2530,7 @@ function LookAfter({ c, account, onChange }: { c: Extract<Loaded, { ok: true }>;
 
   return (
     <View>
-      <Text style={s.h2}>Look after this Crowdlock</Text>
+      {!alone && <Text style={s.h2}>Look after this Crowdlock</Text>}
       {status === "behind" && <Text style={s.note}>An update is available for this Crowdlock's inbox.</Text>}
       {!open ? <Button label="For its founder and maintainers" kind="plain" onPress={() => setOpen(true)} /> : <>
         {status === "behind" && <View style={s.panel}>
@@ -2568,9 +2714,10 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const declare = () => Alert.alert("Declare this proposal dead?",
-    "This publishes a notice, signed with the co-signer key, that the proposal didn't reach its target and that you will complete none of its commitments. Anyone can check it. It can't be taken back.",
-    [{ text: "Cancel", style: "cancel" }, { text: "Sign and publish", style: "destructive", onPress: async () => {
+  const [asking, setAsking] = useState(false);
+  const askDead: [string, string] = ["Declare this proposal dead?",
+    "This publishes a notice, signed with the co-signer key, that the proposal didn't reach its target and that you will complete none of its commitments. Anyone can check it. It can't be taken back."];
+  const deadGo = async () => { setAsking(false); {
       setBusy(true); setMsg(null);
       try {
         const notice = signNoticeWith({ words, crowdlock: c.crowdlock, statement: noticeStatement(p.hash), network: NETWORK });
@@ -2581,14 +2728,14 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
         onDone();
       } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
       setBusy(false);
-    } }]);
+    } };
   return !open ? <Button label="For the co-signer: declare it dead" kind="plain" onPress={() => setOpen(true)} /> : (
     <View style={s.panel}>
       <Text style={s.label}>It closed short of its target</Text>
       <Text style={s.note}>Nothing has to happen: without your signature no commitment can ever move. Publishing a signed notice tells every member so, publicly, and promises you won't complete any of them. Type the co-signer key's words; they're used once and not saved.</Text>
       <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-      <Button label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !wordsAreValid(tidyWords(words))} onPress={declare} />
+      {asking ? <Confirm title={askDead[0]} text={askDead[1]} yes="Sign and publish" onYes={deadGo} onCancel={() => setAsking(false)} /> : <Button label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !wordsAreValid(tidyWords(words))} onPress={() => setAsking(true)} />}
     </View>
   );
 }
@@ -2605,10 +2752,11 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
   const take: typeof order = [];
   let sum = pile.paid;
   for (const g of order) { if (sum >= p.target.sats) break; take.push(g); sum += g.sats; }
-  const complete = () => {
-    Alert.alert("Complete and send?",
-      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - pile.paid))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`,
-      [{ text: "Cancel", style: "cancel" }, { text: "Complete and send", style: "destructive", onPress: async () => {
+  const [asking, setAsking] = useState(false);
+  const askSend: [string, string] = ["Complete and send?",
+      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - pile.paid))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`];
+  const sendGo = async () => {
+     setAsking(false); {
         setBusy(true); setMsg(null);
         // A handful are sent from here at once. More than that are published
         // only, for the Crowdlock's repository to send a few at a time
@@ -2629,7 +2777,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
           : sendHere ? { ok: true, text: `Completed and sent all ${sent}. They'll confirm over the next blocks.` }
           : { ok: true, text: `Completed all ${sent} and published them. The Crowdlock's repository sends them ${SEND_PER_PASS_NOTE}, so they reach the network paced rather than all at once.` });
         setBusy(false); onDone();
-      } }]);
+      }
   };
   return (
     <View>
@@ -2639,7 +2787,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         {!met && <Text style={s.error}>The target isn't met yet: {btc(BigInt(pile.sats))} of {btc(BigInt(p.target.sats))}. Nothing should be completed.</Text>}
         <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
         {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-        <Button label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={complete} />
+        {asking ? <Confirm title={askSend[0]} text={askSend[1]} yes="Complete and send" onYes={sendGo} onCancel={() => setAsking(false)} /> : <Button label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={() => setAsking(true)} />}
       </View>}
     </View>
   );
@@ -2759,11 +2907,12 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   };
   const { p: preview, problem } = draft();
   const proposalsPath = c.crowdlock.register.proposals ?? c.crowdlock.register.destinations.replace(/[^/]*$/, "proposals.json");
-  const publish = () => {
+  const [asking, setAsking] = useState(false);
+  const publish = async () => {
     const now = draft();
     if (!now.p) return;
-    Alert.alert("Publish this proposal?", `"${now.p.title}": ${money(now.p.requires, now.p.currency)} to ${now.p.destination.slice(0, 14)}…, gathering until ${now.p.closes.slice(0, 10)}. Once published it can't be changed: its wording and price are fixed by its fingerprint.`,
-      [{ text: "Cancel", style: "cancel" }, { text: "Publish", onPress: async () => {
+    setAsking(false);
+    {
         setBusy(true); setMsg(null);
         try {
           await withSignIn(async (token) => {
@@ -2778,7 +2927,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
           });
         } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
         setBusy(false);
-      } }]);
+    }
   };
   return <>
     <Text style={s.label}>Write a proposal</Text>
@@ -2800,7 +2949,12 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
       {problem ? <Text style={s.note}>{problem}</Text> : <Text style={s.note}>Opens now, closes {preview.closes.slice(0, 10)}, settles by {preview.settles_by.slice(0, 10)}. Fingerprint {preview.hash.slice(0, 12)}…</Text>}
       {codeView}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-      <Button label={busy ? "Publishing…" : "Publish this proposal"} disabled={busy || !!problem} onPress={publish} />
+      {asking && preview
+        ? <Confirm
+            title="Publish this proposal?"
+            text={`"${preview.title}": ${money(preview.requires, preview.currency)} to ${preview.destination}, gathering until ${preview.closes.slice(0, 10)}. Once published it can't be changed: its wording and price are fixed by its fingerprint.`}
+            yes="Publish this proposal" onYes={publish} onCancel={() => setAsking(false)} />
+        : <Button label={busy ? "Publishing…" : "Publish this proposal"} disabled={busy || !!problem} onPress={() => setAsking(true)} />}
     </>}
   </>;
 }
@@ -2863,7 +3017,7 @@ function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
         <Pressable key={f.url} style={s.card} onPress={() => open(f.url)}>
           <Text style={s.cardTitle}>{f.name}</Text>
           {f.about ? <Text style={s.p}>{f.about}</Text> : null}
-          <Text style={s.note}>{btc(f.sats)} locked · {f.members} committed member{f.members === 1 ? "" : "s"}</Text>
+          <Text style={s.note}>{btc(f.sats)} locked · {f.members} member{f.members === 1 ? "" : "s"} with a lock that counts</Text>
           <Text style={mine.includes(f.url) ? s.good : s.link}>{mine.includes(f.url) ? "In your list" : "Have a look →"}</Text>
         </Pressable>
       ))}
@@ -3027,7 +3181,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Input style={s.input} keyboardType="decimal-pad" value={minimum} onChangeText={(t) => { setMinimum(t); setChecked(null); }} />
         <Text style={s.label}>Days a new destination must be public before a proposal can use it</Text>
         <Input style={s.input} keyboardType="number-pad" value={waitDays} onChangeText={(t) => { setWaitDays(t); setChecked(null); }} />
-        <Text style={s.note}>We recommend at least 7, The Kop Fund's choice. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
+        <Text style={s.note}>We recommend at least 7. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
         <Text style={s.label}>Co-signer's public key</Text>
         <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={cosigner} onChangeText={(t) => { setCosigner(t); setChecked(null); }} placeholder="Its xpub, or its key: 02… or 03…" />
         <Text style={s.note}>The co-signer can't take or keep anyone's money — only refuse to complete a purchase. Make this key with "Make a co-signer key" under More (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here — or its plain key, though then hardware wallets can't lock until the xpub is added.</Text>
@@ -3037,7 +3191,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
 
       <Text style={s.label}>Longest a proposal may gather commitments, in days</Text>
       <Input style={s.input} keyboardType="number-pad" value={gatherDays} onChangeText={(t) => { setGatherDays(t); setChecked(null); }} />
-      <Text style={s.note}>We recommend 28, The Kop Fund's choice: long enough to reach supporters who only look now and then. Each proposal picks its own length up to this, and gathering ends as soon as the target is met. A small group with a short deadline can use less.</Text>
+      <Text style={s.note}>We recommend 28: long enough to reach supporters who only look now and then. Each proposal picks its own length up to this, and gathering ends as soon as the target is met. A small group with a short deadline can use less.</Text>
       <Text style={s.label}>Longest settling may take after that, in days</Text>
       <Input style={s.input} keyboardType="number-pad" value={settleDays} onChangeText={(t) => { setSettleDays(t); setChecked(null); }} />
       <Text style={s.note}>We recommend 14: room for the co-signer to complete and send everything at a sensible pace. A small Crowdlock can settle in hours. Members are bound to a proposal for at most these two together.</Text>
@@ -3086,12 +3240,12 @@ function FeeChoice({ onChange }: { onChange?: () => void } = {}) {
       <View style={{ flexDirection: "row", gap: 8 }}>
         {(["slow", "normal", "fast"] as FeeSpeed[]).map((v) => (
           <Pressable key={v} onPress={() => pick(v)} style={[s.btn, speed !== v && s.btnPlain, { flex: 1, paddingHorizontal: 4 }]}>
-            <Text style={[s.btnText, speed !== v && s.btnTextPlain, { fontSize: 14 }]}>{SPEED_LABEL[v]}{rates ? `\n${rates[v]} sat/vB` : ""}</Text>
+            <Text style={[s.btnText, speed !== v && s.btnTextPlain, { fontSize: 14 }]}>{SPEED_LABEL[v]}{rates ? `\nabout ${Math.ceil(rates[v] * 141)} sats` : ""}</Text>
           </Pressable>
         ))}
       </View>
       <Text style={s.note}>
-        {SPEED_LABEL[speed]}: usually confirms in {SPEED_WHEN[speed]}. A higher rate costs more and is quicker; a low one can wait many hours when the network is busy. The fee is shown before you approve a lock or a payment.
+        {SPEED_LABEL[speed]}: usually confirms in {SPEED_WHEN[speed]}. A higher fee is quicker; a low one can wait many hours when the network is busy. The figures are for a typical lock (a sat is the smallest unit of bitcoin); other payments cost a little more or less.
       </Text>
     </View>
   );
