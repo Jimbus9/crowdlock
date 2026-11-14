@@ -19,7 +19,7 @@
 // through src/wallet/core.mjs, and nothing else may.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, AppState, BackHandler, Linking, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Alert, AppState, BackHandler, Dimensions, Keyboard, Linking, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import type { ComponentRef } from "react";
 import type { TextInputProps } from "react-native";
@@ -157,9 +157,22 @@ const SECRET_WORDS: Partial<TextInputProps> = {
   importantForAutofill: "no", keyboardType: "visible-password", textContentType: "none",
 };
 
+// The keyboard covers the bottom of the screen. When a box is tapped, the page
+// is moved so the box sits near the top, with room under it (for word
+// suggestions and messages) above the keyboard.
+type Box = ComponentRef<typeof TextInput>;
+const RevealCtx = createContext<(box: Box | null) => void>(() => {});
+
 function Input(props: TextInputProps) {
   const t = useTheme();
-  return <TextInput placeholderTextColor={t.soft} {...props} />;
+  const reveal = useContext(RevealCtx);
+  const box = useRef<Box>(null);
+  return (
+    <TextInput
+      ref={box} placeholderTextColor={t.soft} {...props}
+      onFocus={(e) => { props.onFocus?.(e); reveal(box.current); }}
+    />
+  );
 }
 
 // Screens where pulling down checks again. Forms and word screens are left
@@ -180,6 +193,28 @@ export default function App() {
   const stackRef = useRef(stack); stackRef.current = stack;
   const tabRef = useRef(tab); tabRef.current = tab;
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  // How tall the keyboard is while it is up, and how far the page is scrolled.
+  const [keyboard, setKeyboard] = useState(0);
+  const keyboardRef = useRef(0);
+  const scrolledTo = useRef(0);
+  const focused = useRef<Box | null>(null);
+  const settle = useCallback(() => {
+    const box = focused.current;
+    if (!box || !keyboardRef.current) return;
+    box.measureInWindow((_x: number, y: number, _w: number, h: number) => {
+      const top = 150;                                   // just under the banner and the top bar
+      const bottom = Dimensions.get("window").height - keyboardRef.current;
+      // Leave it alone if the box and about three lines under it already show.
+      if (y >= top - 20 && y + h + 150 <= bottom) return;
+      scroll.current?.scrollTo({ y: Math.max(0, scrolledTo.current + y - top), animated: true });
+    });
+  }, []);
+  const reveal = useCallback((box: Box | null) => { focused.current = box; setTimeout(settle, 350); }, [settle]);
+  useEffect(() => {
+    const up = Keyboard.addListener("keyboardDidShow", (e) => { keyboardRef.current = e.endCoordinates.height; setKeyboard(e.endCoordinates.height); setTimeout(settle, 80); });
+    const down = Keyboard.addListener("keyboardDidHide", () => { keyboardRef.current = 0; setKeyboard(0); focused.current = null; });
+    return () => { up.remove(); down.remove(); };
+  }, [settle]);
 
   // A Crowdlock link the app was opened with (crowdlock://add?url=…, from a
   // QR code or a web page's button). Held until there is a wallet to add it
@@ -285,8 +320,11 @@ export default function App() {
           />
         )}
         <BackCtx.Provider value={backCtx}><RefreshCtx.Provider value={refreshCtx}>
+          <RevealCtx.Provider value={reveal}>
           <ScrollView
             ref={scroll} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled"
+            style={{ marginBottom: keyboard }} scrollEventThrottle={16}
+            onScroll={(e) => { scrolledTo.current = e.nativeEvent.contentOffset.y; }}
             refreshControl={REFRESHABLE.has(screen.name)
               ? <RefreshControl refreshing={refreshing} onRefresh={() => runAll(true)} colors={[t.brand]} tintColor={t.brand} progressBackgroundColor={t.panel} />
               : undefined}
@@ -315,6 +353,7 @@ export default function App() {
             {screen.name === "cosignerKey" && <CosignerKey words={screen.words} go={setScreen} />}
             {screen.name === "ledgerSetup" && <LedgerSetup from={screen.from} go={setScreen} />}
           </ScrollView>
+          </RevealCtx.Provider>
         </RefreshCtx.Provider></BackCtx.Provider>
         {onTabs && <TabBar tab={tab} onTab={setTab} />}
       </SafeAreaView>
