@@ -1,119 +1,129 @@
 <!doctype html>
-<html lang="en-GB">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>The documents — The Kop Fund</title>
-<meta name="description" content="The seven documents that define The Kop Fund: the declaration, the registration format, the counting rule, the lock format, proposals and settlement, commitments, and the published destinations list.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<title>The documents — Crowdlock</title>
+<meta name="description" content="The documents that define Crowdlock: the registration format, the counting rule, the lock format, proposals and settlement, commitments and the destinations list, plus the declaration each Crowdlock writes for itself.">
+<link rel="canonical" href="https://crowdlock.org/spec/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Crowdlock">
+<meta property="og:title" content="The documents — Crowdlock">
+<meta property="og:description" content="Crowdlock is these documents, not any piece of software.">
+<meta property="og:url" content="https://crowdlock.org/spec/">
+<meta property="og:image" content="https://crowdlock.org/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Crowdlock: three people arm in arm">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 
-<div class="bleed disclaimer"><div class="inner">An independent supporters' initiative. Not affiliated with, endorsed by, or connected to Liverpool Football Club.</div></div>
-<nav class="bleed"><div class="inner">
-  <a href="https://thekopfund.org/">The declaration</a>
-  <a href="https://thekopfund.org/why/">Why</a>
-  <a href="https://thekopfund.org/how/">How it works</a>
-  <a href="https://thekopfund.org/society/">The society</a>
-  <a href="https://thekopfund.org/join/">Join</a>
-  <a href="https://thekopfund.org/register/">The register</a>
-  <a href="https://thekopfund.org/risk/">Risks</a>
-  <a href="./" aria-current="page">The documents</a>
-</div></nav>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">
+    <svg class="mark" width="40" height="40" viewBox="0 0 96 100" role="img" aria-label="Crowdlock"><path d="M9,78 V55 a13,13 0 0 1 26,0 V78 M35,55 a13,13 0 0 1 26,0 V78 M61,55 a13,13 0 0 1 26,0 V78"></path><circle cx="22" cy="27" r="7.5"></circle><circle cx="74" cy="27" r="7.5"></circle><circle class="mid" cx="48" cy="27" r="7.5"></circle></svg>
+    Crowdlock
+  </a>
+  <nav aria-label="Main">
+    <a href="./" aria-current="page">The documents</a>
+    <a href="../#checked">What's checked</a>
+    <a href="https://github.com/Jimbus9/crowdlock">Source</a>
+  </nav>
+</div></header>
 
-<main class="inner">
+<main class="wrap">
 
-  <header class="page">
-    <span class="eyebrow">For anyone building their own</span>
+  <section class="hero">
+    <p class="eyebrow">For anyone building their own</p>
     <h1>The documents</h1>
-    <p class="lede">The movement is these documents, not any piece of software. Anyone holding them can build their own app, their own register, or take part with neither.</p>
-    <p class="lede">Six of them are general. Only the declaration is about Liverpool — so fans of any club, or anyone buying anything their crowd means to keep, can take the rest as they stand.</p>
-    <p class="lede">Together those six are a method called <b>Crowdlock</b>. The Kop Fund is a Crowdlock: one declaration about Liverpool, run on the six general documents.</p>
-  </header>
-
-  <section>
-    <div class="stack">
-      <div class="card">
-        <b class="head">1 · The declaration</b>
-        <p>What the fund is for and what it will never do. Eleven principles. The only document that does not change — everything else here can be amended, and this cannot.</p>
-        <p class="note"><a href="declaration-v1.txt">declaration-v1.txt</a> · v1 · 3,408 bytes · <span class="mono">sha256:3a0a0bca…6209b96</span></p>
-      </div>
-      <div class="card">
-        <b class="head">2 · Registration format</b>
-        <p>What a membership record is, how to make one, how to verify one, and how to submit it without anyone's permission. Two fields: an address and a signature.</p>
-        <p class="note"><a href="registration-format.md">registration-format.md</a> · v1</p>
-      </div>
-      <div class="card">
-        <b class="head">3 · Counting rule</b>
-        <p>How every published figure is computed, precisely enough that two people reach the same answer from public data. Includes what must never be published and why.</p>
-        <p class="note"><a href="counting-rule.md">counting-rule.md</a> · v1</p>
-      </div>
-      <div class="card">
-        <b class="head">4 · Lock format</b>
-        <p>How committed money is held: the script, the two exits, the lengths offered, and the four behaviours that must hold or nothing else can be relied on.</p>
-        <p class="note"><a href="lock-format.md">lock-format.md</a> · v1</p>
-      </div>
-      <div class="card">
-        <b class="head">5 · Proposal and settlement format</b>
-        <p>How committed money is actually spent. There is no vote — a proposal is funded or it is not. The window, how settlement is paced, and what happens when a proposal fails.</p>
-        <p class="note"><a href="proposal-and-settlement.md">proposal-and-settlement.md</a> · v1</p>
-      </div>
-      <div class="card">
-        <b class="head">6 · Commitment format</b>
-        <p>The record by which a supporter backs one purchase: one transaction, signed by its owner and nobody else, which cannot move a coin until the co-signer adds the second signature. Eight verification steps, seven of which need no network.</p>
-        <p class="note"><a href="commitment-format.md">commitment-format.md</a> · v1</p>
-      </div>
-      <div class="card">
-        <b class="head">7 · Published destinations format</b>
-        <p>The only addresses committed money may be sent to, and the whole defence against a forged proposal. Append-only, hash-chained, separately signed, and subject to a public waiting period, chosen by each Crowdlock (seven days recommended), before any proposal may name an address.</p>
-        <p class="note"><a href="destinations-format.md">destinations-format.md</a> · v1 · list: <a href="https://thekopfund.org/destinations.json">destinations.json</a></p>
-      </div>
-    </div>
-    <p class="note"><a href="running-your-own.md">Running your own</a> — which of these are general, the parameters your own instance must publish, what this method is good and bad at, and the one condition that is not negotiable. For any club, any sport, any cause.</p>
+    <p class="lede">Crowdlock is these documents, not any piece of software. Anyone holding them can build their own app, their own register, or take part with neither.</p>
+    <p class="lede">Six of them are general and can be used as they stand. The seventh is the declaration, which each Crowdlock writes for itself.</p>
   </section>
 
   <section>
+    <ol class="rows">
+      <li><span class="n" aria-hidden="true">1</span><div>
+        <h3>The declaration</h3>
+        <p>What a Crowdlock is for and what it will never do. Each Crowdlock writes its own, and its members sign it, so once anybody has signed, the words can never change.</p>
+        <p class="file">An example, The Kop Fund's: <a href="declaration-v1.txt">declaration-v1.txt</a> · v1 · 3,408 bytes · <span class="mono">sha256:3a0a0bca…6209b96</span></p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">2</span><div>
+        <h3><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/registration-format.md">Registration format</a></h3>
+        <p>What a membership record is, how to make one, how to check one, and how to submit it without anyone's permission. Two fields: an address and a signature.</p>
+        <p class="file">Plain file: <a href="registration-format.md">registration-format.md</a> · v1</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">3</span><div>
+        <h3><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/counting-rule.md">Counting rule</a></h3>
+        <p>How every published figure is worked out, precisely enough that two people reach the same answer from public data. Includes what must never be published, and why.</p>
+        <p class="file">Plain file: <a href="counting-rule.md">counting-rule.md</a> · v1</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">4</span><div>
+        <h3><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/lock-format.md">Lock format</a></h3>
+        <p>How locked money is held: the script, the two ways out, the lengths on offer, and the four behaviours that must hold or nothing else can be relied on.</p>
+        <p class="file">Plain file: <a href="lock-format.md">lock-format.md</a> · v1</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">5</span><div>
+        <h3><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/proposal-and-settlement.md">Proposal and settlement format</a></h3>
+        <p>How locked money is spent. There is no vote: a proposal is funded or it is not. The windows, how settlement is paced, and what happens when a proposal fails.</p>
+        <p class="file">Plain file: <a href="proposal-and-settlement.md">proposal-and-settlement.md</a> · v1</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">6</span><div>
+        <h3><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/commitment-format.md">Commitment format</a></h3>
+        <p>The record by which one person backs one purchase: a single payment, signed by its owner and nobody else, which cannot move a coin until the co-signer adds the second signature.</p>
+        <p class="file">Plain file: <a href="commitment-format.md">commitment-format.md</a> · v1</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">7</span><div>
+        <h3><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/destinations-format.md">Published destinations format</a></h3>
+        <p>The only addresses locked money may be sent to, and the whole defence against a forged proposal. Entries can only be added, each one is signed, and each waits in public for a period its Crowdlock chooses (seven days is recommended) before a proposal may name it.</p>
+        <p class="file">Plain file: <a href="destinations-format.md">destinations-format.md</a> · v1</p>
+      </div></li>
+    </ol>
+    <p class="note"><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/running-your-own.md">Running your own</a> covers which of these are general, what your own Crowdlock must publish, what the method is good and bad at, and what every Crowdlock shares. Plain file: <a href="running-your-own.md">running-your-own.md</a></p>
+  </section>
+
+  <section class="prose">
     <h2>Take it</h2>
-    <p>Everything here is free to copy, for any club, any sport, or any cause that fits. Copying it is not tolerated, it is the point. Nobody needs permission, nobody needs to tell us, and nothing is owed to anybody if it works.</p>
-    <p>Write your own declaration and keep the other six documents as they are. They describe a mechanism, not a football club: a crowd committing money towards buying something it means to hold permanently, with nobody ever holding anybody else's money. A pub, a woodland, a local paper, a shuttered factory — same shape.</p>
-    <p><strong>One condition is not negotiable.</strong> Contributors must receive nothing financial, ever. If you intend to pay anybody a return, this is the wrong specification and what you would be building is a regulated investment scheme with none of the protections one is required to have. <a href="running-your-own.md">Running your own</a> spells out the rest.</p>
+    <p>Everything here is free to copy, for any club, any sport, or any cause that fits. Copying it is not just allowed, it is the point. Nobody needs permission, nobody needs to tell us, and nothing is owed to anybody if it works.</p>
+    <p>Write your own declaration and keep the other six documents as they are. They describe a mechanism, not a football club: a crowd committing money towards buying something it means to keep, with nobody ever holding anybody else's money. A pub, a woodland, a local paper, a shuttered factory: same shape.</p>
+    <p>A Crowdlock is for a crowd that wants the thing itself, and a say in it, not a profit. It is not a financial investment and it pays no financial return. If you want to pay people a return, you need a different, regulated setup, with protections this method doesn't have. <a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/running-your-own.md">Running your own</a> spells out the rest.</p>
   </section>
 
-  <section>
+  <section class="prose">
     <h2>Why documents rather than software</h2>
-    <p>If this movement were a piece of software, whoever controlled that software would control the movement. Principle 9 of the declaration exists to prevent exactly that, and these documents are how it is kept.</p>
-    <p>Everything a client needs is here. Our website and our app are two possible readings of these documents; they are not the thing itself, and the register is obliged to treat an independent implementation exactly the same as our own.</p>
+    <p>If a Crowdlock were a piece of software, whoever controlled that software would control the Crowdlock. Writing the rules down is how that is prevented.</p>
+    <p>Everything a program needs is here. The Crowdlock app and any Crowdlock's website are two possible readings of these documents. They are not the thing itself, and a register has to treat a record made by somebody else's software exactly the same as one made by ours.</p>
   </section>
 
   <section>
     <h2>Checking it all yourself</h2>
+    <p class="soft">You need git and Node 22. Run these one line at a time.</p>
     <pre>git clone https://github.com/Jimbus9/crowdlock
 cd crowdlock
 
-# the verifier, checked against an independent library
+# the lock's construction, and the libraries the checks below use
+cd method/lock
+npm ci
+node selftest.mjs
+
+# commitments, and the destinations list that guards them
+node commitment.test.mjs
+
+# the taproot form of the same lock, which nothing uses yet
+node taproot.test.mjs
+cd ../..
+
+# the signature checker, against an independent library
 node method/js/verify.test.mjs
 
 # every Crowdlock's own file, and its declaration's fingerprint
 node method/js/crowdlock.test.mjs
 
-# the live register — every published signature, checked for real
-node method/js/register.test.mjs
-
-# the lock's construction
-cd lock &amp;&amp; npm install &amp;&amp; node selftest.mjs
-
-# the taproot form of the same lock, which nothing uses yet
-node taproot.test.mjs
-
-# commitments, and the destinations list that guards them
-node commitment.test.mjs
-
-# the lock's enforcement, on testnet with free coins
-node run-testnet.mjs</pre>
-    <p class="note">The declaration's fingerprint can be reproduced from the published text with the canonicalisation rules in the registration format. Nothing here asks to be believed.</p>
+# a register: every published signature, checked for real
+node method/js/register.test.mjs</pre>
+    <p class="note">A declaration's fingerprint can be reproduced from its published text with the rules in the registration format. Nothing here asks to be believed. <a href="https://github.com/Jimbus9/crowdlock/blob/main/REVIEWING.md">Reviewing Crowdlock</a> has the full list of tests, and says what is and isn't proven.</p>
   </section>
 
   <section>
@@ -121,27 +131,27 @@ node run-testnet.mjs</pre>
     <div class="scroller"><table>
       <thead><tr><th>Document</th><th>Version</th><th>Dated</th></tr></thead>
       <tbody>
-        <tr><td>The declaration</td><td class="num">1</td><td>15 October 2026</td></tr>
-        <tr><td>Registration format</td><td class="num">1</td><td>24 October 2026</td></tr>
-        <tr><td>Counting rule</td><td class="num">1</td><td>24 October 2026</td></tr>
-        <tr><td>Lock format</td><td class="num">1</td><td>24 October 2026</td></tr>
-        <tr><td>Proposal and settlement format</td><td class="num">1</td><td>24 October 2026</td></tr>
-        <tr><td>Commitment format</td><td class="num">1</td><td>24 October 2026</td></tr>
-        <tr><td>Published destinations format</td><td class="num">1</td><td>24 October 2026</td></tr>
-        <tr><td>Running your own</td><td class="num">1</td><td>24 October 2026</td></tr>
+        <tr><td>The Kop Fund's declaration</td><td>1</td><td>15 October 2026</td></tr>
+        <tr><td>Registration format</td><td>1</td><td>24 October 2026</td></tr>
+        <tr><td>Counting rule</td><td>1</td><td>24 October 2026</td></tr>
+        <tr><td>Lock format</td><td>1</td><td>24 October 2026</td></tr>
+        <tr><td>Proposal and settlement format</td><td>1</td><td>24 October 2026</td></tr>
+        <tr><td>Commitment format</td><td>1</td><td>24 October 2026</td></tr>
+        <tr><td>Published destinations format</td><td>1</td><td>24 October 2026</td></tr>
+        <tr><td>Running your own</td><td>1</td><td>24 October 2026</td></tr>
       </tbody>
     </table></div>
-    <p class="note"><strong>What a version means here.</strong> The declaration's version is load-bearing: a signature is made over one specific text, so a v2 would be published with its reason and members asked whether they wish to sign it, never applied retrospectively to words its signatories did not read. The other six are working documents whose version history begins the moment anybody can depend on them. They were drafted over the week to 24 October and are all at v1 as of that date; every change before and since is in the public commit history.</p>
+    <p class="note"><strong>What a version means here.</strong> A declaration's version is load-bearing: a signature is made over one exact text, so a second version would be published with its reason and members asked whether they wish to sign it, never applied to words they did not read. The other documents are working documents. They were drafted over the week to 24 October 2026 and are all at version 1. Every change since is in the public commit history.</p>
     <p class="note"><strong>Copy them.</strong> These documents are licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>: copy, adapt and use them for anything, including your own club or cause, as long as you credit where they came from and say what you changed. The code is under the MIT licence. Details in <a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/LICENSE">spec/LICENSE</a>.</p>
   </section>
 
 </main>
 
-<footer class="inner">
-  <p><strong>This is not an investment.</strong> There is no return, no dividend and no payout, now or ever. Nothing here is legal or financial advice.</p>
-  <p>An independent initiative by supporters of Liverpool Football Club. Not affiliated with, endorsed by or connected to Liverpool Football Club, its owners, or any official supporters' organisation.</p>
-  <p><a href="https://github.com/Jimbus9/crowdlock">Source and documents on GitHub</a> · Questions, problems or ideas: email <a href="mailto:hello@crowdlock.org">hello@crowdlock.org</a> or <a href="https://github.com/Jimbus9/crowdlock/issues">open an issue</a></p>
-</footer>
+<footer class="foot"><div class="wrap">
+  <p>Questions, problems or ideas: <a href="mailto:hello@crowdlock.org">hello@crowdlock.org</a> or <a href="https://github.com/Jimbus9/crowdlock/issues">open an issue</a>.</p>
+  <p>Code: MIT licence. Documents: CC BY 4.0.</p>
+  <p>Crowdlock is not a financial investment service. Nothing here is legal or financial advice.</p>
+</div></footer>
 
 </body>
 </html>

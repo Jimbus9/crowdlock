@@ -2,19 +2,148 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crowdlock — the method and the app</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crowdlock — a way for a crowd to commit bitcoin, with nobody holding it</title>
+<meta name="description" content="Crowdlock is a published method. Each person locks bitcoin in their own wallet towards a cause. Nobody pools it, and nobody else can take it.">
+<link rel="canonical" href="https://crowdlock.org/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Crowdlock">
+<meta property="og:title" content="Crowdlock">
+<meta property="og:description" content="A way for a crowd to commit bitcoin to a cause, with nobody holding it.">
+<meta property="og:url" content="https://crowdlock.org/">
+<meta property="og:image" content="https://crowdlock.org/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Crowdlock: three people arm in arm">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main style="max-width:40rem;margin:2rem auto;padding:0 1rem">
-  <h1>Crowdlock</h1>
-  <p>The method, its reference code and the Crowdlock app. The Kop Fund has its own site: <a href="https://thekopfund.org/">thekopfund.org</a>.</p>
-  <ul>
-    <li><a href="spec/">The method's documents</a></li>
-    <li><a href="https://github.com/Jimbus9/crowdlock">Source on GitHub</a></li>
-  </ul>
-  <p>Questions, problems or ideas: email <a href="mailto:hello@crowdlock.org">hello@crowdlock.org</a> or <a href="https://github.com/Jimbus9/crowdlock/issues">open an issue</a>.</p>
+
+<header class="top"><div class="wrap">
+  <a class="brand" href="./">
+    <svg class="mark" width="40" height="40" viewBox="0 0 96 100" role="img" aria-label="Crowdlock"><path d="M9,78 V55 a13,13 0 0 1 26,0 V78 M35,55 a13,13 0 0 1 26,0 V78 M61,55 a13,13 0 0 1 26,0 V78"></path><circle cx="22" cy="27" r="7.5"></circle><circle cx="74" cy="27" r="7.5"></circle><circle class="mid" cx="48" cy="27" r="7.5"></circle></svg>
+    Crowdlock
+  </a>
+  <nav aria-label="Main">
+    <a href="spec/">The documents</a>
+    <a href="#checked">What's checked</a>
+    <a href="https://github.com/Jimbus9/crowdlock">Source</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <p class="eyebrow">A set of rules, free to copy</p>
+    <h1>A way for a crowd to commit bitcoin to a cause, with nobody holding it.</h1>
+    <p class="lede">Crowdlock is a method, written down in a handful of short documents. Each person locks bitcoin in their own wallet. Nobody pools it, and nobody else can take it.</p>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <ol class="rows">
+      <li><span class="n" aria-hidden="true">1</span><div>
+        <h3>You lock your own bitcoin</h3>
+        <p>It stays in your wallet until a date you choose. From that date it is yours to take home, and nobody can stop you.</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">2</span><div>
+        <h3>One public total</h3>
+        <p>Only locked bitcoin is counted. Anyone can add it up again from the blockchain and get the same number.</p>
+      </div></li>
+      <li><span class="n" aria-hidden="true">3</span><div>
+        <h3>A purchase is funded, or it isn't</h3>
+        <p>There is no vote. Each person signs their own locked bitcoin into a published proposal, and a co-signer adds the second signature. The co-signer can refuse. It can never take money. If the proposal falls short, nothing moves.</p>
+      </div></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What you get, and what you don't</h2>
+    <ul class="rows">
+      <li><div>
+        <h3>Influence</h3>
+        <p>Your bitcoin only ever goes to a purchase you sign yourself. Nobody decides for you.</p>
+      </div></li>
+      <li><div>
+        <h3>A cause you believe in, funded</h3>
+        <p>A crowd that locks together can buy what none of its members could alone.</p>
+      </div></li>
+      <li><div>
+        <h3>Not a financial return</h3>
+        <p>Crowdlock is not a financial investment service. Nobody is paid a dividend, interest or a profit. Bitcoin's price rises and falls, and yours can be worth less when its lock ends.</p>
+      </div></li>
+    </ul>
+  </section>
+
+  <section id="documents">
+    <h2>The documents</h2>
+    <p class="soft">The method is these six documents, not any piece of software. Each Crowdlock adds one of its own: a declaration saying what it is for.</p>
+    <ul class="rows doclist">
+      <li><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/registration-format.md"><b>Registration format</b><span>What a membership record is: an address and a signature.</span></a></li>
+      <li><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/counting-rule.md"><b>Counting rule</b><span>How every published figure is worked out from public data.</span></a></li>
+      <li><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/lock-format.md"><b>Lock format</b><span>How locked bitcoin is held, and the only two ways out.</span></a></li>
+      <li><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/proposal-and-settlement.md"><b>Proposals and settlement</b><span>How locked bitcoin is spent, and what happens when a proposal fails.</span></a></li>
+      <li><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/commitment-format.md"><b>Commitment format</b><span>How one person backs one purchase.</span></a></li>
+      <li><a href="https://github.com/Jimbus9/crowdlock/blob/main/spec/destinations-format.md"><b>Destinations format</b><span>The only addresses a proposal is allowed to pay.</span></a></li>
+    </ul>
+    <a class="more" href="spec/">All the documents, with versions</a>
+  </section>
+
+  <section id="checked">
+    <h2>What has been checked, and what hasn't</h2>
+    <p class="soft">Don't take our word for any of it. The code and its tests are public.</p>
+    <ul class="rows">
+      <li><svg class="icon yes" width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M4 13.5 L10.5 20 L22 7"></path></svg><div>
+        <h3><span class="yes">Checked.</span> The lock, on a public test network</h3>
+        <p>26 October 2026. The owner alone before the date: refused. The co-signer alone: refused. Owner and co-signer together: accepted. The owner alone after the date: accepted.</p>
+      </div></li>
+      <li><svg class="icon yes" width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M4 13.5 L10.5 20 L22 7"></path></svg><div>
+        <h3><span class="yes">Checked.</span> The app's wallet, on a private test chain</h3>
+        <p>Making a wallet, restoring it, sending, locking, taking a lock home after its date, and locking again.</p>
+      </div></li>
+      <li><svg class="icon yes" width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M4 13.5 L10.5 20 L22 7"></path></svg><div>
+        <h3><span class="yes">Checked.</span> A purchase, start to finish, with test money</h3>
+        <p>November 2026, by hand. One proposal was funded and paid. Another fell short and was declared dead.</p>
+      </div></li>
+      <li><svg class="icon notyet" width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><circle class="bg" cx="14" cy="14" r="13"></circle><rect class="fg" x="12.5" y="12" width="3" height="9"></rect><circle class="fg" cx="14" cy="8" r="1.9"></circle></svg><div>
+        <h3><span class="notyet">Not yet.</span> A review from outside</h3>
+        <p>Nobody outside this project has checked the code. Finding a flaw is the most useful thing you can do here.</p>
+      </div></li>
+      <li><svg class="icon notyet" width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><circle class="bg" cx="14" cy="14" r="13"></circle><rect class="fg" x="12.5" y="12" width="3" height="9"></rect><circle class="fg" cx="14" cy="8" r="1.9"></circle></svg><div>
+        <h3><span class="notyet">Not yet.</span> Real bitcoin, start to finish</h3>
+        <p>One real lock exists so far, the founder's own. No real lock has been taken home yet, and no real purchase has been made.</p>
+      </div></li>
+    </ul>
+    <div class="actions">
+      <a class="btn" href="https://github.com/Jimbus9/crowdlock/blob/main/REVIEWING.md">How to review it</a>
+      <a class="btn ghost" href="https://github.com/Jimbus9/crowdlock">Read the code</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>See one running</h2>
+    <p>The Kop Fund is a Crowdlock. Supporters lock bitcoin towards buying a stake in Liverpool Football Club. It is run by supporters and is not affiliated with the club.</p>
+    <a class="more" href="https://thekopfund.org/">Visit thekopfund.org</a>
+  </section>
+
+  <section class="prose">
+    <h2>Take it</h2>
+    <p class="soft">Everything here is free to copy, for any club, any sport or any cause. Nobody needs permission, and nothing is owed if it works.</p>
+    <p class="soft">A Crowdlock is for a crowd that wants the thing itself, not a profit. If you want to pay people a return, you need a different, regulated setup, and this isn't one.</p>
+    <p><a class="more" href="https://github.com/Jimbus9/crowdlock/blob/main/spec/running-your-own.md">Read "Running your own"</a></p>
+    <p class="soft small">There is an app for any Crowdlock. It is an early build that nobody outside the project has reviewed, and everything it does can also be done without it. <a href="https://github.com/Jimbus9/crowdlock/tree/main/app">About the app</a></p>
+  </section>
+
 </main>
+
+<footer class="foot"><div class="wrap">
+  <p>Questions, problems or ideas: <a href="mailto:hello@crowdlock.org">hello@crowdlock.org</a> or <a href="https://github.com/Jimbus9/crowdlock/issues">open an issue</a>.</p>
+  <p>Code: MIT licence. Documents: CC BY 4.0.</p>
+  <p>Crowdlock is not a financial investment service. Nothing here is legal or financial advice.</p>
+</div></footer>
+
 </body>
 </html>
