@@ -33,6 +33,22 @@
         "rate": "1 BTC = 10.00 GBP",
         "at": "2026-11-12T20:10:48Z"
       }
+    },
+    {
+      "title": "Commit test 3",
+      "text": "Testing the new commit pages. Nothing is being bought.",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-14T08:57:14Z",
+      "closes": "2026-11-15T08:57:14Z",
+      "settles_by": "2026-11-16T08:57:14Z",
+      "hash": "a1a38aaaa5d4b0d629809cf53a2beb66d20673c01890320636e6b3e8b7898ecf",
+      "target": {
+        "sats": 80000,
+        "rate": "1 BTC = 12500.00 GBP",
+        "at": "2026-11-14T08:57:14Z"
+      }
     }
   ]
 }
