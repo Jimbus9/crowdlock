@@ -1470,9 +1470,11 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
   const account = useMemo(() => walletAccount(words), [words]);
   const { c, p } = useProposal(url, hash);
   const [coins, setCoins] = useState<{ lock: any; coin: any }[] | null>(null);
-  const [pick, setPick] = useState(0);
+  // Which locks are ticked, by their place in the list. The biggest starts ticked.
+  const [picks, setPicks] = useState<number[]>([0]);
   const [amount, setAmount] = useState("");
   const [page, setPage] = useState(1);
+  const [progress, setProgress] = useState<string | null>(null);
   const [showSpeeds, setShowSpeeds] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1531,25 +1533,40 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
   );
   if (!coins) return <ActivityIndicator style={{ marginTop: 60 }} />;
 
-  const chosen = coins[Math.min(pick, coins.length - 1)];
-  const sats = amount.trim() ? parseBtc(amount) : null;
-  const problem = amount.trim() && sats === null ? "Type the amount in BTC, like 0.001."
-    : sats !== null && sats > BigInt(chosen.coin.value) ? "That's more than this lock holds." : null;
+  const chosen = picks.filter((i) => i < coins.length).sort((x, y) => x - y).map((i) => coins[i]);
+  const several = chosen.length > 1;
+  // An amount can be typed only with one lock ticked; with several, all of each is committed.
+  const sats = !several && amount.trim() ? parseBtc(amount) : null;
+  const total = chosen.reduce((n, x) => n + BigInt(x.coin.value), 0n);
+  const problem = chosen.length === 0 ? "Tick at least one lock."
+    : !several && amount.trim() && sats === null ? "Type the amount in BTC, like 0.001."
+    : sats !== null && sats > BigInt(chosen[0].coin.value) ? "That's more than this lock holds." : null;
+  const toggle = (i: number) => setPicks((old) => (old.includes(i) ? old.filter((x) => x !== i) : [...old, i]));
 
+  // Each lock is its own commitment, signed one after another. If one fails,
+  // it stops there and says how many were done; those stay committed.
   const commit = async () => {
     setBusy(true); setError(null);
+    let committed = 0n, fee = 0n, remainder = 0n, made = 0;
     try {
       const feeRate = await chain.feeRate(feeSpeed);
-      const r = await buildCommitment({ account, chain, lock: chosen.lock, coin: chosen.coin, proposalHash: p.hash, destination: p.destination, amount: sats === null ? "all" : sats, feeRate, maxFee: c.crowdlock.max_commitment_fee });
-      const v = await checkCommitment({ record: r.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
-      if (!v.valid) throw new Error(`the commitment didn't pass its own check: ${v.reason}`);
-      const posted = await postCommitment(c.crowdlock, { type: "commitment", proposal: p.hash, record: r.record });
-      if (!posted.ok) throw new Error("Signed, but it couldn't be sent just now. Check your connection or VPN and try again.");
+      for (const x of chosen) {
+        if (several) setProgress(`Signing ${made + 1} of ${chosen.length}…`);
+        const r = await buildCommitment({ account, chain, lock: x.lock, coin: x.coin, proposalHash: p.hash, destination: p.destination, amount: sats === null ? "all" : sats, feeRate, maxFee: c.crowdlock.max_commitment_fee });
+        const v = await checkCommitment({ record: r.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
+        if (!v.valid) throw new Error(`the commitment didn't pass its own check: ${v.reason}`);
+        const posted = await postCommitment(c.crowdlock, { type: "commitment", proposal: p.hash, record: r.record });
+        if (!posted.ok) throw new Error("Signed, but it couldn't be sent just now. Check your connection or VPN and try again.");
+        committed += r.committed; fee += r.fee; remainder += r.remainder; made++;
+      }
       lastOverview = null;
-      setDone(`You committed ${btc(r.committed)} to "${p.title}". The network fee would be ${btc(r.fee)}, paid only if it settles.${r.remainder > 0n ? ` The other ${btc(r.remainder)} would stay locked to the same date.` : ""}`);
+      setDone(`You committed ${btc(committed)} to "${p.title}"${several ? `, from ${made} locks` : ""}. The network fee would be ${btc(fee)}, paid only if it settles.${remainder > 0n ? ` The other ${btc(remainder)} would stay locked to the same date.` : ""}`);
       setPage(3);
-    } catch (e: any) { setError(String(e.message ?? e)); }
-    setBusy(false);
+    } catch (e: any) {
+      if (made > 0) lastOverview = null;
+      setError((made > 0 ? `${made} of ${chosen.length} were committed (${btc(committed)}); they stay committed. Then this went wrong: ` : "") + String(e.message ?? e));
+    }
+    setProgress(null); setBusy(false);
   };
 
   if (page === 1) return (
@@ -1557,18 +1574,25 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
       {kick(" · 1 of 2")}
       <Text style={s.h1}>Which lock, how much?</Text>
       <Text style={s.p}>A commitment is your signed promise to pay towards "{p.title}" from a lock. Nothing moves unless the proposal reaches its target.</Text>
-      <Text style={s.label}>From which lock?</Text>
-      <View accessibilityRole="radiogroup">
+      <Text style={s.label}>{coins.length > 1 ? "From which locks? Tick one or more." : "From this lock"}</Text>
+      <View>
         {coins.map((x, i) => (
-          <Pressable key={x.coin.txid + x.coin.vout} accessibilityRole="radio" accessibilityState={{ selected: i === pick }} onPress={() => setPick(i)} style={{ flexDirection: "row", alignItems: "center", minHeight: 48 }}>
-            <View style={[s.box, i === pick && s.boxOn]}>{i === pick && <Text style={s.onBrand}>✓</Text>}</View>
+          <Pressable key={x.coin.txid + x.coin.vout} accessibilityRole="checkbox" accessibilityState={{ checked: picks.includes(i) }} onPress={() => toggle(i)} style={{ flexDirection: "row", alignItems: "center", minHeight: 48 }}>
+            <View style={[s.box, picks.includes(i) && s.boxOn]}>{picks.includes(i) && <Text style={s.onBrand}>✓</Text>}</View>
             <Text style={[s.p, { marginBottom: 0, flex: 1 }]}>{btc(BigInt(x.coin.value))}, locked until {when(x.lock.locktime)}</Text>
           </Pressable>
         ))}
       </View>
-      <Text style={s.label}>Amount to commit, in BTC</Text>
-      <Input style={s.input} keyboardType="decimal-pad" value={amount} onChangeText={setAmount} placeholder="All of this lock" />
-      <Text style={problem ? s.error : s.note}>{problem ?? "Leave it empty to commit all of this lock. Whatever you don't commit stays locked to the same date."}</Text>
+      {several ? (
+        <Text style={s.note}>You have ticked {chosen.length} locks: {btc(total)} in all. All of each one is committed. To commit only part of a lock, tick that lock alone.</Text>
+      ) : (
+        <>
+          <Text style={s.label}>Amount to commit, in BTC</Text>
+          <Input style={s.input} keyboardType="decimal-pad" value={amount} onChangeText={setAmount} placeholder="All of this lock" />
+          {!problem && <Text style={s.note}>Leave it empty to commit all of this lock. Whatever you don't commit stays locked to the same date.</Text>}
+        </>
+      )}
+      {problem && <Text style={s.error}>{problem}</Text>}
       <Btn label="Next" disabled={!!problem} onPress={() => setPage(2)} />
     </View>
   );
@@ -1577,7 +1601,8 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
     <View>
       {kick(" · 2 of 2")}
       <Text style={s.h1}>Check and sign</Text>
-      <SumRow label="You commit" value={sats === null ? `${btc(BigInt(chosen.coin.value))} (all of this lock)` : btc(sats)} />
+      <SumRow label="You commit" value={several ? `${btc(total)} (all of ${chosen.length} locks)` : sats === null ? `${btc(total)} (all of this lock)` : btc(sats)} />
+      {several && chosen.map((x) => <Text key={x.coin.txid + x.coin.vout} style={s.note}>{btc(BigInt(x.coin.value))}, locked until {when(x.lock.locktime)}</Text>)}
       <SumRow label="To" value={p.title} />
       <SumRow label="Binding until" value={atUtc(p.closes)} />
       <Text style={s.label}>It would pay this address (the seller)</Text>
@@ -1590,9 +1615,11 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
         A commitment holds until the proposal closes, and can't be withdrawn. Nothing moves unless the proposal reaches its target and the co-signer completes it. If it doesn't, your money stays locked and comes home on its date. One catch: until then your signed commitment stays valid, so a dishonest co-signer could still complete it, but only to that same listed seller.
       </Warning>
       <LedgerHint account={account} />
+      {several && <Text style={s.p}>Each lock is signed as its own commitment, one after another.{account.kind === "ledger" ? ` Your Ledger will ask you to approve ${chosen.length} times.` : ""}</Text>}
       {account.kind === "ledger" && <Text style={s.note}>Your Ledger will show the payment to the seller: approve it only if the address matches the one above.</Text>}
       {error && <Text style={s.error}>{error}</Text>}
-      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing…") : "Sign the commitment"} disabled={busy} onPress={commit} />
+      {busy && progress && <Text style={s.note}>{progress}</Text>}
+      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing…") : several ? `Sign ${chosen.length} commitments` : "Sign the commitment"} disabled={busy} onPress={commit} />
     </View>
   );
 }
