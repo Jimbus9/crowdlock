@@ -7,7 +7,7 @@
 //                 the six steps), My bitcoin (waiting, Add money, Send out,
 //                 your locks), Crowdlocks (each one checked before it is
 //                 shown), More (help, fee speed, wallet, founders)
-//   Crowdlock  →  its declaration, and Sign and join in one tap; then, for a
+//   Crowdlock  →  its declaration, and Sign to join in one tap; then, for a
 //                 member, Your locks: progress to the minimum, Lock it,
 //                 each lock's state, and Take it home after its date
 //   Add        →  any other Crowdlock, by link, checked the same way
@@ -1691,7 +1691,7 @@ function Confirm({ title, text, yes, onYes, onCancel }: { title: string; text: s
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: sign and join. Its own page, with its two warnings above the button.
+// Step 2: sign to join. Its own page, with its two warnings above the button.
 // The signing and sending are the same calls as before.
 // ---------------------------------------------------------------------------
 
@@ -1746,7 +1746,7 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
   );
   if (c.crowdlock.network !== NETWORK) return (
     <View>
-      <Text style={s.h1}>Sign and join</Text>
+      <Text style={s.h1}>Sign to join</Text>
       <Text style={s.error}>This Crowdlock uses a different network from this app.</Text>
     </View>
   );
@@ -1754,7 +1754,7 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
   return (
     <View>
       <Text style={s.kick}>Step 2 of 6: Sign</Text>
-      <Text style={s.h1}>Sign and join</Text>
+      <Text style={s.h1}>Sign to join</Text>
       <Text style={s.p}>Signing is free and moves no money. It proves this wallet agrees to {name}'s declaration, and the register checks it before adding you.</Text>
       <Text style={s.label}>What you sign</Text>
       <Text style={s.mono}>{c.statement}</Text>
@@ -1766,7 +1766,7 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
       </Warning>
       <LedgerHint account={account} />
       {result && <Text style={s.error}>{result.text}</Text>}
-      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing and sending…") : "Sign and join"} disabled={busy} onPress={join} />
+      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing and sending…") : "Sign to join"} disabled={busy} onPress={join} />
     </View>
   );
 }
