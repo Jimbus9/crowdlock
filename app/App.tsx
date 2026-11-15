@@ -3140,6 +3140,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const [steps, setSteps] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ links: { label: string; url: string }[]; repoUrl: string; inboxStarted: boolean; owner: string; repo: string } | null>(null);
+  const [at, setAt] = useState(0);   // which page of the form
+  useBack(() => { if (stage === "form" && at > 0) { setAt(at - 1); return true; } return false; });
 
   // The test copy's co-signer key is made here, from the founder's own words,
   // on a path of its own. The real one is pasted in from wherever it lives.
@@ -3235,73 +3237,136 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       <Text style={s.h2}>Add a maintainer</Text>
       <MaintainerAdvice />
       <MaintainerForm owner={done.owner} repo={done.repo} />
-      <Text style={s.note}>You can do this any time from the Crowdlock's page, under "Look after this Crowdlock".</Text>
-      <Button label="Back to wallet" onPress={() => go({ name: "home", words })} />
+      <Text style={s.note}>You can do this any time from the Crowdlock's page, under "Look after it".</Text>
+      <Button label="Back to Home" onPress={() => go({ name: "home", words })} />
     </View>
   );
 
+  // The form, one question to a page. Which pages there are depends on the money.
+  const pages = network === "mainnet"
+    ? ["money", "name", "declaration", "minimum", "cosigner", "lengths", "testkey", "check"] as const
+    : ["money", "name", "declaration", "lengths", "testkey", "check"] as const;
+  const here = pages[Math.min(at, pages.length - 1)];
+  const next = () => { setChecked(null); setProblems(null); setAt(Math.min(at + 1, pages.length - 1)); };
+  const badKey = (v: string) => !!v.trim() && !isPublicKey(v) && !keyFromXpub(v);
+  const days = (v: string) => /^\d{1,3}$/.test(v.trim());
+  const stuck =
+    here === "name" ? !name.trim() || !about.trim()
+    : here === "declaration" ? !title.trim() || !text.trim()
+    : here === "minimum" ? !days(waitDays) || !minimum.trim()
+    : here === "cosigner" ? !cosigner.trim() || badKey(cosigner)
+    : here === "lengths" ? !days(gatherDays) || !days(settleDays)
+    : here === "testkey" ? badKey(testPasted) || (!testCo && !testPasted.trim())
+    : false;
+
   return (
     <View>
-      <Text style={s.h1}>Start a Crowdlock</Text>
-      <Text style={s.p}>A Crowdlock lets a crowd commit money to buying something together, without anyone pooling it or holding anyone else's. You write what it's for; the app sets it up in your own GitHub account.</Text>
+      <Text style={s.kick}>Start a Crowdlock · {at + 1} of {pages.length}</Text>
 
-      <Text style={s.label}>Money</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {([["testnet4", "Test bitcoin only"], ["mainnet", "Real bitcoin, with a test copy"]] as const).map(([k, label]) => (
-          <Pressable key={k} onPress={() => { setNetwork(k); setChecked(null); }} style={[s.chip, network === k && s.chipOn]}>
-            <Text style={[s.chipText, network === k && s.chipTextOn]}>{label}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {here === "money" && <>
+        <Text style={s.h1}>Start a Crowdlock</Text>
+        <Text style={s.p}>A Crowdlock lets a crowd commit money to buying something together, without anyone pooling it or holding anyone else's. You write what it's for; the app sets it up in your own GitHub account.</Text>
+        <Text style={s.label}>Which money?</Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup">
+          {([["testnet4", "Test bitcoin only"], ["mainnet", "Real bitcoin, with a test copy"]] as const).map(([k, label]) => (
+            <Pressable key={k} accessibilityRole="radio" accessibilityState={{ selected: network === k }} onPress={() => { setNetwork(k); setChecked(null); }} style={[s.chip, network === k && s.chipOn]}>
+              <Text style={[s.chipText, network === k && s.chipTextOn]}>{network === k ? "✓ " : ""}{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={s.note}>{network === "mainnet"
+          ? "A real-bitcoin Crowdlock comes with a test copy, so you and your members can practise first."
+          : "Test bitcoin has no value: practise everything (joining, locking, taking a lock home) before anything is real."}</Text>
+      </>}
 
-      <Text style={s.label}>Name</Text>
-      <Input style={s.input} value={name} onChangeText={(t) => { setName(t); setChecked(null); }} placeholder="The Pub Fund" />
-      <Text style={s.label}>What it's for, in one sentence</Text>
-      <Input style={s.input} value={about} onChangeText={(t) => { setAbout(t); setChecked(null); }} placeholder="Regulars buying the Red Lion so it stays a pub for good." />
-      <Text style={s.label}>The declaration's title</Text>
-      <Input style={s.input} value={title} autoCapitalize="characters" onChangeText={(t) => {
-        // Keep the declaration's first line in step with its title while it still matches.
-        setText((old) => old.startsWith(title.toUpperCase() + "\n") ? t.toUpperCase() + old.slice(title.length) : old);
-        setTitle(t); setChecked(null);
-      }} />
-      <Text style={s.label}>The declaration — what people sign</Text>
-      <Text style={s.note}>Replace the bracketed part with what you're raising money for. Leave the line about returns as it is. It's what makes this a Crowdlock. Investments that pay returns have legal rules to follow, and Crowdlock follows none of them. Once anyone signs, these words can never change.</Text>
-      <Input style={[s.input, { minHeight: 240, textAlignVertical: "top" }]} multiline value={text} onChangeText={(t) => { setText(t); setChecked(null); }} />
+      {here === "name" && <>
+        <Text style={s.h1}>What is it called, and what is it for?</Text>
+        <Text style={s.label}>Name</Text>
+        <Input style={s.input} value={name} onChangeText={(t) => { setName(t); setChecked(null); }} placeholder="The Pub Fund" />
+        <Text style={s.label}>What it's for, in one sentence</Text>
+        <Input style={s.input} value={about} onChangeText={(t) => { setAbout(t); setChecked(null); }} placeholder="Regulars buying the Red Lion so it stays a pub for good." />
+      </>}
 
-      {network === "mainnet" ? <>
-        <Text style={s.label}>Minimum lock that counts, in BTC</Text>
+      {here === "declaration" && <>
+        <Text style={s.h1}>The declaration</Text>
+        <Text style={s.p}>These are the words every member signs. Replace the bracketed part with what you're raising money for.</Text>
+        <Text style={s.label}>Its title</Text>
+        <Input style={s.input} value={title} autoCapitalize="characters" onChangeText={(t) => {
+          // Keep the declaration's first line in step with its title while it still matches.
+          setText((old) => old.startsWith(title.toUpperCase() + "\n") ? t.toUpperCase() + old.slice(title.length) : old);
+          setTitle(t); setChecked(null);
+        }} />
+        <Text style={s.label}>What people sign</Text>
+        <Input style={[s.input, { minHeight: 240, textAlignVertical: "top" }]} multiline value={text} onChangeText={(t) => { setText(t); setChecked(null); }} />
+        <Text style={s.note}>Leave the line about returns as it is. It's what makes this a Crowdlock. Investments that pay returns have legal rules to follow, and Crowdlock follows none of them.</Text>
+        <Warning level="stop" title="Once anyone signs, these words can never change">
+          The declaration is fixed by its fingerprint. Changing a word afterwards would make a different Crowdlock, with no members. Read it twice.
+        </Warning>
+      </>}
+
+      {here === "minimum" && <>
+        <Text style={s.h1}>The rules for real bitcoin</Text>
+        <Text style={s.label}>Smallest lock that counts, in BTC</Text>
         <Input style={s.input} keyboardType="decimal-pad" value={minimum} onChangeText={(t) => { setMinimum(t); setChecked(null); }} />
+        <Text style={s.note}>A smaller lock is still its owner's and still locked. It just isn't added to the total.</Text>
         <Text style={s.label}>Days a new destination must be public before a proposal can use it</Text>
         <Input style={s.input} keyboardType="number-pad" value={waitDays} onChangeText={(t) => { setWaitDays(t); setChecked(null); }} />
-        <Text style={s.note}>We recommend at least 7. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
+        <Text style={s.note}>A destination is an address a purchase is allowed to pay. We recommend at least 7 days. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
+      </>}
+
+      {here === "cosigner" && <>
+        <Text style={s.h1}>The co-signer's key</Text>
+        <Text style={s.p}>The co-signer adds the second signature that completes a purchase. They can't take or keep anyone's money, only refuse to complete.</Text>
         <Text style={s.label}>Co-signer's public key</Text>
         <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={cosigner} onChangeText={(t) => { setCosigner(t); setChecked(null); }} placeholder="Its xpub, or its key: 02… or 03…" />
-        <Text style={s.note}>The co-signer can't take or keep anyone's money — only refuse to complete a purchase. Make this key with "Make a co-signer key" under More (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here — or its plain key, though then hardware wallets can't lock until the xpub is added.</Text>
-        {!!cosigner.trim() && !isPublicKey(cosigner) && !keyFromXpub(cosigner) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
+        {badKey(cosigner) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
         {!!keyFromXpub(cosigner) && <Text style={s.note}>That xpub stands for {keyFromXpub(cosigner)!.slice(0, 10)}…, and is published beside it so hardware wallets can lock.</Text>}
-      </> : <Text style={s.note}>Test bitcoin has no value: practise everything — joining, locking, taking a lock home — before anything is real.</Text>}
+        <Text style={s.note}>Make this key with "Make a co-signer key" under More (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here. An xpub is the public half of a key in a form hardware wallets can use. Its plain key works too, but then hardware wallets can't lock until the xpub is added.</Text>
+      </>}
 
-      <Text style={s.label}>Longest a proposal may gather commitments, in days</Text>
-      <Input style={s.input} keyboardType="number-pad" value={gatherDays} onChangeText={(t) => { setGatherDays(t); setChecked(null); }} />
-      <Text style={s.note}>We recommend 28: long enough to reach supporters who only look now and then. Each proposal picks its own length up to this, and gathering ends as soon as the target is met. A small group with a short deadline can use less.</Text>
-      <Text style={s.label}>Longest settling may take after that, in days</Text>
-      <Input style={s.input} keyboardType="number-pad" value={settleDays} onChangeText={(t) => { setSettleDays(t); setChecked(null); }} />
-      <Text style={s.note}>We recommend 14: room for the co-signer to complete and send everything at a sensible pace. A small Crowdlock can settle in hours. Members are bound to a proposal for at most these two together.</Text>
+      {here === "lengths" && <>
+        <Text style={s.h1}>How long a proposal may run</Text>
+        <Text style={s.p}>A proposal is a purchase put to the members. It gathers commitments, then settles.</Text>
+        <Text style={s.label}>Longest it may gather commitments, in days</Text>
+        <Input style={s.input} keyboardType="number-pad" value={gatherDays} onChangeText={(t) => { setGatherDays(t); setChecked(null); }} />
+        <Text style={s.note}>We recommend 28: long enough to reach supporters who only look now and then. Each proposal picks its own length up to this, and gathering ends as soon as the target is met. A small group with a short deadline can use less.</Text>
+        <Text style={s.label}>Longest settling may take after that, in days</Text>
+        <Input style={s.input} keyboardType="number-pad" value={settleDays} onChangeText={(t) => { setSettleDays(t); setChecked(null); }} />
+        <Text style={s.note}>We recommend 14: room for the co-signer to complete and send everything at a sensible pace. A small Crowdlock can settle in hours. Members are bound to a proposal for at most these two together.</Text>
+      </>}
 
-      <Text style={s.label}>{network === "mainnet" ? "The test copy's co-signer key" : "Co-signer key"}</Text>
-      <Text style={s.note}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so paste a practice co-signer key (made with \"Make a co-signer key\") — its xpub, ideally:" : `Made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Or paste a practice key you made instead:`}</Text>
-      <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder="Optional: an xpub, or a key 02… or 03…" />
-      {!!testPasted.trim() && !isPublicKey(testPasted) && !keyFromXpub(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
-      <Text style={s.note}>You can add more co-signer keys later, under "Look after this Crowdlock".</Text>
+      {here === "testkey" && <>
+        <Text style={s.h1}>{network === "mainnet" ? "The test copy's co-signer key" : "The co-signer key"}</Text>
+        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so paste a practice co-signer key (made with \"Make a co-signer key\" under More). Its xpub, ideally." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
+        <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder={testCo ? "Optional: an xpub, or a key 02… or 03…" : "An xpub, or a key 02… or 03…"} />
+        {badKey(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
+        <Text style={s.note}>You can add more co-signer keys later, from the Crowdlock's page under "Look after it".</Text>
+      </>}
 
-      {problems && problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}
-      {error && <Text style={s.error}>{error}</Text>}
-      {!checked && <Button label="Check it" onPress={check} />}
-      {checked && <View style={s.panel}>
-        <Text style={s.good}>It checks out — the same checks every Crowdlock passes.</Text>
-        {checked.fingerprints.map((f: any) => <Text key={f.slug} style={s.note}>{f.network === "mainnet" ? "Real" : "Test copy"} · fingerprint {f.sha256.slice(0, 12)}…</Text>)}
-        <Button label="Sign in to GitHub and create it" onPress={create} />
-      </View>}
+      {here === "check" && <>
+        <Text style={s.h1}>Check and create</Text>
+        <SumRow label="Name" value={name.trim()} />
+        <SumRow label="Money" value={network === "mainnet" ? "Real bitcoin, with a test copy" : "Test bitcoin only"} />
+        <SumRow label="Declaration" value={title.trim()} />
+        {network === "mainnet" && <SumRow label="Smallest lock that counts" value={`${minimum.trim()} BTC`} />}
+        <SumRow label="A proposal may run" value={`${gatherDays.trim()} days gathering, ${settleDays.trim()} settling`} />
+        <Text style={s.note}>{about.trim()}</Text>
+        {problems && <>
+          <Text style={s.error}>Something needs fixing. Go back to the page it is on:</Text>
+          {problems.map((x, i) => <Text key={i} style={s.error}>• {x}</Text>)}
+        </>}
+        {error && <Text style={s.error}>{error}</Text>}
+        {!checked && <Btn label="Check it" onPress={check} />}
+        {checked && <>
+          <Text style={s.good}>It checks out: the same checks every Crowdlock passes.</Text>
+          {checked.fingerprints.map((f: any) => <Text key={f.slug} style={s.note}>{f.network === "mainnet" ? "Real" : "Test copy"} · fingerprint {f.sha256.slice(0, 12)}…</Text>)}
+          <Text style={s.p}>It is created in your own GitHub account, so you own it. That makes it public straight away.</Text>
+          <Btn label="Sign in to GitHub and create it" onPress={create} />
+        </>}
+      </>}
+
+      {here !== "check" && <Btn label="Next" disabled={stuck} onPress={next} />}
+      {at > 0 && <Btn kind="second" label="Back a page" onPress={() => setAt(at - 1)} />}
     </View>
   );
 }
