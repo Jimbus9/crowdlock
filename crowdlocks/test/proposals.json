@@ -49,6 +49,23 @@
         "rate": "1 BTC = 12500.00 GBP",
         "at": "2026-11-14T08:57:14Z"
       }
+    },
+    {
+      "title": "Test",
+      "text": "Test to see if people who signed old versions of the declaration can sign the latest without signing the update",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-15T23:21:01Z",
+      "closes": "2026-11-29T23:21:01Z",
+      "settles_by": "2026-12-06T23:21:01Z",
+      "declaration_version": 3,
+      "hash": "10abbe26c46a13d0ced41ec8655ab343a60e85dbfb6becaffbc2fc3cc850d1e6",
+      "target": {
+        "sats": 100000,
+        "rate": "1 BTC = 10000.00 GBP",
+        "at": "2026-11-15T23:21:01Z"
+      }
     }
   ]
 }
