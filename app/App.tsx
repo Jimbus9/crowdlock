@@ -64,6 +64,8 @@ import {
   repoFromFileUrl, versionStatus, changesSince, baseFor, resolvePath, newVersionToSign, versionSignedBy, mayCommitTo, lineChanges,
 } from "./src/crowdlocks.mjs";
 // @ts-ignore — plain module
+import { TEST_APP_URL } from "./src/build.mjs";
+// @ts-ignore — plain module
 import { postToRelays, announce, fetchAnnouncements, postCommitment, fetchCommitments } from "./src/relays.mjs";
 import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
@@ -1013,6 +1015,11 @@ function Founders({ words, go }: { words: string; go: Go }) {
       <Text style={s.h2}>Look after a Crowdlock</Text>
       <Text style={s.p}>Update it, add co-signer keys and destinations, publish a proposal, add maintainers. Pick the Crowdlock:</Text>
       <LookAfterList words={words} go={go} />
+      {!IS_TEST_MONEY && <>
+        <Text style={s.h2}>Practise first, if you want to</Text>
+        <Text style={s.p}>Starting a Crowdlock, co-signing and declaring a proposal dead can all be tried with test money before you do them for real. You don't have to.</Text>
+        <TestApp />
+      </>}
       <Text style={s.p}>Co-signing a purchase, and declaring a proposal dead, are on the proposal itself, under "For the co-signer".</Text>
     </View>
   );
@@ -2086,7 +2093,8 @@ function CrowdlockList({ words, address, go }: { words: string; address: string;
 
   if (!items) return <ActivityIndicator style={{ marginVertical: 16 }} />;
   const here = items.filter((c) => c.ok && c.crowdlock.network === NETWORK) as Extract<Loaded, { ok: true }>[];
-  const elsewhere = items.filter((c) => c.ok && c.crowdlock.network !== NETWORK) as Extract<Loaded, { ok: true }>[];
+  // A Crowdlock on the other kind of money (test in the real app, real in the
+  // test app) isn't listed at all: each app shows only its own kind.
   const broken = items.filter((c) => !c.ok) as Extract<Loaded, { ok: false }>[];
 
   return (
@@ -2103,12 +2111,6 @@ function CrowdlockList({ words, address, go }: { words: string; address: string;
           </Pressable>
         );
       })}
-      {elsewhere.map((c) => (
-        <View key={c.url} style={[s.card, { opacity: 0.6 }]}>
-          <Text style={s.cardTitle}>{c.crowdlock.name}</Text>
-          <Text style={s.note}>Uses {c.crowdlock.network === "mainnet" ? "real bitcoin" : c.crowdlock.network} — not available in this {IS_TEST_MONEY ? "test " : ""}app.</Text>
-        </View>
-      ))}
       {broken.map((c) => (
         <View key={c.url} style={s.card}>
           <Text style={s.error}>This Crowdlock failed its checks: {c.url}</Text>
@@ -2417,19 +2419,37 @@ function when(locktime: number) {
   return `${date}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** In the app for real bitcoin: where to get the test app, for practising. */
+function TestApp() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <View>
+      <Text style={s.note}>The test app is a separate app with its own wallet. It uses test bitcoin, which has no value, so nothing in it can touch real money.</Text>
+      <Btn kind="second" label={copied ? "Copied. Paste it into your browser" : "Copy the test app's download link"} onPress={async () => { await Clipboard.setStringAsync(TEST_APP_URL); setCopied(true); }} />
+    </View>
+  );
+}
+
 function AddCrowdlock({ words, go, link: given }: { words: string; go: Go; link?: string }) {
   const [link, setLink] = useState(given ?? "");
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState<string[] | null>(null);
+  const [other, setOther] = useState<string | null>(null);   // it belongs to the other app
 
   // Opened from a QR code or a web page: check it straight away.
   useEffect(() => { if (given) add(given); }, [given]);
 
   const add = async (which: string = link) => {
-    setBusy(true); setProblems(null);
+    setBusy(true); setProblems(null); setOther(null);
     const loaded: Loaded = await loadCrowdlock(which);
     setBusy(false);
     if (!loaded.ok) { setProblems(loaded.problems); return; }
+    if (loaded.crowdlock.network !== NETWORK) {
+      setOther(IS_TEST_MONEY
+        ? `${loaded.crowdlock.name} uses real bitcoin. It opens in the Crowdlock app for real bitcoin, not in this test app.`
+        : `${loaded.crowdlock.name} is a test Crowdlock, for practising with test money. It opens in the Crowdlock test app, not in this one. Nothing is wrong with the link.`);
+      return;
+    }
     const added = await loadAddedCrowdlocks();
     if (!added.includes(loaded.url) && !STARTING_LIST.includes(loaded.url)) await saveAddedCrowdlocks([...added, loaded.url]);
     go({ name: "crowdlock", words, url: loaded.url });
@@ -2441,6 +2461,11 @@ function AddCrowdlock({ words, go, link: given }: { words: string; go: Go; link?
       <Text style={s.p}>Paste the link to a Crowdlock's file. It is checked on this phone before it is added.</Text>
       <Input style={s.input} autoCapitalize="none" autoCorrect={false} placeholder="https://…/crowdlocks/name.json" value={link} onChangeText={(t) => { setLink(t); setProblems(null); }} />
       {problems && <><Text style={s.error}>It failed its checks, so it wasn't added:</Text>{problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}</>}
+      {other && <View style={s.panel}>
+        <Text style={[s.p, s.bold]}>This one opens in the other Crowdlock app</Text>
+        <Text style={s.p}>{other}</Text>
+        {!IS_TEST_MONEY && <TestApp />}
+      </View>}
       <Button label={busy ? "Checking…" : "Check and add"} disabled={busy || !link} onPress={() => add()} />
       <Text style={s.note}>Someone showing you a Crowdlock's QR code? Point your phone's own camera at it — it opens here by itself.</Text>
     </View>
@@ -3340,7 +3365,8 @@ let startDraft: Record<string, any> | null = null;
 
 function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const d = startDraft ?? {};
-  const [network, setNetwork] = useState<"testnet4" | "mainnet">(d.network ?? "testnet4");
+  // The app decides the money: the test app starts test Crowdlocks, the real one starts real ones.
+  const network: "testnet4" | "mainnet" = IS_TEST_MONEY ? "testnet4" : "mainnet";
   const [name, setName] = useState<string>(d.name ?? "");
   const [about, setAbout] = useState<string>(d.about ?? "");
   const [title, setTitle] = useState<string>(d.title ?? "OUR DECLARATION");
@@ -3451,6 +3477,11 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
           <Button label="Copy the link" kind="plain" onPress={() => Clipboard.setStringAsync(l.url)} />
         </View>
       ))}
+      {!IS_TEST_MONEY && <View style={s.panel}>
+        <Text style={[s.p, s.bold]}>The test copy opens in the test app</Text>
+        <Text style={s.p}>It won't show in this app's list. Use it only if you or your co-signer want to practise with test money first.</Text>
+        <TestApp />
+      </View>}
       <Text style={s.note}>Your repository: {done.repoUrl}</Text>
       {!done.inboxStarted && <Text style={s.note}>Its relay inbox will start by itself within the hour.</Text>}
       <Text style={s.note}>Next: open it from your Crowdlocks list and sign your own declaration, so you're its member 1.</Text>
@@ -3488,16 +3519,9 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Text style={s.h1}>Start a Crowdlock</Text>
         <Text style={s.p}>A Crowdlock lets a crowd commit money to buying something together, without anyone pooling it or holding anyone else's. You write what it's for; the app sets it up in your own GitHub account.</Text>
         <Text style={s.label}>Which money?</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup">
-          {([["testnet4", "Test bitcoin only"], ["mainnet", "Real bitcoin, with a test copy"]] as const).map(([k, label]) => (
-            <Pressable key={k} accessibilityRole="radio" accessibilityState={{ selected: network === k }} onPress={() => { setNetwork(k); setChecked(null); }} style={[s.chip, network === k && s.chipOn]}>
-              <Text style={[s.chipText, network === k && s.chipTextOn]}>{network === k ? "✓ " : ""}{label}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Text style={s.note}>{network === "mainnet"
-          ? "A real-bitcoin Crowdlock comes with a test copy, so you and your members can practise first."
-          : "Test bitcoin has no value: practise everything (joining, locking, taking a lock home) before anything is real."}</Text>
+        {network === "mainnet"
+          ? <Text style={s.p}><Text style={s.bold}>Real bitcoin.</Text> It comes with a test copy, in case you or your co-signer want to practise first. The test copy opens in the Crowdlock test app, not in this one, and you never have to use it.</Text>
+          : <Text style={s.p}><Text style={s.bold}>Test bitcoin.</Text> This is the test app, so what you start here uses test bitcoin, which has no value. Practise everything (joining, locking, committing, taking a lock home) before anything is real. To start one with real bitcoin, use the Crowdlock app for real bitcoin.</Text>}
       </>}
 
       {here === "name" && <>
@@ -3572,7 +3596,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       {here === "check" && <>
         <Text style={s.h1}>Check and create</Text>
         <SumRow label="Name" value={name.trim()} />
-        <SumRow label="Money" value={network === "mainnet" ? "Real bitcoin, with a test copy" : "Test bitcoin only"} />
+        <SumRow label="Money" value={network === "mainnet" ? "Real bitcoin, with a test copy" : "Test bitcoin"} />
         <SumRow label="Declaration" value={title.trim()} />
         {network === "mainnet" && <SumRow label="Smallest lock that counts" value={`${minimum.trim()} BTC`} />}
         <SumRow label="A proposal may run" value={`${gatherDays.trim()} days gathering, ${settleDays.trim()} settling`} />

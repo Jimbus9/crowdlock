@@ -37,3 +37,9 @@ export const OWN_DOMAINS = {
 
 /** Where the app links the counting rule: the method's published spec. */
 export const COUNTING_RULE_URL = "https://github.com/Jimbus9/crowdlock/blob/main/spec/counting-rule.md#the-minimum";
+
+/**
+ * Where the test app is downloaded from. The app for real bitcoin shows this
+ * only to founders, maintainers and co-signers, for practising with test money.
+ */
+export const TEST_APP_URL = "https://github.com/Jimbus9/crowdlock/releases/download/app-test/crowdlock-test.apk";
