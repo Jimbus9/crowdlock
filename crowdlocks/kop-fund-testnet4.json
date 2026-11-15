@@ -9,6 +9,15 @@
     "file": "crowdlocks/test/declaration-test-v1.txt",
     "sha256": "29f943a5bf2c110200cb33d0299b00960b19f10f1942d14699aec154b39316df"
   },
+  "declaration_versions": [
+    {
+      "version": 2,
+      "file": "crowdlocks/test/declaration-test-v2.txt",
+      "sha256": "bfa4104289da158a512fb86d7315df86e90998e1b5ca202e2ac6edcc4aa1ba9c",
+      "published": "2026-11-15",
+      "reason": "Now testing declaration updates"
+    }
+  ],
   "network": "testnet4",
   "unit": "BTC",
   "lock_lengths_years": [
