@@ -1722,6 +1722,12 @@ function Confirm({ title, text, yes, onYes, onCancel }: { title: string; text: s
 // The signing and sending are the same calls as before.
 // ---------------------------------------------------------------------------
 
+// Crowdlocks signed for on this phone since the app was opened, and when: the
+// register takes a few minutes to show a new member, and until it does the
+// Crowdlock's page says "waiting" instead of offering to sign again.
+const signedHere: Record<string, number> = {};
+const SIGNED_WAIT_MS = 20 * 60 * 1000;
+
 function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) {
   const account = useMemo(() => walletAccount(words), [words]);
   const [c, setC] = useState<Loaded | null>(null);
@@ -1751,12 +1757,13 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
     if (Array.isArray(c.crowdlock.relays)) {
       const p = await postToRelays(c.crowdlock, { type: "join", address: account.address, signature });
       setResult(p.ok
-        ? { ok: true, text: "Signed and sent. You'll be on the register within a few minutes." }
+        ? (signedHere[url] = Date.now(), { ok: true, text: "Signed and sent. You'll be on the register within a few minutes." })
         : { ok: false, text: "It couldn't be sent just now. Your signature is fine. Check your connection, or turn off any VPN, and try again." });
       setBusy(false);
       return;
     }
     const r = await submitJoin(c.crowdlock, { address: account.address, signature });
+    if (r.ok) signedHere[url] = Date.now();
     setResult(r.ok ? { ok: true, text: `You are member ${r.n}.` } : { ok: false, text: r.error + (r.alternative ? ` You can still ${r.alternative}.` : "") });
     setBusy(false);
     if (r.ok) setTimeout(load, 4000);
@@ -1818,6 +1825,7 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
       <Text style={s.kick}>Step 2 of 6: Sign</Text>
       <Text style={s.h1}>{me ? "You have joined" : "Signed"}</Text>
       <Text style={s.good}>{me ? `You are member ${me.n} of ${name}. Signed ${me.signed}.` : result!.text}</Text>
+      {!me && <Text style={s.p}>The register takes a few minutes to add you, and up to an hour for a Crowdlock that has only just been started. {name}'s page will say "waiting" until then. You don't need to sign again.</Text>}
       <Text style={s.p}>Next is getting bitcoin into this wallet, then locking it. There is no hurry.</Text>
       <Btn label={`Back to ${name}`} onPress={back} />
     </View>
@@ -2123,6 +2131,14 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
   useEffect(() => { load(); }, [load]);
   useRefresh(load);
 
+  // While a signature is waiting for the register, look again every 45 seconds.
+  useEffect(() => {
+    if (!signedHere[url] || Date.now() - signedHere[url] > SIGNED_WAIT_MS) return;
+    if (c && c.ok && membershipOf(c.register, account.address)) return;
+    const t = setInterval(load, 45000);
+    return () => clearInterval(t);
+  }, [url, c, load, account.address]);
+
   if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
   if (!c.ok) return (
     <View>
@@ -2134,12 +2150,14 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 
   const me = membershipOf(c.register, account.address);
   const here = c.crowdlock.network === NETWORK;
+  // Signed on this phone a short while ago, and the register hasn't caught up.
+  const waitingToJoin = !me && !!signedHere[url] && Date.now() - signedHere[url] < SIGNED_WAIT_MS;
   const toSign = here ? newVersionToSign(c, account.address) : null;
   const mine = me ? versionSignedBy(c, me) : null;
 
   return (
     <View>
-      {!me && here && <Text style={s.kick}>Step 1 of 6: Understand</Text>}
+      {!me && here && !waitingToJoin && <Text style={s.kick}>Step 1 of 6: Understand</Text>}
       <Text style={s.h1}>{c.crowdlock.name}</Text>
       {c.crowdlock.about && <Text style={s.p}>{c.crowdlock.about}</Text>}
       {c.crowdlock.disclaimer && <Text style={s.note}>{c.crowdlock.disclaimer}</Text>}
@@ -2184,7 +2202,12 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 
       {me && <Text style={[s.good, { fontSize: 18, marginTop: 8 }]}>You are member {me.n}. Signed {me.signed}.</Text>}
       {!me && !here && <Text style={s.note}>This Crowdlock uses a different network from this app.</Text>}
-      {!me && here && <>
+      {waitingToJoin && <View style={s.panel}>
+        <Text style={[s.p, s.bold]}>You've signed. Waiting for the register.</Text>
+        <Text style={s.note}>Your signature has been sent. The register adds new members every few minutes (up to an hour for a Crowdlock that has only just been started). This page checks again by itself; you can also pull down. You don't need to sign again.</Text>
+        <ActivityIndicator style={{ marginTop: 8 }} />
+      </View>}
+      {!me && here && !waitingToJoin && <>
         <Warning level="know" title="This is not an investment">
           There is no return, no dividend and no payout, now or ever. If you hope to make money here, do not take part.
         </Warning>
@@ -3512,11 +3535,12 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       </>}
 
       {here === "testkey" && <>
-        <Text style={s.h1}>{network === "mainnet" ? "The test copy's co-signer key" : "The co-signer key"}</Text>
-        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so this Crowdlock needs a co-signer key of its own. Make one now with the button below, or paste one you already have (its xpub, ideally)." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
+        <Text style={s.h1}>{network === "mainnet" ? "A practice key for the test copy" : "The co-signer key"}</Text>
+        {network === "mainnet" && <Text style={s.p}>This is a second key, on purpose. Your test copy is where you practise co-signing, and co-signing means typing a key's 12 words into a phone. A separate practice key means the real key's words never get typed while you practise.</Text>}
+        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so the app can't make this key for you from recovery words. Make one now with the button below, or paste one you already have (its xpub, ideally)." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
         <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder={testCo ? "Optional: an xpub, or a key 02… or 03…" : "An xpub, or a key 02… or 03…"} />
         {badKey(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
-        <Btn kind="second" label="Make a co-signer key now" onPress={() => go({ name: "cosignerKey", words, forStart: "testPasted" })} />
+        <Btn kind="second" label={network === "mainnet" ? "Make a practice key now" : "Make a co-signer key now"} onPress={() => go({ name: "cosignerKey", words, forStart: "testPasted" })} />
         <Btn kind="link" label="Paste what I copied" onPress={async () => { const t = (await Clipboard.getStringAsync()).trim(); if (t) { setTestPasted(t); setChecked(null); } }} />
         <Text style={s.note}>Making one here gives you 12 words to write on paper, and brings the key back to this page. Your typing is kept. You can add more co-signer keys later, from the Crowdlock's page under "Look after it".</Text>
       </>}
