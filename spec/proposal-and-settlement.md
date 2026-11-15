@@ -2,6 +2,8 @@
 
 **Version 1 · 24 October 2026**
 
+**15 November 2026:** a proposal published under a later version of the declaration names it, and only members who signed that version may commit to it. Version-1 proposals are unchanged.
+
 How money committed to this fund is actually spent.
 
 **There is no vote.** A proposal is funded or it is not. Nobody counts anything,
@@ -61,6 +63,20 @@ so a proposal cannot be replayed into another Crowdlock:
 
 SHA-256 of that line, UTF-8, NFC normalised, no trailing newline. Built by
 `proposalLine` and `proposalHash` in `method/lock/commitment.mjs`.
+
+**A proposal published under a later version of the declaration** names it, as
+`declaration_version` in the proposals file, and its line ends `|v<version>`:
+
+```
+<instance>|proposal|…|<settles_by>|v2
+```
+
+A version-1 proposal's line has nothing added, so every line written before
+versions existed keeps its hash. That is still one line per proposal, not an
+optional field: the version decides which it is. The version belongs in the
+line because, like the price, it is fixed the moment the proposal is written.
+**Only a member who has signed that version may commit to it** (registration
+format, "Versioning"); a commitment from anyone else is refused.
 
 **The fields are fixed in number and order, and "at a minimum" cannot survive
 here.** An optional field is a second possible document, and a second possible

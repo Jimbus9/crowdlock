@@ -107,7 +107,7 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
 // The pile the inbox keeps.
 {
   const lock = { address: "tb1qlockaddress", owner_pubkey: "02" + "a".repeat(64), cosigner_pubkey: "03" + "b".repeat(64), locktime: 1800000000 };
-  const register = { locks: [{ ...lock, member: "tb1qmember" }] };
+  const register = { members: [{ n: 1, address: "tb1qmember", signature: "x", signed: "2026-11-01" }], locks: [{ ...lock, member: "tb1qmember" }] };
   const prop = { ...p, hash };
   const inWindow = Math.floor(Date.parse(p.opens) / 1000) + 60;
   const ev = (tx, at = inWindow, l = lock) => ({ id: tx, ...commitmentEventTemplate({ type: "commitment", proposal: hash, record: { proposal: hash, lock: l, tx } }, instance, at) });

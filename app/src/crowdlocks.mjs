@@ -19,7 +19,8 @@
 // are relative to <site>/ — that is how this project's own files are laid out.
 // A file published anywhere else has its paths read relative to its own folder.
 
-import { checkCrowdlock, checkRegisterFiles, membershipStatement } from "../../method/js/crowdlock.mjs";
+import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, currentVersion, signedVersions, hasSigned } from "../../method/js/crowdlock.mjs";
+import { proposalVersion } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
 import { earlyReleases } from "../../method/js/release.mjs";
@@ -56,7 +57,7 @@ export function resolvePath(path, base) {
  * Load a Crowdlock from a link and check it. Never throws: returns
  * { ok: true, url, crowdlock, statement, register } or { ok: false, url, problems }.
  *
- * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, statement: string, register: any, destinations: any, proposals: any[], proposalProblems: string[] }
+ * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, versions: any[], statement: string, register: any, destinations: any, proposals: any[], proposalProblems: string[] }
  *                 | { ok: false, url: string, problems: string[] }>}
  */
 export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
@@ -81,7 +82,14 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
   try { declarationText = await getText(resolvePath(crowdlock?.declaration?.file, base)); }
   catch (e) { return fail(`could not load its declaration: ${e.message}`); }
 
-  const fileCheck = checkCrowdlock(crowdlock, { declarationText });
+  // Later versions of its declaration, each checked against its fingerprint.
+  const versionTexts = {};
+  for (const v of Array.isArray(crowdlock?.declaration_versions) ? crowdlock.declaration_versions : []) {
+    try { versionTexts[v.version] = await getText(resolvePath(v.file, base)); }
+    catch (e) { return fail(`could not load version ${v?.version} of its declaration: ${e.message}`); }
+  }
+
+  const fileCheck = checkCrowdlock(crowdlock, { declarationText, versionTexts });
   // An xpub that doesn't stand for one of its co-signer keys would have a
   // hardware wallet build a lock the register never counts.
   if (fileCheck.ok) { const xc = checkCosignerXpubs(crowdlock); if (!xc.ok) return fail(...xc.problems); }
@@ -109,11 +117,17 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
     } catch (e) { proposalProblems = [`could not load its proposals: ${e.message}`]; }
   }
 
+  // Every version, oldest first, with its text and the line that signs it.
+  const versions = versionsOf(crowdlock).map((v, i) => ({
+    ...v, text: i === 0 ? declarationText : versionTexts[v.version], statement: membershipStatement(crowdlock, v.version),
+  }));
   return {
     ok: true,
     url: fileUrl,
     crowdlock,
-    declarationText,
+    // The current version's text: the words a new member signs.
+    declarationText: versions[versions.length - 1].text,
+    versions,
     statement: membershipStatement(crowdlock),
     register: registrations,
     destinations,
@@ -150,6 +164,58 @@ export function fileUrlFromOpenLink(link) {
 export function shareLinkFor(loaded) {
   const site = loaded.crowdlock?.site;
   return typeof site === "string" && /^https:\/\//.test(site) ? site : baseFor(loaded.url);
+}
+
+/**
+ * A newer version of the declaration this member hasn't signed: what to show
+ * them, or null. `previous` is the newest version they have signed, and
+ * `changes` compares its lines with the current version's.
+ */
+export function newVersionToSign(loaded, address) {
+  if (!loaded?.ok) return null;
+  const me = membershipOf(loaded.register, address);
+  if (!me) return null;
+  const cur = currentVersion(loaded.crowdlock);
+  if (hasSigned(loaded.crowdlock, me, cur.version)) return null;
+  const mine = signedVersions(loaded.crowdlock, me);
+  const previous = loaded.versions.find((v) => v.version === mine[mine.length - 1]) ?? loaded.versions[0];
+  const current = loaded.versions.find((v) => v.version === cur.version);
+  return { current, previous, changes: lineChanges(previous.text ?? "", current.text ?? "") };
+}
+
+/** The newest version of the declaration this member has signed, with its text. */
+export function versionSignedBy(loaded, member) {
+  const mine = signedVersions(loaded.crowdlock, member);
+  return loaded.versions.find((v) => v.version === mine[mine.length - 1]) ?? loaded.versions[0];
+}
+
+/** May this member commit to this proposal? Only with the version it was published under. */
+export function mayCommitTo(loaded, member, proposal) {
+  return !!member && hasSigned(loaded.crowdlock, member, proposalVersion(proposal, loaded.crowdlock));
+}
+
+/**
+ * Old against new, line by line: [{ kind: "same" | "gone" | "new", text }].
+ * The longest run of lines the two share is kept as "same"; everything else
+ * is a line taken out or put in. Plain and small on purpose: a declaration is
+ * a page, not a codebase.
+ * @returns {{ kind: "same" | "gone" | "new", text: string }[]}
+ */
+export function lineChanges(oldText, newText) {
+  const a = String(oldText).replace(/\n$/, "").split("\n"), b = String(newText).replace(/\n$/, "").split("\n");
+  const n = a.length, m = b.length;
+  const L = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push({ kind: "same", text: a[i] }); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) out.push({ kind: "gone", text: a[i++] });
+    else out.push({ kind: "new", text: b[j++] });
+  }
+  while (i < n) out.push({ kind: "gone", text: a[i++] });
+  while (j < m) out.push({ kind: "new", text: b[j++] });
+  return out;
 }
 
 /** Is this address a member, and which number? */

@@ -243,6 +243,27 @@ check("A key that only looks right — not a real point on the curve — is refu
   let mismatch = ""; try { await addCosignerKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, key: other, xpub: XP, check: checkWithNewKey }, serve(notKop)); } catch (e) { mismatch = e.message; }
   check("An xpub that doesn't stand for the key being added is refused", mismatch.includes("not one of"));
 }
+// Publishing a new version of the declaration.
+{
+  const { publishDeclarationVersion } = await import("../src/github.mjs");
+  const { checkCrowdlock, canonicalise, declarationHash } = await import("../../method/js/crowdlock.mjs");
+  const before = JSON.parse(realFile);
+  const text = canonicalise(files[before.declaration.file] + "\nA sentence added in version 2.\n");
+  const sha256 = declarationHash(text);
+  const check2 = (f, t) => checkCrowdlock(f, { versionTexts: { [f.declaration_versions.at(-1).version]: t } });
+  const out = await publishDeclarationVersion({ token: "t", owner: "somefan", repo: "the-pub-fund", crowdlockPath: realPath, text, sha256,
+    reason: "Clearer wording.", today: "2027-01-31", check: check2 }, withContents({ push: true }));
+  check("A new version is published as version 2, in a file beside the first, in one commit with the Crowdlock file",
+    out.version === 2 && gcalls.tree.length === 2 && gcalls.tree.includes(realPath) && gcalls.tree.includes(out.file) && /v2\.txt$/.test(out.file), `${out.file} ${gcalls.tree}`);
+  check("…its commit message gives the reason and says no member number or lock changes", /Why: Clearer wording\./.test(gcalls.message) && /No member's number and no lock changes/.test(gcalls.message));
+  let same = ""; try { await publishDeclarationVersion({ token: "t", owner: "somefan", repo: "the-pub-fund", crowdlockPath: realPath,
+    text: canonicalise(files[before.declaration.file]), sha256: before.declaration.sha256, reason: "x", today: "2027-01-31", check: check2 }, withContents({ push: true })); } catch (e) { same = e.message; }
+  check("Publishing the same words again is refused", same.includes("same as a version already published"));
+  let noReason = ""; try { await publishDeclarationVersion({ token: "t", owner: "somefan", repo: "the-pub-fund", crowdlockPath: realPath,
+    text, sha256, reason: "", today: "2027-01-31", check: check2 }, withContents({ push: true })); } catch (e) { noReason = e.message; }
+  check("A new version with no reason is refused before anything is written", noReason.includes("reason"), noReason);
+}
+
 check("A Crowdlock's file is found inside its repository from its link",
   pathInRepo("https://somefan.github.io/the-pub-fund/crowdlocks/the-pub-fund.json") === "crowdlocks/the-pub-fund.json" && pathInRepo("https://example.com/x.json") === null);
 

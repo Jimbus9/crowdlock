@@ -248,7 +248,7 @@ export function destinationIsPermitted({
  * every time bitcoin moved would invalidate every commitment gathered so
  * far, which is the exact failure that sank the assurance-contract design.
  */
-export function proposalLine({ instance, destination, requiresMinor, currency, document, opens, closes, settlesBy }) {
+export function proposalLine({ instance, destination, requiresMinor, currency, document, opens, closes, settlesBy, declarationVersion }) {
   if (!/^[0-9a-f]{64}$/.test(instance ?? "")) {
     throw new Error("instance must be a 64-character hex declaration hash");
   }
@@ -274,8 +274,15 @@ export function proposalLine({ instance, destination, requiresMinor, currency, d
   }
   if (!(Date.parse(opens) < Date.parse(closes))) throw new Error("closes must be after opens");
   if (!(Date.parse(closes) <= Date.parse(settlesBy))) throw new Error("settlesBy must be at or after closes");
+  // The version of the declaration the proposal is published under, if it is
+  // a later one. A version-1 proposal's line has nothing added, so every
+  // line written before versions existed keeps its hash.
+  if (declarationVersion !== undefined && !(Number.isInteger(declarationVersion) && declarationVersion >= 1)) {
+    throw new Error("declarationVersion, if given, must be a whole number from 1");
+  }
+  const tail = declarationVersion > 1 ? `|v${declarationVersion}` : "";
 
-  return `${instance}|proposal|${destination}|${requiresMinor}|${currency}|${document}|${opens}|${closes}|${settlesBy}`;
+  return `${instance}|proposal|${destination}|${requiresMinor}|${currency}|${document}|${opens}|${closes}|${settlesBy}${tail}`;
 }
 
 /** The hash a commitment names, and the only thing that identifies a proposal. */

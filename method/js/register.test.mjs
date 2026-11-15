@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { verifyMembership } from "./verify.mjs";
-import { checkRegisterFiles, membershipStatement } from "./crowdlock.mjs";
+import { checkRegisterFiles, membershipStatement, joinedVersion } from "./crowdlock.mjs";
 import { lockAddress, hrpFor } from "./lockrecord.mjs";
 
 // The Kop Fund's frozen copy (method/fixtures/the-kop-fund), not a live register.
@@ -36,7 +36,6 @@ const check = (what, ok, detail = "") => {
 
 const crowdlock = read("crowdlocks/kop-fund.json");
 const register = read(crowdlock.register.registrations);
-const statement = membershipStatement(crowdlock);
 
 rule();
 console.log(`The live register: ${crowdlock.register.registrations}`);
@@ -50,9 +49,15 @@ const members = register.members ?? [];
 console.log(`${members.length} member${members.length === 1 ? "" : "s"} on the register.`);
 
 for (const m of members) {
-  const r = verifyMembership({ address: m.address, signature: m.signature, message: statement });
-  check(`Member ${m.n ?? "?"} (${m.address.slice(0, 12)}…) signed the declaration`, r.valid,
+  // Each signature is checked against the version it names, never another.
+  const v = joinedVersion(crowdlock, m);
+  const r = verifyMembership({ address: m.address, signature: m.signature, message: membershipStatement(crowdlock, v) });
+  check(`Member ${m.n ?? "?"} (${m.address.slice(0, 12)}…) signed version ${v} of the declaration`, r.valid,
     r.valid ? "" : `${r.reason}${r.derived ? ` — signature belongs to ${r.derived}` : ""}`);
+  for (const x of m.also_signed ?? []) {
+    const rx = verifyMembership({ address: m.address, signature: x.signature, message: membershipStatement(crowdlock, x.version) });
+    check(`Member ${m.n ?? "?"} also signed version ${x.version}`, rx.valid, rx.valid ? "" : rx.reason);
+  }
 }
 
 const numbers = members.map((m) => m.n);

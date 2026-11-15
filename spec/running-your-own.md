@@ -6,6 +6,8 @@
 
 **14 November 2026:** "What every Crowdlock shares" (formerly "The one condition that is not negotiable") was reworded. The rule is unchanged: a Crowdlock pays no financial return. The wording now also says what contributors do get.
 
+**15 November 2026:** a Crowdlock may publish later versions of its declaration (`declaration_versions`); see the registration format, "Versioning".
+
 Everything here is free to copy, for any club, any sport, or any cause that fits.
 Copying it is not tolerated, it is the intended outcome. Nobody needs permission,
 nobody needs to tell us, and nothing is owed to anybody if it works.
@@ -119,6 +121,7 @@ Fund's is `crowdlocks/kop-fund.json`: copy it and change the values.
 | --- | --- | --- |
 | `name` | What your Crowdlock is called | The Kop Fund |
 | `declaration` | Its title, version, file and SHA-256. **The SHA-256 is your instance's identity** | Supporters' Declaration v1, `declaration-v1.txt`, `3a0a0bca…6209b96` |
+| `declaration_versions` | *Optional.* Later versions of the declaration, oldest first, each with its file, SHA-256, date and a one-line reason. The newest is the one new members sign; the founding SHA-256 stays your identity. See the registration format, "Versioning" | Left out: there is only version 1 |
 | `network` | Which chain | `mainnet` |
 | `unit` | Unit of account for every published figure | `BTC` |
 | `lock_lengths_years` | The fixed options a member may choose. Whole years on real bitcoin; a test Crowdlock may offer fractions (an hour is `1/8766`) so a lock can be made and taken home in one sitting | 1, 3 or 5 |

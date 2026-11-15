@@ -302,3 +302,43 @@ export async function publishProposal({ token, owner, repo, crowdlockPath, propo
 
 export function rememberSignIn(token) { session = { token, until: Date.now() + 60 * 60 * 1000 }; }
 export function currentSignIn() { return session && session.until > Date.now() ? session.token : null; }
+
+/**
+ * Publish a new version of the declaration (spec/registration-format.md,
+ * "Versioning"). Its text goes in a file of its own beside the first, and the
+ * Crowdlock file lists it, with today's date and the reason, after the
+ * versions already there; nothing earlier is edited. One commit, so the text
+ * and the listing can't arrive apart. The founding fingerprint, the register,
+ * every member's number and every lock are untouched.
+ *
+ *   text      the new version, already in canonical form
+ *   sha256    its fingerprint
+ *   reason    one line, shown to every member before they sign it
+ *   today     "YYYY-MM-DD"
+ *   check(file, text) must pass on the new Crowdlock file.
+ * Returns { sha, version, file }.
+ */
+export async function publishDeclarationVersion({ token, owner, repo, crowdlockPath, text, sha256, reason, today, check }, fetchImpl = globalThis.fetch) {
+  const gh = client(token, fetchImpl);
+  const c = await readJson(gh, owner, repo, crowdlockPath);
+  if (!c) throw new Error("This Crowdlock's file isn't in its repository.");
+  const later = Array.isArray(c.declaration_versions) ? c.declaration_versions : [];
+  const last = later.length ? later[later.length - 1] : c.declaration;
+  if ([c.declaration, ...later].some((v) => v.sha256 === sha256)) throw new Error("That text is the same as a version already published.");
+  const version = last.version + 1;
+  const first = String(c.declaration.file);
+  const file = /v\d+\.txt$/.test(first) ? first.replace(/v\d+\.txt$/, `v${version}.txt`) : first.replace(/[^/]*$/, `declaration-v${version}.txt`);
+  const next = { ...c, declaration_versions: [...later, { version, file, sha256, published: today, reason: String(reason).trim() }] };
+  // Keep the versions next to the first declaration, where a person reading the file expects them.
+  const ordered = {};
+  for (const [k, v] of Object.entries(next)) {
+    if (k === "declaration_versions") continue;
+    ordered[k] = v;
+    if (k === "declaration") ordered.declaration_versions = next.declaration_versions;
+  }
+  const r = check ? check(ordered, text) : { ok: true };
+  if (!r.ok) throw new Error(`That would break the Crowdlock file: ${r.problems.join("; ")}`);
+  const sha = await commitFiles(gh, owner, repo, { [file]: text, [crowdlockPath]: JSON.stringify(ordered, null, 2) + "\n" },
+    `Publish version ${version} of the declaration\n\nPublished from the Crowdlock app by its founder or a maintainer.\n\nWhy: ${String(reason).trim()}\n\nFingerprint sha256:${sha256}. The founding version stays this Crowdlock's identity. Existing signatures stay valid for the version they signed; members are asked whether they wish to sign this one. No member's number and no lock changes.`);
+  return { sha, version, file };
+}

@@ -38,18 +38,20 @@ import { address as bitcoinAddress } from "bitcoinjs-lib";
 import { memberAddressForOwnerKey } from "../method/js/verify.mjs";
 import {
   phaseOf, proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
-  pilePath, checkPileShape, noticeStatement, noticeIsGenuine,
+  pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion,
 } from "../method/js/proposals.mjs";
 import {
   isLedgerWallet, readLedgerWallet, ledgerWalletText, ledgerUser, withLedger, lookForLedgers, askForBluetooth, ledgerAppFor,
 } from "./src/ledgerDevice";
 // @ts-ignore — plain modules shared with the tests
-import { buildCrowdlock, declarationSkeleton, slugify, DEFAULT_RELAYS, checkWithNewKey } from "./src/start.mjs";
+import { buildCrowdlock, declarationSkeleton, slugify, DEFAULT_RELAYS, checkWithNewKey, NO_RETURNS } from "./src/start.mjs";
 // @ts-ignore
 import {
   startSignIn, waitForSignIn, whoAmI, createCrowdlockRepo, canWrite, updateCrowdlockRepo, addMaintainer, rememberSignIn, currentSignIn, addCosignerKey,
-  addDestination, publishProposal,
+  addDestination, publishProposal, publishDeclarationVersion,
 } from "./src/github.mjs";
+// @ts-ignore — plain module shared with the tests
+import { canonicalise, declarationHash, checkCrowdlock, currentVersion } from "../method/js/crowdlock.mjs";
 // @ts-ignore
 import template from "./src/template.mjs";
 // Plain JavaScript modules: their results are used as loosely typed here.
@@ -59,7 +61,7 @@ const createRepo = createCrowdlockRepo as (x: any) => Promise<any>;
 import {
   STARTING_LIST, MOVED_ADDRESSES, loadCrowdlock, membershipOf, committedTotal, submitJoin, COUNTING_RULE_URL, poundsPerBtc, shortBtc,
   locksOnRegister, submitLock, newestCosigner, pathInRepo, keyChanges, historyLinkFor, coSignerRecord, openLinkFor, fileUrlFromOpenLink, shareLinkFor, rankFound, matchesSearch,
-  repoFromFileUrl, versionStatus, changesSince, baseFor, resolvePath,
+  repoFromFileUrl, versionStatus, changesSince, baseFor, resolvePath, newVersionToSign, versionSignedBy, mayCommitTo, lineChanges,
 } from "./src/crowdlocks.mjs";
 // @ts-ignore — plain module
 import { postToRelays, announce, fetchAnnouncements, postCommitment, fetchCommitments } from "./src/relays.mjs";
@@ -628,7 +630,7 @@ function Restore({ go }: { go: Go }) {
 // ---------------------------------------------------------------------------
 
 type MyLock = { crowdlock: string; name: string; address: string; locktime: number; state: string; confirmed: bigint; arriving: bigint };
-type HomeAlert = { url: string; name: string };
+type HomeAlert = { url: string; name: string; kind: "keys" | "version" };
 type OverviewData = { balance: { confirmed: bigint; arriving: bigint } | null; locks: MyLock[] | null; step: any | null; alerts: HomeAlert[] };
 type Overview = OverviewData & { error: string | null };
 
@@ -690,7 +692,8 @@ function useOverview(account: any): Overview {
       const member = !!membershipOf(c.register, account.address);
       const cosigner: string | undefined = newestCosigner(c.crowdlock);
       const changed = keyChanges(await loadSeenKeys(c.url), c.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(c.url)).changed;
-      if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name });
+      if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name, kind: "keys" });
+      if (newVersionToSign(c, account.address)) notes.push({ url: c.url, name: c.crowdlock.name, kind: "version" });
       const mine: MyLock[] = [];
       if (member) {
         const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address)];
@@ -796,8 +799,12 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
   const w = o.step ? stepWords(o.step, o, words, go) : null;
   return (
     <View>
-      {o.alerts.map((a) => (
-        <Warning key={a.url} level="know" title={`${a.name}: its co-signer keys have changed`}>
+      {o.alerts.map((a) => a.kind === "version" ? (
+        <Warning key={a.url + a.kind} level="know" title={`${a.name}: its declaration has a new version`}>
+          <Btn kind="link" label="Read what changed" onPress={() => go({ name: "sign", words, url: a.url })} />
+        </Warning>
+      ) : (
+        <Warning key={a.url + a.kind} level="know" title={`${a.name}: its co-signer keys have changed`}>
           <Btn kind="link" label={`Look at ${a.name}`} onPress={() => go({ name: "crowdlock", words, url: a.url })} />
         </Warning>
       ))}
@@ -1587,8 +1594,10 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
     </View>
   );
 
+  const meNow = membershipOf(c.register, account.address);
   const stop =
-    !membershipOf(c.register, account.address) ? `You haven't joined ${c.crowdlock.name}, so you can't commit to its proposals.`
+    !meNow ? `You haven't joined ${c.crowdlock.name}, so you can't commit to its proposals.`
+    : !mayCommitTo(c, meNow, p) ? `This proposal was published under version ${proposalVersion(p, c.crowdlock)} of the declaration, and you haven't signed that version. Sign it from ${c.crowdlock.name}'s page first; it can take a few minutes to reach the register.`
     : phaseOf(p) !== "gathering" ? "This proposal isn't gathering commitments just now."
     : coins && coins.length === 0 ? "You have no locked bitcoin on this Crowdlock's register to commit. Lock some first."
     : null;
@@ -1753,6 +1762,57 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
     if (r.ok) setTimeout(load, 4000);
   };
 
+  // A member asked to sign a newer version of the declaration.
+  const toSign = newVersionToSign(c, account.address);
+  const signNew = async () => {
+    if (!toSign) return;
+    setBusy(true); setResult(null);
+    let signature: string;
+    try { signature = await signStatementWith(account, toSign.current.statement); }
+    catch (e: any) { setResult({ ok: false, text: String(e.message ?? e) }); setBusy(false); return; }
+    if (!Array.isArray(c.crowdlock.relays)) {
+      setResult({ ok: false, text: "This Crowdlock doesn't collect signatures from relays, so the app can't send this one. Ask its founder how to sign the new version." });
+      setBusy(false); return;
+    }
+    const p = await postToRelays(c.crowdlock, { type: "join", address: account.address, signature });
+    setResult(p.ok
+      ? { ok: true, text: `Signed version ${toSign.current.version} and sent. The register will show it within a few minutes. You are still member ${me!.n}.` }
+      : { ok: false, text: "It couldn't be sent just now. Your signature is fine. Check your connection, or turn off any VPN, and try again." });
+    setBusy(false);
+  };
+  if (toSign && c.crowdlock.network === NETWORK) {
+    if (result?.ok) return (
+      <View>
+        <Text style={s.h1}>Signed</Text>
+        <Text style={s.good}>{result.text}</Text>
+        <Btn label={`Back to ${name}`} onPress={back} />
+      </View>
+    );
+    return (
+      <View>
+        <Text style={s.kick}>A new version of the declaration</Text>
+        <Text style={s.h1}>Sign the new version?</Text>
+        <Text style={s.p}>{name} has published version {toSign.current.version} of its declaration on {toSign.current.published}. You signed version {toSign.previous.version}.</Text>
+        <Text style={s.label}>Why</Text>
+        <Text style={s.p}>{toSign.current.reason}</Text>
+        <Text style={s.label}>What changed</Text>
+        <Changes changes={toSign.changes} />
+        <Warning level="know" title="Nothing happens to your money either way">
+          Your locks still count whether you sign or not, and your earlier signature still stands for the version you signed. Signing lets you back purchases proposed under the new version. There is no deadline.
+        </Warning>
+        <Text style={s.label}>What you sign</Text>
+        <Text style={s.mono}>{toSign.current.statement}</Text>
+        <Warning level="stop" title="This is public, and it can't be taken back">
+          Your signature goes on the public register beside your first one. Once it is published, you cannot unpublish it.
+        </Warning>
+        <LedgerHint account={account} />
+        {result && <Text style={s.error}>{result.text}</Text>}
+        <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing and sending…") : "Sign the new version"} disabled={busy} onPress={signNew} />
+        <Btn kind="second" label="Not now" onPress={back} />
+      </View>
+    );
+  }
+
   if (me || result?.ok) return (
     <View>
       <Text style={s.kick}>Step 2 of 6: Sign</Text>
@@ -1787,6 +1847,26 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
       <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Signing and sending…") : "Sign to join"} disabled={busy} onPress={join} />
     </View>
   );
+}
+
+/**
+ * Old lines against new: lines taken out struck through, lines put in marked,
+ * and long runs of unchanged lines folded to one line.
+ */
+function Changes({ changes }: { changes: { kind: "same" | "gone" | "new"; text: string }[] }) {
+  const near = (i: number) => changes.slice(Math.max(0, i - 1), i + 2).some((x) => x.kind !== "same");
+  const rows: any[] = [];
+  let folded = 0;
+  changes.forEach((x, i) => {
+    if (x.kind === "same" && !near(i)) { folded++; return; }
+    if (folded) { rows.push(<Text key={`f${i}`} style={s.note}>… {folded} line{folded === 1 ? "" : "s"} unchanged</Text>); folded = 0; }
+    if (x.kind === "same") rows.push(<Text key={i} style={s.declaration}>{x.text || " "}</Text>);
+    else if (x.kind === "gone") rows.push(<Text key={i} style={[s.declaration, { textDecorationLine: "line-through", opacity: 0.6 }]}>− {x.text || " "}</Text>);
+    else rows.push(<Text key={i} style={[s.declaration, s.bold]}>+ {x.text || " "}</Text>);
+  });
+  if (folded) rows.push(<Text key="fend" style={s.note}>… {folded} line{folded === 1 ? "" : "s"} unchanged</Text>);
+  if (!changes.some((x) => x.kind !== "same")) rows.push(<Text key="none" style={s.note}>No line differs. Only the version changed.</Text>);
+  return <View style={s.panel}>{rows}<Text style={s.note}>− taken out · + put in</Text></View>;
 }
 
 /** Every lock, or every proposal, of one Crowdlock: the full list its page keeps short. */
@@ -1870,7 +1950,7 @@ const HELP_FOR: Record<string, string> = {
   feeSpeed: "A higher fee is quicker; a lower one is cheaper and can wait hours when the network is busy. The choice is used for every payment until you change it.",
   wallet: "Your wallet is the key that owns your bitcoin. If it is kept on this phone, your recovery words on paper are its only backup.",
   founders: "These pages are for someone starting a Crowdlock of their own or helping to run one. Most people never need them.",
-  lookAfter: "Looking after a Crowdlock means updating it, listing its co-signer keys and destinations, publishing proposals and adding maintainers. Each needs the founder's or a maintainer's GitHub account.",
+  lookAfter: "Looking after a Crowdlock means updating it, listing its co-signer keys and destinations, publishing proposals, adding maintainers and, rarely, publishing a new version of its declaration. Each needs the founder's or a maintainer's GitHub account.",
   share: "Sharing gives someone a link or a code that opens this Crowdlock in their app. It shares nothing about you.",
   findCrowdlocks: "Find lists Crowdlocks that have announced themselves. Each one is checked on this phone before it is shown.",
   addCrowdlock: "Paste a link to a Crowdlock's file to add it to your list. It is checked on this phone first.",
@@ -1945,7 +2025,7 @@ function Send({ words, go }: { words: string; go: Go }) {
 // Crowdlocks
 // ---------------------------------------------------------------------------
 
-type Loaded = { ok: true; url: string; crowdlock: any; declarationText: string; statement: string; register: any; destinations: any; proposals: any[]; proposalProblems: string[] }
+type Loaded = { ok: true; url: string; crowdlock: any; declarationText: string; versions: any[]; statement: string; register: any; destinations: any; proposals: any[]; proposalProblems: string[] }
   | { ok: false; url: string; problems: string[] };
 
 async function allLinks(): Promise<string[]> {
@@ -2054,6 +2134,8 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 
   const me = membershipOf(c.register, account.address);
   const here = c.crowdlock.network === NETWORK;
+  const toSign = here ? newVersionToSign(c, account.address) : null;
+  const mine = me ? versionSignedBy(c, me) : null;
 
   return (
     <View>
@@ -2070,6 +2152,13 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         {historyLinkFor(c.url) && <Button label="See who changed it" kind="plain" onPress={() => Linking.openURL(historyLinkFor(c.url)!)} />}
         <Text style={s.note}>New locks are paused on this phone until you've looked. Taking money home isn't affected.</Text>
         <Button label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
+      </View>}
+
+      {toSign && <View style={s.panel}>
+        <Text style={s.error}>This Crowdlock's declaration has a new version.</Text>
+        <Text style={s.note}>Why: {toSign.current.reason}</Text>
+        <Text style={s.note}>Doing nothing changes nothing about your money: your locks still count, and your signature still stands for the version you signed. Signing the new version lets you back purchases proposed under it.</Text>
+        <Btn label="Read what changed" onPress={() => go({ name: "sign", words, url })} />
       </View>}
 
       {record && record.releases.length > 0 && <View style={s.panel}>
@@ -2114,8 +2203,8 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 
       <Text style={s.h2}>More about this Crowdlock</Text>
       {me && (showText
-        ? <><Text style={s.label}>The declaration you signed</Text><Text style={s.declaration}>{c.declarationText}</Text></>
-        : <NavRow title="The declaration" sub="The words you signed" onPress={() => setShowText(true)} />)}
+        ? <><Text style={s.label}>The declaration you signed{c.versions.length > 1 && mine ? ` (version ${mine.version})` : ""}</Text><Text style={s.declaration}>{mine?.text ?? c.declarationText}</Text></>
+        : <NavRow title="The declaration" sub={c.versions.length > 1 && mine ? `The words you signed: version ${mine.version}` : "The words you signed"} onPress={() => setShowText(true)} />)}
       {record && record.releases.length === 0 && (c.register.locks ?? []).length > 0 && <Text style={s.note}>Co-signer's record: no early releases{record.unreadable ? ` (${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be checked just now)` : ""}.</Text>}
       <NavRow title="Share it" sub="A link or a code that opens it in someone's app" onPress={() => go({ name: "share", words, url })} />
       {repoFromFileUrl(c.url) && <NavRow title="Look after it" sub="For its founder and maintainers" onPress={() => go({ name: "lookAfter", words, url })} />}
@@ -2536,7 +2625,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
   const [published, setPublished] = useState<string | null>(null);
   const [open, setOpen] = useState(!!alone);
   // On its own page, each job has a row; this is the one that is open.
-  const [job, setJob] = useState<null | "update" | "keys" | "destinations" | "proposal" | "maintainers">(null);
+  const [job, setJob] = useState<null | "update" | "keys" | "destinations" | "proposal" | "maintainers" | "version">(null);
   useBack(() => { if (alone && job) { setJob(null); return true; } return false; });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -2605,6 +2694,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
       {here && <NavRow title="Destinations" sub="The addresses a proposal is allowed to pay" onPress={() => setJob("destinations")} />}
       {here && <NavRow title="Write a proposal" sub="Put a purchase to the members" onPress={() => setJob("proposal")} />}
       <NavRow title="Maintainers" sub="Other people who can help run it" onPress={() => setJob("maintainers")} />
+      <NavRow title="Publish a new version of the declaration" sub={c.versions.length > 1 ? `It is on version ${c.versions[c.versions.length - 1].version}` : "If its words ever need to change"} onPress={() => setJob("version")} />
     </View>
   ) : (
     <View>
@@ -2614,6 +2704,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
       {job === "destinations" && <><Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
       {job === "proposal" && <><WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
       {job === "maintainers" && <><Text style={s.h2}>Maintainers</Text><MaintainerAdvice /><MaintainerForm owner={where.owner} repo={where.repo} /></>}
+      {job === "version" && <NewDeclarationVersion c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
     </View>
   );
 
@@ -2998,6 +3089,10 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
     const closes = new Date(Date.parse(opens) + g * 86400000).toISOString().replace(".000Z", "Z");
     const settlesBy = new Date(Date.parse(closes) + st * 86400000).toISOString().replace(".000Z", "Z");
     const p: any = { title: title.trim(), text: text.trim(), destination: dest, requires: minor, currency: cur, opens, closes, settles_by: settlesBy };
+    // Published under the current version of the declaration; only members who
+    // signed it may commit. Version 1 is left unsaid, as it always was.
+    const v = currentVersion(c.crowdlock).version;
+    if (v !== c.crowdlock.declaration.version) p.declaration_version = v;
     try { p.hash = proposalHash(fieldsOf(p, c.crowdlock.declaration.sha256)); } catch (e: any) { return { problem: e.message }; }
     const rate = Number(sats) > 0 ? (minor / 10 ** digits) / (Number(sats) / 1e8) : 0;
     p.target = { sats: Number(sats), rate: `1 BTC = ${rate.toFixed(digits)} ${cur}`, at: opens };
@@ -3054,6 +3149,70 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
             yes="Publish this proposal" onYes={publish} onCancel={() => setAsking(false)} />
         : <Button label={busy ? "Publishing…" : "Publish this proposal"} disabled={busy || !!problem} onPress={() => setAsking(true)} />}
     </>}
+  </>;
+}
+
+/**
+ * Publish a new version of the declaration. The Crowdlock keeps its identity,
+ * its register and every lock; members are shown the reason and the changed
+ * lines and asked whether they wish to sign it (spec/registration-format.md,
+ * "Versioning"). Starts from the current text, so the founder edits rather
+ * than retypes.
+ */
+function NewDeclarationVersion({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; owner: string; repo: string; onChange: () => void }) {
+  const { withSignIn, codeView } = useGitHub();
+  const cur = c.versions[c.versions.length - 1];
+  const [text, setText] = useState<string>(cur.text ?? "");
+  const [reason, setReason] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const canonical = canonicalise(text);
+  const sha = declarationHash(text);
+  const changes = lineChanges(cur.text ?? "", canonical);
+  const problem =
+    !text.trim() ? "Write the new version." :
+    sha === cur.sha256 || c.versions.some((v: any) => v.sha256 === sha) ? "Change the words first: this is the same as a version already published." :
+    !reason.trim() ? "Say in one line why it is changing. Every member reads this first." :
+    /\n/.test(reason) || reason.trim().length > 300 ? "Keep the reason to one line, up to 300 characters." :
+    cur.text?.includes(NO_RETURNS) && !canonical.includes(NO_RETURNS) ? "The line saying nobody receives anything financial must stay, word for word." :
+    null;
+  const publish = async () => {
+    setAsking(false); setBusy(true); setMsg(null);
+    try {
+      await withSignIn(async (token) => {
+        if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can publish a new version of its declaration.");
+        const today = new Date().toISOString().slice(0, 10);
+        const r = await publishDeclarationVersion({
+          token, owner, repo, crowdlockPath: pathInRepo(c.url), text: canonical, sha256: sha, reason: reason.trim(), today,
+          check: (file: any, t: string) => checkCrowdlock(file, { versionTexts: { [file.declaration_versions.at(-1).version]: t } }),
+        });
+        setMsg({ ok: true, text: `Published as version ${r.version}. Its website updates in a minute or two; then every member sees it on this Crowdlock's page and is asked whether they wish to sign it.` });
+        setReason("");
+        setTimeout(onChange, 90000);
+      });
+    } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
+    setBusy(false);
+  };
+  return <>
+    <Text style={s.h2}>Publish a new version of the declaration</Text>
+    <Text style={s.p}>Do this only if the words really must change, for example because a solicitor found a problem. It is version {cur.version} now; this would be version {cur.version + 1}.</Text>
+    <Text style={s.note}>What stays the same: the Crowdlock, its fingerprint, every member's number, every signature (it still stands for the version it signed) and every lock, which keeps counting. New members sign the new version. Existing members are shown your reason and the changed lines and asked whether they wish to sign it; only members who have signed it can back purchases proposed after this.</Text>
+    <Text style={s.label}>The new version</Text>
+    <Input style={[s.input, { minHeight: 220, textAlignVertical: "top" }]} multiline value={text} onChangeText={setText} />
+    <Text style={s.label}>Why it is changing (one line)</Text>
+    <Input style={s.input} value={reason} onChangeText={setReason} placeholder="For example: a solicitor asked for clause 4 to be clearer" maxLength={300} />
+    <Text style={s.label}>What changes</Text>
+    <Changes changes={changes} />
+    {problem ? <Text style={s.note}>{problem}</Text> : <Text style={s.note}>Its fingerprint will be {sha.slice(0, 12)}…</Text>}
+    {codeView}
+    {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+    {asking && !problem
+      ? <Confirm
+          title={`Publish version ${cur.version + 1}?`}
+          text="This can't be undone. The new text and your reason become part of this Crowdlock's public history, and every member is asked whether they wish to sign it."
+          yes={`Publish version ${cur.version + 1}`} onYes={publish} onCancel={() => setAsking(false)} />
+      : <Button label={busy ? "Publishing…" : `Publish version ${cur.version + 1}`} kind="danger" disabled={busy || !!problem} onPress={() => setAsking(true)} />}
   </>;
 }
 

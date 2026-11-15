@@ -596,4 +596,37 @@ console.log("-".repeat(80));
 }
 
 console.log("-".repeat(80));
+console.log("A NEW VERSION OF THE DECLARATION");
+console.log("-".repeat(80));
+{
+  const { newVersionToSign, mayCommitTo, versionSignedBy, lineChanges } = await import("../src/crowdlocks.mjs");
+  const { declarationHash, canonicalise } = await import("../../method/js/crowdlock.mjs");
+  const tFile = JSON.parse(readFileSync(join(REPO, "crowdlocks/kop-fund-testnet4.json"), "utf8"));
+  const v1Text = readFileSync(join(REPO, tFile.declaration.file), "utf8");
+  const v2Text = canonicalise(v1Text.replace(/\n$/, "") + "\nA sentence added in version 2.\n");
+  const withV2 = { ...tFile, declaration_versions: [{ version: 2, file: "crowdlocks/test/declaration-test-v2.txt", sha256: declarationHash(v2Text), published: "2027-01-31", reason: "Clearer wording." }] };
+  const reg = JSON.parse(readFileSync(join(REPO, "crowdlocks/test/registrations.json"), "utf8"));
+  const someone = reg.members[0];
+  const serve = (r) => siteFetch({ "crowdlocks/kop-fund-testnet4.json": JSON.stringify(withV2), "crowdlocks/test/declaration-test-v2.txt": v2Text, "crowdlocks/test/registrations.json": JSON.stringify(r) });
+  const v = await loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, serve(reg));
+  check("A Crowdlock with a version 2 loads, and checks version 2's text", v.ok && v.versions.length === 2 && v.versions[1].text === v2Text, v.ok ? "" : v.problems.join("; "));
+  check("…a newcomer is shown version 2 and signs it", v.ok && v.declarationText === v2Text && v.statement.includes(" v2 (sha256:"));
+  const ask = v.ok ? newVersionToSign(v, someone.address) : null;
+  check("A member who signed version 1 is asked about version 2, with the reason and the changed line",
+    !!ask && ask.current.version === 2 && ask.previous.version === 1 && ask.current.reason === "Clearer wording."
+    && ask.changes.filter((x) => x.kind === "new").map((x) => x.text).join() === "A sentence added in version 2." && !ask.changes.some((x) => x.kind === "gone"));
+  check("A newcomer isn't asked (they aren't a member)", v.ok && newVersionToSign(v, "tb1qnobodyhere0000000000000000000000000000") === null);
+  const signed = { ...reg, members: reg.members.map((m, i) => (i === 0 ? { ...m, also_signed: [{ version: 2, signature: "x", signed: "2027-02-01" }] } : m)) };
+  const v2 = await loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, serve(signed));
+  check("Once they've signed it they aren't asked again, and their page shows version 2's words",
+    v2.ok && newVersionToSign(v2, someone.address) === null && versionSignedBy(v2, v2.register.members[0]).version === 2);
+  const me1 = v.ok ? membershipOf(v.register, someone.address) : null;
+  const me2 = v2.ok ? membershipOf(v2.register, someone.address) : null;
+  check("Committing to a version-2 proposal needs version 2; a version-1 proposal needs only version 1",
+    v.ok && v2.ok && !mayCommitTo(v, me1, { declaration_version: 2 }) && mayCommitTo(v2, me2, { declaration_version: 2 }) && mayCommitTo(v, me1, {}));
+  check("Old against new: a changed line shows as one out and one in",
+    JSON.stringify(lineChanges("a\nb\nc\n", "a\nB\nc\n").map((x) => x.kind)) === JSON.stringify(["same", "gone", "new", "same"]));
+}
+
+console.log("-".repeat(80));
 process.exit(failures === 0 ? 0 : 1);
