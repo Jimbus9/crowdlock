@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { planLock, lockDate } from "./lockplan.mjs";
 import { verifyMembership } from "./verify.mjs";
-import { membershipStatement } from "./crowdlock.mjs";
+import { membershipStatement, joinedVersion } from "./crowdlock.mjs";
 
 let failures = 0;
 const check = (what, ok, detail = "") => {
@@ -42,7 +42,7 @@ check("exactly midnight is not pushed a day on", lockDate(1, 1825027200 - 315576
 
 // --- The key behind a member ---------------------------------------------------
 const v = verifyMembership({
-  address: first.address, signature: first.signature, message: membershipStatement(crowdlock), hrp: "tb",
+  address: first.address, signature: first.signature, message: membershipStatement(crowdlock, joinedVersion(crowdlock, first)), hrp: "tb",
 });
 check("the member's signature is valid", v.valid);
 const viaPlan = planLock({ crowdlock, register, member: "1", years: 1, now: Date.UTC(2026, 9, 31, 12) / 1000 });
