@@ -33,7 +33,14 @@
       "n": 5,
       "address": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
       "signature": "HwD2OCPjoOzP/9xm/ZjIfWRwsuGEFl1qlT69uEFimQteIh/2VbQ1tIR+Px+6pf/XLfY88ESyp2ocQ20PnfDB5HI=",
-      "signed": "2026-11-07"
+      "signed": "2026-11-07",
+      "also_signed": [
+        {
+          "version": 2,
+          "signature": "IF9//lYCeZaBix6B19E03i9DaZ82z/v0zsHmPYgUamcsNZUhw5Vrqv+0EAjLKbD2BZmZA64RKbNBBp8syUCvPgQ=",
+          "signed": "2026-11-15"
+        }
+      ]
     }
   ],
   "locks": [
