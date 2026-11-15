@@ -105,7 +105,7 @@ type Screen =
   | { name: "addCrowdlock"; words: string; link?: string }
   | { name: "startCrowdlock"; words: string }
   | { name: "findCrowdlocks"; words: string }
-  | { name: "cosignerKey"; words: string }
+  | { name: "cosignerKey"; words: string; forStart?: "cosigner" | "testPasted" }
   | { name: "ledgerSetup"; from?: string };
 
 // ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ export default function App() {
             {screen.name === "addCrowdlock" && <AddCrowdlock key={screen.link ?? "add"} words={screen.words} link={screen.link} go={setScreen} />}
             {screen.name === "startCrowdlock" && <StartCrowdlock words={screen.words} go={setScreen} />}
             {screen.name === "findCrowdlocks" && <FindCrowdlocks words={screen.words} go={setScreen} />}
-            {screen.name === "cosignerKey" && <CosignerKey words={screen.words} go={setScreen} />}
+            {screen.name === "cosignerKey" && <CosignerKey words={screen.words} forStart={screen.forStart} go={setScreen} />}
             {screen.name === "ledgerSetup" && <LedgerSetup from={screen.from} go={setScreen} />}
           </ScrollView>
           </RevealCtx.Provider>
@@ -2320,7 +2320,7 @@ function AddCrowdlock({ words, go, link: given }: { words: string; go: Go; link?
 // needed to use it later. Done with the phone in airplane mode.
 // ---------------------------------------------------------------------------
 
-function CosignerKey({ words: walletWords, go }: { words: string; go: Go }) {
+function CosignerKey({ words: walletWords, forStart, go }: { words: string; forStart?: "cosigner" | "testPasted"; go: Go }) {
   const [stage, setStage] = useState<"intro" | "show" | "check" | "result" | "existing">("intro");
   const [coWords, setCoWords] = useState("");
   const [typed, setTyped] = useState("");
@@ -2329,7 +2329,13 @@ function CosignerKey({ words: walletWords, go }: { words: string; go: Go }) {
   const [xpub, setXpub] = useState<string | null>(null);
   const list = coWords.split(" ");
   // Leave this screen and the words are gone from memory with it.
-  const leave = () => { setCoWords(""); setTyped(""); setPub(null); setXpub(null); go({ name: "home", words: walletWords }); };
+  // Opened from Start a Crowdlock, it goes back there, taking the public half
+  // (never the words) with it. Opened from More, it goes Home.
+  const leave = () => {
+    if (forStart && startDraft && (xpub || pub)) startDraft[forStart] = xpub ?? pub;
+    setCoWords(""); setTyped(""); setPub(null); setXpub(null);
+    go(forStart ? { name: "startCrowdlock", words: walletWords } : { name: "home", words: walletWords });
+  };
 
   if (stage === "intro") return (
     <View>
@@ -2392,7 +2398,7 @@ function CosignerKey({ words: walletWords, go }: { words: string; go: Go }) {
       <Text style={s.mono} selectable>{xpub}</Text>
       <Button label="Copy the xpub" kind="plain" onPress={() => xpub && Clipboard.setStringAsync(xpub)} />
       <Text style={s.note}>You can switch airplane mode off now. Keep the two paper copies apart.</Text>
-      <Button label="Done" onPress={leave} />
+      <Button label={forStart ? "Use this key and go back to my Crowdlock" : "Done"} onPress={leave} />
     </View>
   );
 }
@@ -3121,18 +3127,24 @@ function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
 // Starting a Crowdlock
 // ---------------------------------------------------------------------------
 
+// What has been typed into Start a Crowdlock so far, kept while the app is
+// open so that leaving the form (to make a co-signer key) loses nothing.
+// It holds no secret: every field here ends up published.
+let startDraft: Record<string, any> | null = null;
+
 function StartCrowdlock({ words, go }: { words: string; go: Go }) {
-  const [network, setNetwork] = useState<"testnet4" | "mainnet">("testnet4");
-  const [name, setName] = useState("");
-  const [about, setAbout] = useState("");
-  const [title, setTitle] = useState("OUR DECLARATION");
-  const [text, setText] = useState(declarationSkeleton("OUR DECLARATION"));
-  const [minimum, setMinimum] = useState("0.002");
-  const [waitDays, setWaitDays] = useState("7");
-  const [gatherDays, setGatherDays] = useState("28");
-  const [settleDays, setSettleDays] = useState("14");
-  const [cosigner, setCosigner] = useState("");
-  const [testPasted, setTestPasted] = useState("");
+  const d = startDraft ?? {};
+  const [network, setNetwork] = useState<"testnet4" | "mainnet">(d.network ?? "testnet4");
+  const [name, setName] = useState<string>(d.name ?? "");
+  const [about, setAbout] = useState<string>(d.about ?? "");
+  const [title, setTitle] = useState<string>(d.title ?? "OUR DECLARATION");
+  const [text, setText] = useState<string>(d.text ?? declarationSkeleton("OUR DECLARATION"));
+  const [minimum, setMinimum] = useState<string>(d.minimum ?? "0.002");
+  const [waitDays, setWaitDays] = useState<string>(d.waitDays ?? "7");
+  const [gatherDays, setGatherDays] = useState<string>(d.gatherDays ?? "28");
+  const [settleDays, setSettleDays] = useState<string>(d.settleDays ?? "14");
+  const [cosigner, setCosigner] = useState<string>(d.cosigner ?? "");
+  const [testPasted, setTestPasted] = useState<string>(d.testPasted ?? "");
   const [problems, setProblems] = useState<string[] | null>(null);
   const [checked, setChecked] = useState<any>(null);
   const [stage, setStage] = useState<"form" | "signin" | "creating" | "done">("form");
@@ -3140,7 +3152,9 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const [steps, setSteps] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ links: { label: string; url: string }[]; repoUrl: string; inboxStarted: boolean; owner: string; repo: string } | null>(null);
-  const [at, setAt] = useState(0);   // which page of the form
+  const [at, setAt] = useState<number>(d.at ?? 0);   // which page of the form
+  useEffect(() => { startDraft = { network, name, about, title, text, minimum, waitDays, gatherDays, settleDays, cosigner, testPasted, at }; },
+    [network, name, about, title, text, minimum, waitDays, gatherDays, settleDays, cosigner, testPasted, at]);
   useBack(() => { if (stage === "form" && at > 0) { setAt(at - 1); return true; } return false; });
 
   // The test copy's co-signer key is made here, from the founder's own words,
@@ -3196,6 +3210,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         if (link) await announce(DEFAULT_RELAYS, { url: link.url, name: f.network === "mainnet" ? name.trim() : `${name.trim()} — TEST`, about: about.trim(), network: f.network }).catch(() => 0);
       }
       setDone({ links: built.links, repoUrl: made.repoUrl, inboxStarted: made.inboxStarted, owner: made.owner, repo: made.repo });
+      startDraft = null;   // it exists now; the next one starts blank
       setStage("done");
     } catch (e: any) { setError(String(e.message ?? e)); setStage("form"); setCode(null); }
   };
@@ -3299,8 +3314,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Text style={s.label}>What people sign</Text>
         <Input style={[s.input, { minHeight: 240, textAlignVertical: "top" }]} multiline value={text} onChangeText={(t) => { setText(t); setChecked(null); }} />
         <Text style={s.note}>Leave the line about returns as it is. It's what makes this a Crowdlock. Investments that pay returns have legal rules to follow, and Crowdlock follows none of them.</Text>
-        <Warning level="stop" title="Once anyone signs, these words can never change">
-          The declaration is fixed by its fingerprint. Changing a word afterwards would make a different Crowdlock, with no members. Read it twice.
+        <Warning level="stop" title="Once anyone signs, these words can't be edited">
+          Each member signs these exact words, so they can't be quietly changed. If something has to be fixed later, you publish a new version with the reason, and every member is asked to sign again. Nobody's signature carries over to words they haven't read. Read it twice.
         </Warning>
       </>}
 
@@ -3321,7 +3336,9 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={cosigner} onChangeText={(t) => { setCosigner(t); setChecked(null); }} placeholder="Its xpub, or its key: 02… or 03…" />
         {badKey(cosigner) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
         {!!keyFromXpub(cosigner) && <Text style={s.note}>That xpub stands for {keyFromXpub(cosigner)!.slice(0, 10)}…, and is published beside it so hardware wallets can lock.</Text>}
-        <Text style={s.note}>Make this key with "Make a co-signer key" under More (or Sparrow, Electrum, or the method's own script), keep its words on paper, and paste its xpub here. An xpub is the public half of a key in a form hardware wallets can use. Its plain key works too, but then hardware wallets can't lock until the xpub is added.</Text>
+        <Btn kind="second" label="Make a co-signer key now" onPress={() => go({ name: "cosignerKey", words, forStart: "cosigner" })} />
+        <Btn kind="link" label="Paste what I copied" onPress={async () => { const t = (await Clipboard.getStringAsync()).trim(); if (t) { setCosigner(t); setChecked(null); } }} />
+        <Text style={s.note}>Making one here gives you 12 words to write on paper, and brings the key back to this page. Your typing is kept. You can also make it elsewhere (Sparrow, Electrum, or the method's own script) and paste its xpub. An xpub is the public half of a key in a form hardware wallets can use. Its plain key works too, but then hardware wallets can't lock until the xpub is added.</Text>
       </>}
 
       {here === "lengths" && <>
@@ -3337,10 +3354,12 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
 
       {here === "testkey" && <>
         <Text style={s.h1}>{network === "mainnet" ? "The test copy's co-signer key" : "The co-signer key"}</Text>
-        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so paste a practice co-signer key (made with \"Make a co-signer key\" under More). Its xpub, ideally." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
+        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so this Crowdlock needs a co-signer key of its own. Make one now with the button below, or paste one you already have (its xpub, ideally)." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
         <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder={testCo ? "Optional: an xpub, or a key 02… or 03…" : "An xpub, or a key 02… or 03…"} />
         {badKey(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
-        <Text style={s.note}>You can add more co-signer keys later, from the Crowdlock's page under "Look after it".</Text>
+        <Btn kind="second" label="Make a co-signer key now" onPress={() => go({ name: "cosignerKey", words, forStart: "testPasted" })} />
+        <Btn kind="link" label="Paste what I copied" onPress={async () => { const t = (await Clipboard.getStringAsync()).trim(); if (t) { setTestPasted(t); setChecked(null); } }} />
+        <Text style={s.note}>Making one here gives you 12 words to write on paper, and brings the key back to this page. Your typing is kept. You can add more co-signer keys later, from the Crowdlock's page under "Look after it".</Text>
       </>}
 
       {here === "check" && <>
