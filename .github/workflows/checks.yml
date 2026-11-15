@@ -40,6 +40,9 @@ jobs:
       - name: The site's shared code, pages and live registers
         run: for t in method/js/*.test.mjs; do echo "== $t"; node "$t" || exit 1; done
 
+      - name: The declaration fingerprint script
+        run: node method/declaration/fingerprint.test.mjs
+
       - name: The co-signer key script
         working-directory: method/cosigner
         run: npm ci --no-audit --no-fund && node cosigner.test.mjs

@@ -6,7 +6,7 @@
 
 **14 November 2026:** "What every Crowdlock shares" (formerly "The one condition that is not negotiable") was reworded. The rule is unchanged: a Crowdlock pays no financial return. The wording now also says what contributors do get.
 
-**15 November 2026:** a Crowdlock may publish later versions of its declaration (`declaration_versions`); see the registration format, "Versioning".
+**15 November 2026:** a Crowdlock may publish later versions of its declaration (`declaration_versions`); see the registration format, "Versioning". A new section, "Publishing a new version of your declaration, by hand", says how to do it without the app.
 
 Everything here is free to copy, for any club, any sport, or any cause that fits.
 Copying it is not tolerated, it is the intended outcome. Nobody needs permission,
@@ -283,6 +283,53 @@ a destination attestation attests an entry in *your* list.
 Two instances that copied the same parameters but wrote different declarations
 remain cryptographically separate, with no coordination and no registry of
 instances.
+
+## Publishing a new version of your declaration, by hand
+
+If your declaration has to change (a solicitor says it must, or you got
+something wrong), you publish a new version beside the old one. Your
+Crowdlock keeps its identity, its members keep their numbers, and nobody's
+lock is touched; members are asked to sign the new version, with no deadline.
+The rules are in the registration format, under "Versioning".
+
+The Crowdlock app does this for you (Look after it → Publish a new version of
+the declaration). **Nothing needs the app.** It is two changes to your
+repository, which anyone with write access can make on GitHub's own website
+or with git:
+
+1. **Write the new text** in a plain text file next to the old one, for
+   example `spec/declaration-v2.txt`. Start from the current version's file,
+   not from a web page, so nothing changes that you did not mean to change.
+   Keep the line that says contributors receive no financial return: it is
+   what every Crowdlock shares.
+2. **Work out its fingerprint** with the published script, which needs only
+   Node and does exactly what every register and app does:
+
+   ```
+   node method/declaration/fingerprint.mjs spec/declaration-v2.txt --fix --crowdlock crowdlocks/your-crowdlock.json --reason "One line saying why."
+   ```
+
+   `--fix` saves the file in the one exact form that is hashed (no spaces at
+   the ends of lines, plain line endings, one newline at the very end). It
+   prints the fingerprint, the line members will sign, and the entry to add.
+   Without Node, any SHA-256 tool gives the same answer **only if** the file
+   is already in that form; the script tells you whether it is.
+3. **Add the entry** it prints to the end of `declaration_versions` in your
+   Crowdlock file (make the list if it isn't there), with the version number,
+   the file, the fingerprint, today's date and the one-line reason. Leave
+   `declaration`, the founding version, exactly as it is.
+4. **Commit both files together**, and say why in the commit message.
+
+Then check it, straight away. Run the script again on the file as committed:
+it must print the fingerprint your entry gives. **A mismatch is not harmless.**
+The relay inbox skips a Crowdlock whose file doesn't check out, so nobody's
+signature reaches the register until it is fixed, and its run log is the
+only place that says so; the app refuses the file outright. If your
+repository anchors its files, the new text is anchored the first time the job
+sees it; anchor it yourself otherwise, so it can't be backdated.
+
+**Never edit a published version's file.** Its fingerprint is in every
+signature made over it. A change, however small, is always a new version.
 
 ## About the language
 
