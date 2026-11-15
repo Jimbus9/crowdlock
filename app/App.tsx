@@ -696,7 +696,7 @@ function useOverview(account: any): Overview {
       const cosigner: string | undefined = newestCosigner(c.crowdlock);
       const changed = keyChanges(await loadSeenKeys(c.url), c.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(c.url)).changed;
       if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name, kind: "keys" });
-      if (newVersionToSign(c, account.address)) notes.push({ url: c.url, name: c.crowdlock.name, kind: "version" });
+      if (!signedJustNow(c, account.address) && newVersionToSign(c, account.address)) notes.push({ url: c.url, name: c.crowdlock.name, kind: "version" });
       const mine: MyLock[] = [];
       if (member) {
         const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address)];
@@ -1813,6 +1813,7 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
       setBusy(false); return;
     }
     const p = await postToRelays(c.crowdlock, { type: "join", address: account.address, signature });
+    if (p.ok) markSignedJustNow(c, account.address);
     setResult(p.ok
       ? { ok: true, text: `Signed version ${toSign.current.version} and sent. The register will show it within a few minutes. You are still member ${me!.n}.` }
       : { ok: false, text: "It couldn't be sent just now. Your signature is fine. Check your connection, or turn off any VPN, and try again." });
@@ -1887,6 +1888,18 @@ function SignScreen({ words, url, go }: { words: string; url: string; go: Go }) 
     </View>
   );
 }
+
+/**
+ * Versions signed in this app session and sent, but not yet on the register
+ * (the relay inbox takes a few minutes). Without this, the page asks again
+ * straight after signing. Forgotten when the app closes; by then the register
+ * has it, or the card comes back, which is the honest answer.
+ */
+const signedThisSession = new Set<string>();
+const signedKey = (c: Extract<Loaded, { ok: true }>, address: string) =>
+  `${c.url}|${address}|${c.versions[c.versions.length - 1].version}`;
+function markSignedJustNow(c: Extract<Loaded, { ok: true }>, address: string) { signedThisSession.add(signedKey(c, address)); }
+function signedJustNow(c: Extract<Loaded, { ok: true }>, address: string) { return signedThisSession.has(signedKey(c, address)); }
 
 /**
  * Old lines against new: lines taken out struck through, lines put in marked,
@@ -2179,7 +2192,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
   const here = c.crowdlock.network === NETWORK;
   // Signed on this phone a short while ago, and the register hasn't caught up.
   const waitingToJoin = !me && !!signedHere[url] && Date.now() - signedHere[url] < SIGNED_WAIT_MS;
-  const toSign = here ? newVersionToSign(c, account.address) : null;
+  const toSign = here && !signedJustNow(c, account.address) ? newVersionToSign(c, account.address) : null;
   const mine = me ? versionSignedBy(c, me) : null;
 
   return (
@@ -2199,12 +2212,11 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         <Button label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
       </View>}
 
-      {toSign && <View style={s.panel}>
-        <Text style={s.error}>This Crowdlock's declaration has a new version.</Text>
-        <Text style={s.note}>Why: {toSign.current.reason}</Text>
+      {toSign && <Warning level="know" title="This Crowdlock's declaration has a new version">
+        <Text style={s.p}>Why: {toSign.current.reason}</Text>
         <Text style={s.note}>Doing nothing changes nothing about your money: your locks still count, and your signature still stands for the version you signed. Signing the new version lets you back purchases proposed under it.</Text>
         <Btn label="Read what changed" onPress={() => go({ name: "sign", words, url })} />
-      </View>}
+      </Warning>}
 
       {record && record.releases.length > 0 && <View style={s.panel}>
         <Text style={s.error}>The co-signer has released {record.releases.length === 1 ? "a lock" : `${record.releases.length} locks`} early.</Text>
