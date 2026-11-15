@@ -2,7 +2,7 @@
 // from what they typed, and checked by the same code that checks every other
 // Crowdlock before anything is created. Pure: no network, no keys.
 //
-// A real-bitcoin Crowdlock is always made with a matching test copy beside it,
+// A real-bitcoin Crowdlock can be made with a matching test copy beside it,
 // on testnet4 with its own fingerprint, so a founder can rehearse joining,
 // locking and taking a lock home with worthless money first. A test-only
 // Crowdlock is just the test copy.
@@ -151,12 +151,15 @@ ${links.map((l) => `<h2>${esc(l.label)}</h2>
  *   settleDays           the longest settling may take after that (founder's choice; 14 recommended)
  *   cosignerPubkey       the real Crowdlock's co-signer (pasted in)
  *   testCosignerPubkey   the test copy's co-signer (made on the phone)
+ *   testCopy             false: a real Crowdlock with no test copy (ignored for testnet4, which is only the test copy)
  *   siteBase             https://<owner>.github.io/<repo>/
  *   today                "YYYY-MM-DD"
  *
  * Returns { ok, problems } or { ok: true, files, links }.
  */
-export function buildCrowdlock({ name, about, title, declarationText, network, minimumSats, cosignerPubkey, testCosignerPubkey, siteBase, today, waitDays = 7, gatherDays = 28, settleDays = 14 }) {
+export function buildCrowdlock({ name, about, title, declarationText, network, minimumSats, cosignerPubkey, testCosignerPubkey, siteBase, today, waitDays = 7, gatherDays = 28, settleDays = 14, testCopy = true }) {
+  const withTest = network !== "mainnet" || testCopy !== false;
+  if (!withTest) testCosignerPubkey = "";
   // Either co-signer may be given as a plain key or as its xpub; an xpub is
   // kept beside the key it stands for, so hardware wallets can lock with it.
   const asKey = (v) => { const k = keyFromXpub(v); return k ? { key: k, xpub: String(v).trim() } : { key: v, xpub: null }; };
@@ -185,7 +188,7 @@ export function buildCrowdlock({ name, about, title, declarationText, network, m
   }
   need(Number.isInteger(gatherDays) && gatherDays >= 1 && gatherDays <= 365, "Set the longest a proposal may gather as a whole number of days, at least 1 (we recommend 28).");
   need(Number.isInteger(settleDays) && settleDays >= 1 && settleDays <= 365, "Set the longest settling may take as a whole number of days, at least 1 (we recommend 14).");
-  need(isPublicKey(testCosignerPubkey), "The test copy's co-signer key isn't a public key: 66 characters, starting 02 or 03, copied whole.");
+  if (withTest) need(isPublicKey(testCosignerPubkey), "The test copy's co-signer key isn't a public key: 66 characters, starting 02 or 03, copied whole.");
   if (problems.length) return { ok: false, problems };
 
   const slug = slugify(name);
@@ -206,21 +209,23 @@ export function buildCrowdlock({ name, about, title, declarationText, network, m
     links.push({ label: "Real bitcoin", url: `${siteBase}crowdlocks/${slug}.json`, declaration: `${siteBase}declaration.txt`, register: `${siteBase}registrations.json` });
   }
 
-  // The test copy: the same words under a test heading, so its fingerprint —
-  // and so every signature on it — can never be mistaken for the real one.
-  const testText = canonicalise(`TEST COPY. Practice only. Test bitcoin has no value, and signing this commits you to nothing.\n\n${text}`);
-  const t = crowdlockFile({
-    name: `${name} — TEST`, about: `A test copy of ${name} on Bitcoin's test network, for practising with test money. Nothing here is real.`,
-    disclaimer: "TEST ONLY. Test bitcoin has no value. Joining here does not make you a member of the real one.",
-    title: `${title} — test copy`, declFile: "test/declaration.txt", declText: testText, network: "testnet4",
-    minimumSats: 10000, cosigner: testCosignerPubkey, cosignerXpub: test.xpub, regDir: "test/", site: siteBase, waitDays: 0, gatherDays, settleDays,
-  });
-  files[`crowdlocks/${slug}-test.json`] = JSON.stringify(t, null, 2) + "\n";
-  files["test/declaration.txt"] = testText;
-  files["test/registrations.json"] = JSON.stringify(emptyRegister(t), null, 2) + "\n";
-  files["test/destinations.json"] = JSON.stringify(emptyDestinations(t, today), null, 2) + "\n";
-  crowdlocks.push({ c: t, text: testText, slug: `${slug}-test` });
-  links.push({ label: "Test copy (test bitcoin)", url: `${siteBase}crowdlocks/${slug}-test.json`, declaration: `${siteBase}test/declaration.txt`, register: `${siteBase}test/registrations.json` });
+  if (withTest) {
+    // The test copy: the same words under a test heading, so its fingerprint —
+    // and so every signature on it — can never be mistaken for the real one.
+    const testText = canonicalise(`TEST COPY. Practice only. Test bitcoin has no value, and signing this commits you to nothing.\n\n${text}`);
+    const t = crowdlockFile({
+      name: `${name} — TEST`, about: `A test copy of ${name} on Bitcoin's test network, for practising with test money. Nothing here is real.`,
+      disclaimer: "TEST ONLY. Test bitcoin has no value. Joining here does not make you a member of the real one.",
+      title: `${title} — test copy`, declFile: "test/declaration.txt", declText: testText, network: "testnet4",
+      minimumSats: 10000, cosigner: testCosignerPubkey, cosignerXpub: test.xpub, regDir: "test/", site: siteBase, waitDays: 0, gatherDays, settleDays,
+    });
+    files[`crowdlocks/${slug}-test.json`] = JSON.stringify(t, null, 2) + "\n";
+    files["test/declaration.txt"] = testText;
+    files["test/registrations.json"] = JSON.stringify(emptyRegister(t), null, 2) + "\n";
+    files["test/destinations.json"] = JSON.stringify(emptyDestinations(t, today), null, 2) + "\n";
+    crowdlocks.push({ c: t, text: testText, slug: `${slug}-test` });
+    links.push({ label: "Test copy (test bitcoin)", url: `${siteBase}crowdlocks/${slug}-test.json`, declaration: `${siteBase}test/declaration.txt`, register: `${siteBase}test/registrations.json` });
+  }
 
   // Every Crowdlock made here passes exactly the checks the app and the
   // register page apply to anybody's, before anything is created.

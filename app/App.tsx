@@ -1339,6 +1339,7 @@ function HomeFlow({ words, url, address, again, go }: { words: string; url: stri
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [rate, readRate] = useFeeRate();
 
   useEffect(() => {
     (async () => {
@@ -1414,12 +1415,13 @@ function HomeFlow({ words, url, address, again, go }: { words: string; url: stri
   const lengths: number[] = c.crowdlock.lock_lengths_years;
   const viaRelays = Array.isArray(c.crowdlock.relays);
   const oldLock = { ...row, cosignerXpub: xpubForKey(c.crowdlock, row.cosignerPubkey) };
-  const feeNote = (
+  const feeNote = (vb: number) => (
     <>
-      <Text style={s.note}>The network fee comes out of this amount, at the {SPEED_LABEL[feeSpeed]} speed. The exact fee is shown as soon as it is sent. If the fee would be too large a share, nothing is sent.</Text>
+      <SumRow label="Network fee" value={aboutFee(rate, vb)} />
+      <Text style={s.note}>The fee comes out of this amount. The exact fee is shown as soon as it is sent; a lock that was paid into more than once costs a little more. If the fee would be too large a share, nothing is sent.</Text>
       {!showSpeeds
         ? <Btn kind="link" label="Change the fee speed" onPress={() => setShowSpeeds(true)} />
-        : <FeeChoice onChange={() => setShowSpeeds(true)} />}
+        : <FeeChoice onChange={readRate} />}
     </>
   );
 
@@ -1444,7 +1446,7 @@ function HomeFlow({ words, url, address, again, go }: { words: string; url: stri
       <SumRow label="Unlocked" value={when(row.locktime)} />
       <SumRow label="It goes to" value="Your waiting balance, in this wallet" />
       <Text style={s.p}>There you can lock it again or send it out. It stops counting towards this Crowdlock's total.</Text>
-      {feeNote}
+      {feeNote(VB_HOME)}
       <Warning level="know" title="The network's clock runs about an hour behind">
         The date is judged by the bitcoin network's own clock, which runs about an hour behind real time on real bitcoin. If this is refused for its date, wait an hour and try again.
       </Warning>
@@ -1515,7 +1517,7 @@ function HomeFlow({ words, url, address, again, go }: { words: string; url: stri
         <SumRow label="Until" value={when(locktime)} />
       </View>
       <Text style={s.p}>It moves straight into the new lock in one payment. Until the new date it can only leave into a purchase you sign for yourself.</Text>
-      {feeNote}
+      {feeNote(VB_AGAIN + (extra > 0n ? VB_WAITING : 0))}
       <Warning level="stop" title="Until your date, you can't touch it">
         If bitcoin's price halves, you cannot sell. Only lock what you can leave alone for the whole time. A longer lock counts for longer, and leaves you exposed for longer.
       </Warning>
@@ -1582,6 +1584,7 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
   const [amount, setAmount] = useState("");
   const [page, setPage] = useState(1);
   const [progress, setProgress] = useState<string | null>(null);
+  const [rate, readRate] = useFeeRate();
   const [showSpeeds, setShowSpeeds] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1716,10 +1719,11 @@ function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash
       <SumRow label="Binding until" value={atUtc(p.closes)} />
       <Text style={s.label}>It would pay this address (the seller)</Text>
       <Text style={s.mono} selectable>{p.destination}</Text>
-      <Text style={s.note}>The network fee comes out of what you commit, at the {SPEED_LABEL[feeSpeed]} speed, and is paid only if it settles. The exact fee is shown as soon as you have signed. If the fee would be too large a share, nothing is signed.</Text>
+      <SumRow label="Network fee" value={aboutFee(rate, sats === null ? VB_COMMIT * chosen.length : VB_COMMIT_PART)} />
+      <Text style={s.note}>The fee comes out of what you commit, and is paid only if it settles. The exact fee is shown as soon as you have signed. If the fee would be too large a share, nothing is signed.</Text>
       {!showSpeeds
         ? <Btn kind="link" label="Change the fee speed" onPress={() => setShowSpeeds(true)} />
-        : <FeeChoice />}
+        : <FeeChoice onChange={readRate} />}
       <Warning level="stop" title="A commitment can't be withdrawn">
         A commitment holds until the proposal closes, and can't be withdrawn. Nothing moves unless the proposal reaches its target and the co-signer completes it. If it doesn't, your money stays locked and comes home on its date. One catch: until then your signed commitment stays valid, so a dishonest co-signer could still complete it, but only to that same listed seller.
       </Warning>
@@ -3390,6 +3394,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const [settleDays, setSettleDays] = useState<string>(d.settleDays ?? "14");
   const [cosigner, setCosigner] = useState<string>(d.cosigner ?? "");
   const [testPasted, setTestPasted] = useState<string>(d.testPasted ?? "");
+  // A real Crowdlock gets a test copy only if its founder asks for one.
+  const [wantTest, setWantTest] = useState<boolean>(d.wantTest ?? false);
   const [problems, setProblems] = useState<string[] | null>(null);
   const [checked, setChecked] = useState<any>(null);
   const [stage, setStage] = useState<"form" | "signin" | "creating" | "done">("form");
@@ -3398,8 +3404,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ links: { label: string; url: string }[]; repoUrl: string; inboxStarted: boolean; owner: string; repo: string } | null>(null);
   const [at, setAt] = useState<number>(d.at ?? 0);   // which page of the form
-  useEffect(() => { startDraft = { network, name, about, title, text, minimum, waitDays, gatherDays, settleDays, cosigner, testPasted, at }; },
-    [network, name, about, title, text, minimum, waitDays, gatherDays, settleDays, cosigner, testPasted, at]);
+  useEffect(() => { startDraft = { network, name, about, title, text, minimum, waitDays, gatherDays, settleDays, cosigner, testPasted, wantTest, at }; },
+    [network, name, about, title, text, minimum, waitDays, gatherDays, settleDays, cosigner, testPasted, wantTest, at]);
   useBack(() => { if (stage === "form" && at > 0) { setAt(at - 1); return true; } return false; });
 
   // The test copy's co-signer key is made here, from the founder's own words,
@@ -3417,7 +3423,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       name, about, title, declarationText: text, network, minimumSats, waitDays: /^\d{1,3}$/.test(waitDays.trim()) ? Number(waitDays.trim()) : NaN,
       gatherDays: /^\d{1,3}$/.test(gatherDays.trim()) ? Number(gatherDays.trim()) : NaN,
       settleDays: /^\d{1,3}$/.test(settleDays.trim()) ? Number(settleDays.trim()) : NaN,
-      cosignerPubkey: keyFromXpub(cosigner) ? cosigner.trim() : cosigner.trim().toLowerCase(), testCosignerPubkey: testPasted.trim() || testCoKey.xpub,
+      cosignerPubkey: keyFromXpub(cosigner) ? cosigner.trim() : cosigner.trim().toLowerCase(), testCosignerPubkey: testPasted.trim() || testCoKey.xpub, testCopy: network !== "mainnet" || wantTest,
       siteBase, today: new Date().toISOString().slice(0, 10),
     };
   };
@@ -3490,7 +3496,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
           <Button label="Copy the link" kind="plain" onPress={() => Clipboard.setStringAsync(l.url)} />
         </View>
       ))}
-      {!IS_TEST_MONEY && <View style={s.panel}>
+      {!IS_TEST_MONEY && done.links.length > 1 && <View style={s.panel}>
         <Text style={[s.p, s.bold]}>The test copy opens in the test app</Text>
         <Text style={s.p}>It won't show in this app's list. Use it only if you or your co-signer want to practise with test money first.</Text>
         <TestApp />
@@ -3521,7 +3527,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
     : here === "minimum" ? !days(waitDays) || !minimum.trim()
     : here === "cosigner" ? !cosigner.trim() || badKey(cosigner)
     : here === "lengths" ? !days(gatherDays) || !days(settleDays)
-    : here === "testkey" ? badKey(testPasted) || (!testCo && !testPasted.trim())
+    : here === "testkey" ? (network === "mainnet" && !wantTest ? false : badKey(testPasted) || (!testCo && !testPasted.trim()))
     : false;
 
   return (
@@ -3533,7 +3539,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Text style={s.p}>A Crowdlock lets a crowd commit money to buying something together, without anyone pooling it or holding anyone else's. You write what it's for; the app sets it up in your own GitHub account.</Text>
         <Text style={s.label}>Which money?</Text>
         {network === "mainnet"
-          ? <Text style={s.p}><Text style={s.bold}>Real bitcoin.</Text> It comes with a test copy, in case you or your co-signer want to practise first. The test copy opens in the Crowdlock test app, not in this one, and you never have to use it.</Text>
+          ? <Text style={s.p}><Text style={s.bold}>Real bitcoin.</Text> Later on you can add a test copy, if you or your co-signer want to practise with test money first. You don't have to.</Text>
           : <Text style={s.p}><Text style={s.bold}>Test bitcoin.</Text> This is the test app, so what you start here uses test bitcoin, which has no value. Practise everything (joining, locking, committing, taking a lock home) before anything is real. To start one with real bitcoin, use the Crowdlock app for real bitcoin.</Text>}
       </>}
 
@@ -3569,7 +3575,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Text style={s.note}>A smaller lock is still its owner's and still locked. It just isn't added to the total.</Text>
         <Text style={s.label}>Days a new destination must be public before a proposal can use it</Text>
         <Input style={s.input} keyboardType="number-pad" value={waitDays} onChangeText={(t) => { setWaitDays(t); setChecked(null); }} />
-        <Text style={s.note}>A destination is an address a purchase is allowed to pay. We recommend at least 7 days. It's the time members have to notice a destination nobody should be paying before money can go to it. Your test copy uses none, so you can practise.</Text>
+        <Text style={s.note}>A destination is an address a purchase is allowed to pay. We recommend at least 7 days. It's the time members have to notice a destination nobody should be paying before money can go to it. A test copy, if you add one, uses none.</Text>
       </>}
 
       {here === "cosigner" && <>
@@ -3596,20 +3602,31 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       </>}
 
       {here === "testkey" && <>
-        <Text style={s.h1}>{network === "mainnet" ? "A practice key for the test copy" : "The co-signer key"}</Text>
-        {network === "mainnet" && <Text style={s.p}>This is a second key, on purpose. Your test copy is where you practise co-signing, and co-signing means typing a key's 12 words into a phone. A separate practice key means the real key's words never get typed while you practise.</Text>}
+        <Text style={s.h1}>{network === "mainnet" ? "A test copy, if you want one" : "The co-signer key"}</Text>
+        {network === "mainnet" && <>
+          <Text style={s.p}>A test copy is the same Crowdlock on test bitcoin, which has no value. It lets you and your co-signer practise joining, locking, committing and co-signing before anything is real. It opens in the Crowdlock Test app, not in this one.</Text>
+          <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: wantTest }} onPress={() => { setWantTest(!wantTest); setChecked(null); }} style={{ flexDirection: "row", alignItems: "center", minHeight: 48 }}>
+            <View style={[s.box, wantTest && s.boxOn]}>{wantTest && <Text style={s.onBrand}>✓</Text>}</View>
+            <Text style={[s.p, { marginBottom: 0, flex: 1 }]}>Add a test copy</Text>
+          </Pressable>
+          {!wantTest && <Text style={s.note}>Leave it unticked to skip. A test copy can't be added to this Crowdlock afterwards, but you can start a practice Crowdlock of its own from the Crowdlock Test app at any time.</Text>}
+        </>}
+        {(network !== "mainnet" || wantTest) && <>
+        {network === "mainnet" && <Text style={s.h2}>Its practice key</Text>}
+        {network === "mainnet" && <Text style={s.p}>This is a second key, on purpose. The test copy is where you practise co-signing, and co-signing means typing a key's 12 words into a phone. A separate practice key means the real key's words never get typed while you practise.</Text>}
         <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so the app can't make this key for you from recovery words. Make one now with the button below, or paste one you already have (its xpub, ideally)." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
         <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder={testCo ? "Optional: an xpub, or a key 02… or 03…" : "An xpub, or a key 02… or 03…"} />
         {badKey(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
         <Btn kind="second" label={network === "mainnet" ? "Make a practice key now" : "Make a co-signer key now"} onPress={() => go({ name: "cosignerKey", words, forStart: "testPasted" })} />
         <Btn kind="link" label="Paste what I copied" onPress={async () => { const t = (await Clipboard.getStringAsync()).trim(); if (t) { setTestPasted(t); setChecked(null); } }} />
         <Text style={s.note}>Making one here gives you 12 words to write on paper, and brings the key back to this page. Your typing is kept. You can add more co-signer keys later, from the Crowdlock's page under "Look after it".</Text>
+        </>}
       </>}
 
       {here === "check" && <>
         <Text style={s.h1}>Check and create</Text>
         <SumRow label="Name" value={name.trim()} />
-        <SumRow label="Money" value={network === "mainnet" ? "Real bitcoin, with a test copy" : "Test bitcoin"} />
+        <SumRow label="Money" value={network === "mainnet" ? (wantTest ? "Real bitcoin, with a test copy" : "Real bitcoin") : "Test bitcoin"} />
         <SumRow label="Declaration" value={title.trim()} />
         {network === "mainnet" && <SumRow label="Smallest lock that counts" value={`${minimum.trim()} BTC`} />}
         <SumRow label="A proposal may run" value={`${gatherDays.trim()} days gathering, ${settleDays.trim()} settling`} />
@@ -3649,6 +3666,23 @@ const SPEED_LABEL: Record<FeeSpeed, string> = { slow: "Slow", normal: "Normal", 
 const SPEED_WHEN: Record<FeeSpeed, string> = { slow: "about an hour", normal: "about half an hour", fast: "the next block or two" };
 
 /** Slow / Normal / Fast, with the network fee rate each means right now. */
+// Roughly how big each kind of payment is, in vbytes, for showing a fee
+// before anything is signed. The wallet works out the exact fee when it
+// builds the payment; these only say about what to expect. Measured from
+// real payments: taking one lock payment home is 122, and so is committing
+// all of one; a new lock as the destination adds 12; keeping part of a lock
+// back adds 43; each waiting payment swept in adds 68.
+const VB_HOME = 122, VB_AGAIN = 134, VB_WAITING = 68, VB_COMMIT = 122, VB_COMMIT_PART = 165;
+
+/** The fee rate at the chosen speed, and a way to read it again after the speed changes. */
+function useFeeRate(): [number | null, () => void] {
+  const [rate, setRate] = useState<number | null>(null);
+  const read = useCallback(() => { chain.feeRate(feeSpeed).then(setRate).catch(() => setRate(null)); }, []);
+  useEffect(() => { read(); }, [read]);
+  return [rate, read];
+}
+const aboutFee = (rate: number | null, vb: number) => (rate ? `about ${Math.ceil(rate * vb).toLocaleString("en-GB")} sats (${SPEED_LABEL[feeSpeed]})` : "being worked out");
+
 function FeeChoice({ onChange }: { onChange?: () => void } = {}) {
   const [speed, setSpeed] = useState<FeeSpeed>(feeSpeed);
   const [rates, setRates] = useState<{ slow: number; normal: number; fast: number } | null>(null);

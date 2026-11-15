@@ -81,6 +81,14 @@ check("The repository carries the relay inbox and the code it runs",
 check("…and a front page with both join links", files["index.html"].includes(real.links[0].url) && files["index.html"].includes(real.links[1].url));
 const testOnly = buildCrowdlock({ ...base, network: "testnet4", cosignerPubkey: undefined, declarationText: filled });
 check("A test-only Crowdlock is just the test copy", testOnly.ok && testOnly.fingerprints.length === 1 && !("registrations.json" in testOnly.files));
+const realOnly = buildCrowdlock({ ...base, declarationText: filled, testCopy: false, testCosignerPubkey: "" });
+check("A real-bitcoin Crowdlock can be made with no test copy: one Crowdlock, one link, nothing under test/",
+  realOnly.ok && realOnly.fingerprints.length === 1 && realOnly.fingerprints[0].network === "mainnet" && realOnly.links.length === 1
+  && !Object.keys(realOnly.files).some((f) => f.startsWith("test/") || f.endsWith("-test.json"))
+  && JSON.parse(realOnly.files["crowdlocks/index.json"]).crowdlocks.join() === realOnly.slug
+  && realOnly.files[`crowdlocks/${realOnly.slug}.json`] === files[`crowdlocks/${real.slug}.json`],
+  realOnly.ok ? "" : realOnly.problems.join("; "));
+check("…and a test copy that is asked for still needs its key", !buildCrowdlock({ ...base, declarationText: filled, testCosignerPubkey: "" }).ok);
 
 rule("THE COPIED INBOX WORKS ON THE NEW CROWDLOCK");
 // Write the repository to disk and run the copied inbox code on a real,
