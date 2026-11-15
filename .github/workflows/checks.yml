@@ -43,6 +43,9 @@ jobs:
       - name: The declaration fingerprint script
         run: node method/declaration/fingerprint.test.mjs
 
+      - name: Every Crowdlock file checks out, every declaration version against its fingerprint
+        run: node method/relay/check.mjs
+
       - name: The co-signer key script
         working-directory: method/cosigner
         run: npm ci --no-audit --no-fund && node cosigner.test.mjs

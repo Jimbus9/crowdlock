@@ -18,7 +18,7 @@ if (!other || !existsSync(other)) { console.error("usage: node method/check-kop-
 
 const PAIRS = [
   ...["append", "crowdlock", "inbox", "lockplan", "lockrecord", "proposals", "relayhealth", "release", "verify"].map((n) => [`js/${n}.mjs`, `js/${n}.mjs`]),
-  ["relay/inbox.mjs", "relay/inbox.mjs"], ["relay/nostr.mjs", "relay/nostr.mjs"],
+  ["relay/inbox.mjs", "relay/inbox.mjs"], ["relay/nostr.mjs", "relay/nostr.mjs"], ["relay/check.mjs", "relay/check.mjs"],
   ["relay/package.json", "relay/package.json"], ["relay/package-lock.json", "relay/package-lock.json"],
 ];
 const walk = (d, base = "") => readdirSync(join(d, base)).flatMap((n) => {
