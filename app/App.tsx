@@ -1967,7 +1967,8 @@ function LookAfterList({ words, go }: { words: string; go: Go }) {
   const [items, setItems] = useState<Loaded[] | null>(null);
   useEffect(() => { allLinks().then((links) => Promise.all(links.map((u) => loadCrowdlock(u)))).then(setItems).catch(() => setItems([])); }, []);
   if (!items) return <ActivityIndicator style={{ marginVertical: 16 }} />;
-  const mine = items.filter((c) => c.ok && repoFromFileUrl(c.url)) as Extract<Loaded, { ok: true }>[];
+  // Only this app's kind of Crowdlock: the other kind is looked after from the other app.
+  const mine = items.filter((c) => c.ok && c.crowdlock.network === NETWORK && repoFromFileUrl(c.url)) as Extract<Loaded, { ok: true }>[];
   if (mine.length === 0) return <Text style={s.note}>None of the Crowdlocks in your list can be looked after from the app.</Text>;
   return <>{mine.map((c) => <NavRow key={c.url} title={c.crowdlock.name} sub="Updates, co-signer keys, destinations, proposals, maintainers" onPress={() => go({ name: "lookAfter", words, url: c.url })} />)}</>;
 }
