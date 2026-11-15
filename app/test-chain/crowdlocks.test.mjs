@@ -290,6 +290,80 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   check("…one just past its date, or still ahead of it, is read every time", times("tb1qrecent") === 2 && times("tb1qopen") === 2);
 }
 
+// A slow connection. The first try is never cut short: the second runs
+// alongside it, so an answer that takes most of the time still counts. (An
+// earlier version dropped the first try after 8 seconds and gave the second
+// only 12, which made a slow-but-working phone connection fail.)
+{
+  const later = (ms, init, make) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve(make()), ms);
+    init.signal.addEventListener("abort", () => { clearTimeout(t); reject(new Error("aborted")); });
+  });
+  let n = 0;
+  // Every try takes 70 of the 100 ms allowed: longer than either share of it.
+  const slow = async (url, init) => { n++; return later(70, init, () => Response.json([{ txid: "aa", vout: 0, value: 1, status: { confirmed: true } }])); };
+  const t0 = Date.now();
+  const got = await esploraChain("https://slow", slow, 100).utxos("tb1qa");
+  const took = Date.now() - t0;
+  check("A slow answer that arrives inside the time is used, not thrown away", got.length === 1 && took >= 60 && took < 100, `${took} ms, ${n} tries`);
+  check("…with a second try started alongside it meanwhile", n === 2, `${n} tries`);
+
+  // A phone that has only just woken says "no connection" at once. Asking
+  // again in the same instant gets the same answer, so the second try waits.
+  const at = [];
+  const waking = async () => { at.push(Date.now()); if (at.length === 1) throw new TypeError("Network request failed"); return Response.json([]); };
+  const w = await esploraChain("https://wake", waking, 400).utxos("tb1qa");
+  check("A try that fails outright is repeated after a pause, and then answers", Array.isArray(w) && at.length === 2 && at[1] - at[0] >= 25, `${at[1] - at[0]} ms apart`);
+
+  // With a backup the wait isn't needed: the second try goes somewhere else.
+  const seen = [];
+  const mainGone = async (url) => { seen.push([String(url), Date.now()]); if (String(url).startsWith("https://gone")) throw new TypeError("Network request failed"); return Response.json([]); };
+  await esploraChain("https://gone", mainGone, 400, { backup: "https://b" }).utxos("tb1qa");
+  check("…but a backup explorer is asked straight away", seen.length === 2 && seen[1][0].startsWith("https://b") && seen[1][1] - seen[0][1] < 20, `${seen[1][1] - seen[0][1]} ms apart`);
+
+  // The main explorer answers late, the backup never: the late answer wins.
+  let calls = 0;
+  const lateMain = async (url, init) => { calls++; return String(url).startsWith("https://late") ? later(70, init, () => Response.json([])) : new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted")))); };
+  const lm = await esploraChain("https://late", lateMain, 100, { backup: "https://b" }).utxos("tb1qa");
+  check("A main explorer that answers late still counts while the backup is silent", Array.isArray(lm) && calls === 2);
+}
+
+// "Check the connection": one timed question to each place the app depends
+// on, so a page that won't load can be told apart from a phone that is offline.
+{
+  const { checkConnection, describeResult, sumUp } = await import("../src/connection.mjs");
+  const targets = [
+    { name: "explorer.example", url: "https://explorer.example/blocks/tip/height", explorer: true },
+    { name: "site.example", url: "https://site.example/crowdlocks/x.json" },
+  ];
+  const world = (explorer, site) => async (url, init) => {
+    const how = String(url).includes("explorer.example") ? explorer : site;
+    if (how === "silent") return new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted"))));
+    if (how === "gone") throw new TypeError("Network request failed");
+    if (how === "busy") return new Response("slow down", { status: 429 });
+    return new Response("161293");
+  };
+  const run = (explorer, site) => checkConnection(targets, { fetchImpl: world(explorer, site), timeoutMs: 40 });
+
+  const fine = await run("ok", "ok");
+  check("When everything answers it says so, with the time each took",
+    fine.every((r) => r.ok) && /^answered in \d/.test(describeResult(fine[0])) && sumUp(fine) === "Everything the app needs is answering.", describeResult(fine[0]));
+  const t0 = Date.now();
+  const quiet = await run("silent", "ok");
+  check("A silent explorer is named as silent, and the phone as online",
+    quiet[0].silent && quiet[1].ok && /^no answer in/.test(describeResult(quiet[0], 40)) && /online, but the block explorer isn't answering/.test(sumUp(quiet)), sumUp(quiet));
+  check("…and the places are asked at the same moment, not one after another", Date.now() - t0 < 80);
+  const off = await run("gone", "gone");
+  check("When nothing answers it points at the phone's connection",
+    off.every((r) => r.unreachable) && describeResult(off[0]) === "couldn't be reached at all" && /phone's own connection/.test(sumUp(off)), sumUp(off));
+  const busyOne = await run("busy", "ok");
+  check("An explorer that is too busy is reported as that", /too busy \(429\)/.test(describeResult(busyOne[0])) && /isn't answering/.test(sumUp(busyOne)), describeResult(busyOne[0]));
+  const slowOne = [{ ...fine[0], ms: 9000 }, fine[1]];
+  check("A slow answer is called slow", describeResult(slowOne[0]) === "answered in 9 seconds" && /but slowly/.test(sumUp(slowOne)), sumUp(slowOne));
+  const half = [{ ...quiet[0] }, { name: "backup.example", url: "u", explorer: true, ok: true, ms: 300, status: 200 }, fine[1]];
+  check("With a backup, one explorer down is reported without alarm", sumUp(half) === "One block explorer isn't answering, and the app is using the other.");
+}
+
 // A backup explorer, for real bitcoin: when the main one is silent, busy or
 // broken, the other is asked. Neither can move money; nothing gets a backup
 // unless it is given one.

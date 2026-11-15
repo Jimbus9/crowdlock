@@ -4,6 +4,8 @@
 // outside review at milestone 7.
 // @ts-ignore — plain module shared with the chain tests
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
+// @ts-ignore — plain module
+import { STARTING_LIST } from "./build.mjs";
 
 // The real-bitcoin build sets EXPO_PUBLIC_NETWORK=mainnet when it is built (see
 // .github/workflows/app-mainnet.yml); every other build is the test app.
@@ -18,3 +20,13 @@ export const chain = esploraChain(EXPLORERS[NETWORK], undefined, undefined, { mi
 export const EXPLORER_WEB = NETWORK === "mainnet" ? "https://mempool.space" : "https://mempool.space/testnet4";
 /** The backup explorer's website, where there is one, for the About page. */
 export const EXPLORER_BACKUP_WEB: string | null = BACKUP ? BACKUP.replace(/\/api$/, "") : null;
+
+// What "Check the connection" asks (see ./connection.mjs): the block
+// explorer, its backup where there is one, and the site the first Crowdlock on
+// the starting list is read from, which shows whether the phone is online at all.
+const host = (url: string) => url.replace(/^https?:\/\//, "").split("/")[0];
+export const CONNECTION_TARGETS: { name: string; url: string; explorer?: boolean }[] = [
+  { name: host(EXPLORERS[NETWORK]), url: `${EXPLORERS[NETWORK]}/blocks/tip/height`, explorer: true },
+  ...(BACKUP ? [{ name: host(BACKUP), url: `${BACKUP}/blocks/tip/height`, explorer: true }] : []),
+  { name: host(STARTING_LIST[0]), url: STARTING_LIST[0] },
+];

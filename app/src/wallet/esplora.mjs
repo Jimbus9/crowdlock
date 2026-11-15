@@ -6,33 +6,86 @@
 // A request the explorer never answers would leave the app spinning forever,
 // so every question gives up after this long, in all, and says why.
 export const TIMEOUT_MS = 20000;
-// A question is asked twice within that time before giving up: a short first
-// try, then a longer second one. Most unanswered questions are a hiccup (a
-// phone that has just moved between Wi-Fi and mobile data, one dropped
-// request), and asking again gets the answer in a few seconds where waiting
-// out the full time got an error. Only questions are asked twice; a payment
-// is sent once.
+// A question is asked twice within that time before giving up. The first try
+// is never cut short: if it hasn't answered after this share of the time, a
+// second is started alongside it, and whichever answers first is used. So a
+// slow connection that would have answered in fifteen seconds still does, and
+// a try that was simply lost (a phone that has just moved between Wi-Fi and
+// mobile data, one dropped request) is made up for after eight. Only
+// questions are asked twice; a payment is sent once.
 export const FIRST_TRY = 0.4;
+// A try that fails outright (no connection at all, which is what a phone says
+// in the first moment after it wakes) is tried again after this share of the
+// time, not at once: asking twice in the same instant gets the same answer.
+export const PAUSE = 0.075;
 // When the explorer has just gone unanswered, the questions queued behind
 // that one would each wait the full time too, and a page that asks about
 // twenty locks would spin for minutes. For this long after a give-up, further
-// questions fail at once with the same reason. Checking again after it asks afresh.
-export const DOWN_MS = 5000;
+// questions fail at once with the same reason: long enough to empty a queue,
+// short enough that the next thing the fan does is really asked.
+export const DOWN_MS = 2000;
 
 const UNANSWERED = (ms) => `the block explorer didn't answer within ${Math.round(ms / 1000) || ms / 1000} seconds — check your connection, or turn off any VPN, and try again`;
 const UNREACHABLE = "couldn't reach the block explorer — check your connection, or turn off any VPN, and try again";
 
-function withTimeout(fetchImpl, ms, saidMs = ms) {
+function withTimeout(fetchImpl, ms) {
   return async (url, init = {}) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms);
     try { return await fetchImpl(url, { ...init, signal: ctrl.signal }); }
     catch (e) {
-      const err = new Error(ctrl.signal.aborted ? UNANSWERED(saidMs) : UNREACHABLE);
+      const err = new Error(ctrl.signal.aborted ? UNANSWERED(ms) : UNREACHABLE);
       err.unanswered = true;
       throw err;
     } finally { clearTimeout(timer); }
   };
+}
+
+/**
+ * Ask a question up to twice within `total` milliseconds and take the first
+ * answer. `urls` is where each try goes: one address (both tries go to it) or
+ * two (the second try goes to the other). The second try starts when the
+ * first has been silent for FIRST_TRY of the time, or as soon as it fails; the
+ * first is left running, so a slow answer still counts. `passOver(res)` may
+ * return an Error for an answer that should count as no answer (a busy or
+ * broken explorer, when there is another to ask). Resolves { res, n } with n
+ * the try that answered; rejects when both have failed or the time is up.
+ */
+function askTwice(rawFetch, urls, total, passOver = () => null) {
+  return new Promise((resolve, reject) => {
+    const ctrls = [];
+    let settled = false, started = 0, ended = 0, last = null, next = null;
+    const settle = (fn, value, keep = -1) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(next); clearTimeout(end);
+      ctrls.forEach((c, n) => { if (n !== keep) c.abort(); });
+      fn(value);
+    };
+    const failed = (err) => {
+      last = err; ended++;
+      if (settled) return;
+      if (started < 2) {
+        // Wait a moment before repeating a question to the same place that
+        // couldn't be reached at all; go straight on to a different one.
+        const same = urls[started % urls.length] === urls[(started - 1) % urls.length];
+        clearTimeout(next);
+        next = setTimeout(start, err.unanswered && same ? total * PAUSE : 0);
+      } else if (ended === 2) settle(reject, last);
+    };
+    function start() {
+      if (settled || started >= 2) return;
+      const n = started++;
+      const ctrl = new AbortController();
+      ctrls.push(ctrl);
+      Promise.resolve().then(() => rawFetch(urls[n % urls.length], { signal: ctrl.signal })).then(
+        (res) => { const no = passOver(res); if (no) failed(no); else settle(resolve, { res, n }, n); },
+        () => { const e = new Error(UNREACHABLE); e.unanswered = true; failed(e); });
+    }
+    const end = setTimeout(() => { const e = new Error(UNANSWERED(total)); e.unanswered = true; settle(reject, e); }, total);
+    next = setTimeout(start, total * FIRST_TRY);
+    start();
+  });
 }
 
 // Free explorers turn away anyone who asks too much too fast (HTTP 429). A
@@ -61,8 +114,6 @@ export function askAfresh(rawFetch = globalThis.fetch) {
 export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = TIMEOUT_MS,
   { rememberMs = REMEMBER_MS, retries = RETRIES, wait = pause, minFee = 1, downMs = DOWN_MS, backup = "", preferMs = PREFER_MS } = {}) {
   const fetchImpl = withTimeout(rawFetch, timeoutMs);
-  const firstTry = withTimeout(rawFetch, timeoutMs * FIRST_TRY, timeoutMs);
-  const secondTry = withTimeout(rawFetch, timeoutMs * (1 - FIRST_TRY), timeoutMs);
   if (!memories.has(rawFetch)) memories.set(rawFetch, new Map());
   const memory = memories.get(rawFetch);
   // Whether this explorer has just gone unanswered, shared by every screen.
@@ -76,15 +127,13 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
   const answered = (i) => { memory.delete(downKey); if (i === 1) memory.set(preferKey, { at: Date.now() }); else memory.delete(preferKey); };
   const read = (res, as) => (as === "json" ? res.json() : res.text());
 
-  // One explorer: ask, and if it doesn't answer, ask once more.
+  // One explorer: both tries go to it.
   const askOne = async (path, as) => {
     const url = `${baseUrl}${path}`;
-    let unanswered = 0;
     for (let attempt = 0; ; ) {
       let res;
-      try { res = await (unanswered === 0 ? firstTry : secondTry)(url); }
+      try { ({ res } = await askTwice(rawFetch, [url], timeoutMs)); }
       catch (e) {
-        if (e.unanswered && unanswered++ === 0) continue;
         if (e.unanswered) memory.set(downKey, { at: Date.now(), why: e.message });
         throw e;
       }
@@ -103,20 +152,18 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
   // silent, busy or broken (a 5xx) is passed over; any other answer, a "no
   // such transaction" included, is an answer, and the other would say the same.
   // `only` asks just one of them, for the few questions they word differently.
+  const passOver = (res) => (busy(res.status) ? new Error(BUSY) : res.status >= 500 ? new Error(`the block explorer answered ${res.status}`) : null);
   const askEither = async (path, as, only) => {
     const turn = only === undefined ? order() : [only];
-    let last = null;
-    for (const [n, i] of turn.entries()) {
-      let res;
-      try { res = await (n === 0 ? firstTry : secondTry)(`${sources[i]}${path}`); }
-      catch (e) { if (!e.unanswered) throw e; last = e; continue; }
-      if (res.ok) { answered(i); return read(res, as); }
-      if (busy(res.status)) { last = new Error(BUSY); continue; }
-      if (res.status >= 500) { last = new Error(`the block explorer answered ${res.status}`); continue; }
-      throw new Error(`the block explorer answered ${res.status}`);
+    let got;
+    try { got = await askTwice(rawFetch, turn.map((i) => `${sources[i]}${path}`), timeoutMs, passOver); }
+    catch (e) {
+      if (e.unanswered && only === undefined) memory.set(downKey, { at: Date.now(), why: e.message });
+      throw e;
     }
-    if (last.unanswered && only === undefined) memory.set(downKey, { at: Date.now(), why: last.message });
-    throw last;
+    if (!got.res.ok) throw new Error(`the block explorer answered ${got.res.status}`);
+    answered(turn[got.n % turn.length]);
+    return read(got.res, as);
   };
 
   const ask = async (path, as, only) => {

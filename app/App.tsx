@@ -69,7 +69,8 @@ import {
   loadWords, saveWords, forgetWords, loadAddedCrowdlocks, saveAddedCrowdlocks, forgetAddedCrowdlocks,
   loadSavedLocks, saveLock, forgetSavedLocks, forgetLedgerStore, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadFeeSpeed, saveFeeSpeed, loadLook, saveLook, moveSavedRecords } from "./src/storage";
 import type { FeeSpeed } from "./src/storage";
-import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB, EXPLORER_BACKUP_WEB } from "./src/config";
+import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB, EXPLORER_BACKUP_WEB, CONNECTION_TARGETS } from "./src/config";
+import { checkConnection, describeResult, sumUp } from "./src/connection.mjs";
 import { askAfresh } from "./src/wallet/esplora.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
 import { banner, font, gap, radius, setLook, size, themeFor, useLook, useTheme } from "./src/ui/theme";
@@ -820,7 +821,10 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
           <Btn kind="link" label="What do the six steps mean?" onPress={() => go({ name: "help", words })} />
         </>}
       </Card>
-      {w && !!o.error && <Text style={s.error}>Couldn't check just now: {o.error}. This is what was last read.</Text>}
+      {w && !!o.error && <>
+        <Text style={s.error}>Couldn't check just now: {o.error}. This is what was last read.</Text>
+        <Btn kind="link" label="Check the connection" onPress={() => go({ name: "about", words })} />
+      </>}
       {!!o.step && o.step.step > 0 && <StepBar step={o.step.step} />}
 
       <Text style={s.h2}>Your bitcoin</Text>
@@ -850,7 +854,10 @@ function BitcoinTab({ o, words, go }: { o: Overview; words: string; go: Go }) {
         <Text style={s.kick}>Waiting</Text>
         <Text style={s.big}>{o.balance ? btc(o.balance.confirmed) : "…"}</Text>
         {o.balance && o.balance.arriving > 0n && <Text style={s.note}>+ {btc(o.balance.arriving)} arriving (not yet confirmed)</Text>}
-        {o.error && <Text style={s.error}>Couldn't check just now: {o.error}.{o.balance ? " This is what was last read." : ""}</Text>}
+        {o.error && <>
+          <Text style={s.error}>Couldn't check just now: {o.error}.{o.balance ? " This is what was last read." : ""}</Text>
+          <Btn kind="link" label="Check the connection" onPress={() => go({ name: "about", words })} />
+        </>}
         <Text style={[s.p, { marginBottom: 0 }]}>Yours to lock or send. It is in your own wallet: nobody else holds it.</Text>
         <Btn label="Add money" onPress={() => go({ name: "addMoney", words })} />
         <Btn kind="second" label="Send money out" onPress={() => go({ name: "send", words })} />
@@ -1060,6 +1067,16 @@ function Help({ from }: { from?: string }) {
 }
 
 function About() {
+  // "Check the connection": one small question to each place the app depends
+  // on, timed, so a page that won't load can be told apart from a phone that
+  // is offline or an explorer that is down (see src/connection.mjs).
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<any[] | null>(null);
+  const check = async () => {
+    setChecking(true); setChecked(null);
+    try { setChecked(await checkConnection(CONNECTION_TARGETS)); } catch { setChecked([]); }
+    setChecking(false);
+  };
   return (
     <View>
       <Text style={s.h1}>About this app</Text>
@@ -1073,6 +1090,13 @@ function About() {
         <Text style={s.mono} selectable>{EXPLORER_BACKUP_WEB}</Text>
         <Text style={s.note}>Neither can move your money. The app believes whichever answers about balances and the time on the chain.</Text>
       </>}
+      <Text style={s.label}>Something not loading?</Text>
+      <Btn kind="second" label={checking ? "Checking… up to 20 seconds" : "Check the connection"} disabled={checking} onPress={check} />
+      {checked && <>
+        {checked.map((r) => <Text key={r.url} style={r.ok ? s.good : s.error}>{r.name}: {describeResult(r)}</Text>)}
+        <Text style={s.p}>{sumUp(checked)}</Text>
+      </>}
+      <Text style={s.note}>Asks each place the app depends on one small question and times the answer. Nothing about you or your money is sent.</Text>
     </View>
   );
 }
