@@ -16,6 +16,13 @@
       "sha256": "bfa4104289da158a512fb86d7315df86e90998e1b5ca202e2ac6edcc4aa1ba9c",
       "published": "2026-11-15",
       "reason": "Now testing declaration updates"
+    },
+    {
+      "version": 3,
+      "file": "crowdlocks/test/declaration-test-v3.txt",
+      "sha256": "dd44d8ced7e74a51dfeb1c3d56b008d34c70103b8d8a3a90facd8344938f699c",
+      "published": "2026-11-15",
+      "reason": "More testing"
     }
   ],
   "network": "testnet4",
