@@ -44,6 +44,11 @@
           "version": 3,
           "signature": "IE6Aqj8hbpDShLqc/Q/tSOkY2ey0uEHk/HUy6Lgo304kW9YHpaGmxwe4QryXKYdrjGRXMgkm3SLkEa7iCJFXkk8=",
           "signed": "2026-11-16"
+        },
+        {
+          "version": 4,
+          "signature": "ILlJtc8d75N3NacT05ey2yQFrlSG7zl7PK61ZwjMHkRSRk7kbLJDeik6j55P4PVq/E7O8vUaQlFm8vDVM/2YOsc=",
+          "signed": "2026-11-16"
         }
       ]
     }
