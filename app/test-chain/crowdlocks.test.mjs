@@ -682,6 +682,29 @@ console.log("-".repeat(80));
 }
 
 console.log("-".repeat(80));
+console.log("A HOSTILE LINK: SILENT, ENDLESS OR OVERSIZED");
+console.log("-".repeat(80));
+{
+  const file = `${SITE}crowdlocks/kop-fund-testnet4.json`;
+  // A server that takes the request and never answers.
+  const silent = (path) => async (url, init) => (String(url).endsWith(path) ? new Promise(() => {}) : siteFetch()(url, init));
+  let t0 = Date.now();
+  const s1 = await loadCrowdlock(file, silent("kop-fund-testnet4.json"), { limitMs: 60 });
+  check("A Crowdlock file that never answers is given up on, in the time allowed", !s1.ok && /didn't answer within/.test(s1.problems.join()) && Date.now() - t0 < 2000, s1.ok ? "" : s1.problems[0]);
+  t0 = Date.now();
+  const s2 = await loadCrowdlock(file, silent("registrations.json"), { limitMs: 60 });
+  check("…and so is a register that never answers", !s2.ok && /could not load its register/.test(s2.problems.join()) && Date.now() - t0 < 2000, s2.ok ? "" : s2.problems[0]);
+  const real = JSON.parse(readFileSync(join(REPO, "crowdlocks/kop-fund-testnet4.json"), "utf8"));
+  const big = await loadCrowdlock(file, siteFetch({ [real.declaration.file]: "x".repeat(400000) }));
+  check("A declaration far too large to be one is refused", !big.ok && /too large/.test(big.problems.join()), big.ok ? "" : big.problems[0]);
+  const many = { ...real, declaration_versions: Array.from({ length: 51 }, (_, i) => ({ version: i + 2, file: `v${i + 2}.txt`, sha256: "0".repeat(64), published: "2027-01-01", reason: "x" })) };
+  let asked = 0;
+  const counting = async (url, init) => { asked++; return siteFetch({ "crowdlocks/kop-fund-testnet4.json": JSON.stringify(many) })(url, init); };
+  const m = await loadCrowdlock(file, counting);
+  check("A file listing more versions than any Crowdlock would have is refused before they are fetched", !m.ok && /more than 50 versions/.test(m.problems.join()) && asked <= 2, m.ok ? "" : `${m.problems[0]} (${asked} requests)`);
+}
+
+console.log("-".repeat(80));
 console.log("A NEW VERSION OF THE DECLARATION");
 console.log("-".repeat(80));
 {

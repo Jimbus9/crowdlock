@@ -38,16 +38,32 @@ The live fund — its Crowdlock file, register, pages, anchoring and maintainers
 
 ## 4. The Crowdlock app
 
-Everything under `app/`, built by `.github/workflows/app.yml`.
+Everything under `app/`. One codebase builds two Android apps that install side by side and never share a wallet:
+
+| App | Money | Built by |
+| --- | --- | --- |
+| **Crowdlock** (green icon) | Real bitcoin | `.github/workflows/app-mainnet.yml`, run by hand |
+| **Crowdlock Test** (yellow icon) | Test bitcoin (testnet4) | `.github/workflows/app.yml`, on every change under `app/` |
+
+Each app lists, opens and starts only Crowdlocks on its own network. Which one a build is comes from `EXPO_PUBLIC_NETWORK` (`mainnet`, or anything else for the test app); `app/app.config.js` sets the name, icon and package from it.
 
 | What | Where |
 | --- | --- |
-| The screens | `app/App.tsx` |
-| Wallet and keys | `app/src/wallet/` |
-| Loading, checking and joining Crowdlocks, finding and starting them | `app/src/crowdlocks.mjs`, `app/src/start.mjs`, `app/src/github.mjs`, `app/src/relays.mjs` |
-| This build's own settings: the Crowdlocks it starts with | `app/src/build.mjs` (the one file that differs between builds) |
+| Every screen, and moving between them | `app/App.tsx` |
+| The look: colours, type and sizes; buttons, cards, warnings and the bars | `app/src/ui/theme.ts`, `app/src/ui/parts.tsx` |
+| Wallet and keys: words, addresses, locks, payments, commitments. **The only code that touches keys or builds a payment** | `app/src/wallet/core.mjs` |
+| Reading the chain and sending payments, through a block explorer and its backup | `app/src/wallet/esplora.mjs` |
+| Talking to a Ledger (an adapter that carries messages; it never sees a key) | `app/src/ledgerLink.mjs`, `app/src/ledgerDevice.ts`, `app/plugins/` |
+| Loading and checking a Crowdlock, counting its total, joining, sharing | `app/src/crowdlocks.mjs` |
+| Which of the six steps Home offers next | `app/src/nextStep.mjs` |
+| Finding Crowdlocks and posting records, through public relays | `app/src/relays.mjs` |
+| Starting a Crowdlock and looking after one, in the founder's own GitHub account | `app/src/start.mjs`, `app/src/github.mjs` |
+| What the phone keeps (in the system keystore), and refiling it when a Crowdlock's address moves | `app/src/storage.ts`, `app/src/moves.mjs` |
+| Which money this build uses and where it reads the chain | `app/src/config.ts` |
+| This build's own settings: the Crowdlocks it starts with, addresses that have moved | `app/src/build.mjs` (the one file that differs between builds) |
+| "Check the connection" | `app/src/connection.mjs` |
 | The inbox copied into every new Crowdlock, packed by a script | `app/template/`, `app/src/template.mjs` (generated; `app/scripts/make-template.mjs`) |
-| Tests against a private test chain | `app/test-chain/` |
+| Tests, including a private test chain and a pretend Ledger | `app/test-chain/` |
 
 ## Where things moved (2 November 2026 regroup)
 

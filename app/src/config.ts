@@ -1,7 +1,8 @@
-// Milestone 1 runs on testnet4: free test money, the same rules as the real
-// network. It is labelled on every screen so nobody mistakes it for real
-// bitcoin. Switching to mainnet is one line here, and happens only after the
-// outside review at milestone 7.
+// Which money this build uses, and where it reads the chain.
+//
+// One codebase builds two apps: "Crowdlock" (real bitcoin) and "Crowdlock
+// Test" (testnet4: free test money, the same rules). Each is labelled on every
+// screen, and each only ever opens Crowdlocks on its own network.
 // @ts-ignore — plain module shared with the chain tests
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
 // @ts-ignore — plain module

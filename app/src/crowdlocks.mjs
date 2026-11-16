@@ -53,6 +53,34 @@ export function resolvePath(path, base) {
   return base + p;
 }
 
+// A Crowdlock's files come from wherever its link points, and Find loads
+// every announced Crowdlock without being asked, so a link may be hostile.
+// Each file is given a time limit and a size limit: a server that never
+// answers, or answers without end, costs one Crowdlock its place on the list
+// and nothing else.
+const LOAD_LIMIT_MS = 20000;
+const SMALL_FILE = 300000;      // a Crowdlock file, a declaration, a proposals file
+const REGISTER_FILE = 50000000; // registrations and destinations grow with the members
+const MOST_VERSIONS = 50;
+
+/** One file, within the limits: { ok, status, text }. Throws on silence or an oversized file. */
+async function getLimited(fetchImpl, u, maxChars, limitMs = LOAD_LIMIT_MS) {
+  const stop = typeof AbortController === "function" ? new AbortController() : null;
+  let timer;
+  const silence = new Promise((_, reject) => { timer = setTimeout(() => { stop?.abort(); reject(new Error(`${u} didn't answer within ${limitMs / 1000} seconds`)); }, limitMs); });
+  try {
+    return await Promise.race([silence, (async () => {
+      const r = await fetchImpl(u, { cache: "no-store", ...(stop ? { signal: stop.signal } : {}) });
+      if (!r.ok) return { ok: false, status: r.status, text: "" };
+      const declared = Number(r.headers?.get?.("content-length") ?? 0);
+      if (declared > maxChars) throw new Error(`${u} is too large to be what it says it is`);
+      const text = await r.text();
+      if (text.length > maxChars) throw new Error(`${u} is too large to be what it says it is`);
+      return { ok: true, status: r.status, text };
+    })()]);
+  } finally { clearTimeout(timer); }
+}
+
 /**
  * Load a Crowdlock from a link and check it. Never throws: returns
  * { ok: true, url, crowdlock, statement, register } or { ok: false, url, problems }.
@@ -60,14 +88,14 @@ export function resolvePath(path, base) {
  * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, versions: any[], statement: string, register: any, destinations: any, proposals: any[], proposalProblems: string[] }
  *                 | { ok: false, url: string, problems: string[] }>}
  */
-export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
+export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs = LOAD_LIMIT_MS } = {}) {
   const fail = (...problems) => ({ ok: false, url, problems });
   const fileUrl = String(url ?? "").trim();
   if (/^http:\/\//i.test(fileUrl)) return fail("a Crowdlock link must start with https://");
   if (!LINK.test(fileUrl)) return fail("that is not a link");
 
-  const getJson = async (u) => { const r = await fetchImpl(u, { cache: "no-store" }); if (!r.ok) throw new Error(`${r.status} from ${u}`); return r.json(); };
-  const getText = async (u) => { const r = await fetchImpl(u, { cache: "no-store" }); if (!r.ok) throw new Error(`${r.status} from ${u}`); return r.text(); };
+  const getText = async (u, max = SMALL_FILE) => { const r = await getLimited(fetchImpl, u, max, limitMs); if (!r.ok) throw new Error(`${r.status} from ${u}`); return r.text; };
+  const getJson = async (u, max = SMALL_FILE) => JSON.parse(await getText(u, max));
 
   let crowdlock;
   try { crowdlock = await getJson(fileUrl); }
@@ -84,6 +112,9 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
 
   // Later versions of its declaration, each checked against its fingerprint.
   const versionTexts = {};
+  if (Array.isArray(crowdlock?.declaration_versions) && crowdlock.declaration_versions.length > MOST_VERSIONS) {
+    return fail(`it lists more than ${MOST_VERSIONS} versions of its declaration`);
+  }
   for (const v of Array.isArray(crowdlock?.declaration_versions) ? crowdlock.declaration_versions : []) {
     try { versionTexts[v.version] = await getText(resolvePath(v.file, base)); }
     catch (e) { return fail(`could not load version ${v?.version} of its declaration: ${e.message}`); }
@@ -97,8 +128,8 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
 
   let registrations, destinations;
   try {
-    registrations = await getJson(resolvePath(crowdlock.register.registrations, base));
-    destinations = await getJson(resolvePath(crowdlock.register.destinations, base));
+    registrations = await getJson(resolvePath(crowdlock.register.registrations, base), REGISTER_FILE);
+    destinations = await getJson(resolvePath(crowdlock.register.destinations, base), REGISTER_FILE);
   } catch (e) { return fail(`could not load its register: ${e.message}`); }
 
   const agree = checkRegisterFiles(crowdlock, { registrations, destinations });
@@ -109,9 +140,9 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch) {
   let proposals = [], proposalProblems = [];
   if (crowdlock.register.proposals) {
     try {
-      const r = await fetchImpl(resolvePath(crowdlock.register.proposals, base), { cache: "no-store" });
+      const r = await getLimited(fetchImpl, resolvePath(crowdlock.register.proposals, base), SMALL_FILE * 10, limitMs);
       if (r.ok) {
-        const pc = checkProposals(await r.json(), crowdlock);
+        const pc = checkProposals(JSON.parse(r.text), crowdlock);
         proposals = pc.proposals; proposalProblems = pc.problems;
       } else if (r.status !== 404) proposalProblems = [`could not load its proposals: ${r.status}`];
     } catch (e) { proposalProblems = [`could not load its proposals: ${e.message}`]; }

@@ -1,7 +1,7 @@
 // A wallet a fan who has never held bitcoin can use, and the Crowdlocks they
 // can join with it.
 //
-//   Welcome    →  New: show the 12 words → check three of them → Home
+//   Welcome    →  New: show the 12 words → check them against the paper → Home
 //              →  Restore: type the recovery words → Home
 //   Home       →  four places along the bottom: Home (your next step, from
 //                 the six steps), My bitcoin (waiting, Add money, Send out,
@@ -13,13 +13,13 @@
 //   Add        →  any other Crowdlock, by link, checked the same way
 //   Start      →  a new Crowdlock: write its declaration, sign in to GitHub
 //                 with a short code, and it is set up in the founder's own
-//                 account, with a test copy beside it
+//                 account (with a test copy beside it, if they ask for one)
 //
 // Every screen here is presentation. Anything touching keys or money goes
 // through src/wallet/core.mjs, and nothing else may.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, AppState, BackHandler, Dimensions, Keyboard, Linking, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, AppState, BackHandler, Dimensions, Keyboard, Linking, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import type { ComponentRef } from "react";
 import type { TextInputProps } from "react-native";
@@ -29,7 +29,7 @@ import * as Clipboard from "expo-clipboard";
 import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend, signStatement,
+  newWords, wordsAreValid, tidyWords, accountFromWords, suggestWords, waitingBalance, buildSend,
   lockFor, lockDate, buildLock, lockState, takeHome, relock, checkLedgerKey, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH,
   isPublicKey, keyFromXpub, xpubForKey, ledgerAccountFrom, readLedgerAccount, signStatementWith,
   buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, signNoticeWith, NETWORKS,
@@ -409,9 +409,9 @@ function Welcome({ go }: { go: Go }) {
   return (
     <View>
       <Text style={s.p}>Your own bitcoin wallet. Nobody else holds your money — not us, not anyone.</Text>
-      <Button label="Create a new wallet" onPress={() => go({ name: "showWords", words: newWords() })} />
-      <Button label="I already have recovery words" kind="plain" onPress={() => go({ name: "restore" })} />
-      <Button label="Use a Ledger" kind="plain" onPress={() => go({ name: "ledgerSetup" })} />
+      <Btn label="Create a new wallet" onPress={() => go({ name: "showWords", words: newWords() })} />
+      <Btn label="I already have recovery words" kind="second" onPress={() => go({ name: "restore" })} />
+      <Btn label="Use a Ledger" kind="second" onPress={() => go({ name: "ledgerSetup" })} />
     </View>
   );
 }
@@ -460,14 +460,14 @@ function LedgerSetup({ from, go }: { from?: string; go: Go }) {
         <Text style={s.note}>1. Turn the Ledger on and unlock it with its PIN.</Text>
         <Text style={s.note}>2. Open the {app} app on it{(NETWORK as string) === "mainnet" ? "" : " (install it in Ledger Live if it isn't there: My Ledger, with Developer mode on in Settings)"}.</Text>
         <Text style={s.note}>3. Either plug it into the phone with a USB-C cable, or turn Bluetooth on, on the phone and the Ledger (Nano X, Flex and Stax have Bluetooth).</Text>
-        <Button label="Find my Ledger" onPress={look} />
+        <Btn label="Find my Ledger" onPress={look} />
       </>}
       {stage === "looking" && <>
         <Text style={s.p}>Looking for Ledgers nearby…</Text>
         {devices.length === 0 && <ActivityIndicator style={{ marginVertical: 16 }} />}
-        {devices.map((d) => <Button key={d.id} label={`Use ${d.name} (${d.via === "cable" ? "cable" : "Bluetooth"})`} onPress={() => choose(d)} />)}
+        {devices.map((d) => <Btn key={d.id} label={`Use ${d.name} (${d.via === "cable" ? "cable" : "Bluetooth"})`} onPress={() => choose(d)} />)}
         <Text style={s.note}>By Bluetooth, the first time, the phone and the Ledger may ask to pair, each showing a code. Check they match, then accept on both. By cable, the phone asks whether Crowdlock may use the Ledger: allow it.</Text>
-        <Button label="Stop looking" kind="plain" onPress={() => { stop.current?.(); setStage("start"); }} />
+        <Btn label="Stop looking" kind="second" onPress={() => { stop.current?.(); setStage("start"); }} />
       </>}
       {stage === "reading" && <>
         <Text style={s.p}>Reading your account from the Ledger…</Text>
@@ -476,19 +476,19 @@ function LedgerSetup({ from, go }: { from?: string; go: Go }) {
       {stage === "found" && account && <>
         <Text style={s.p}>This is your Ledger's wallet. It's the same address Ledger Live, Sparrow or any standard wallet shows for this Ledger's first native segwit account.</Text>
         <Text style={s.mono} selectable>{account.address}</Text>
-        <Button label="Copy address" kind="plain" onPress={() => Clipboard.setStringAsync(account.address)} />
+        <Btn label="Copy address" kind="second" onPress={() => Clipboard.setStringAsync(account.address)} />
         {from && <Text style={s.note}>To move money onto it first, copy the address, go Back, and send it from this phone's wallet. Then come back here. Using this Ledger replaces that wallet on this phone — only do it once its 12 words are written down.</Text>}
-        <Button label="Use this Ledger" onPress={async () => {
+        <Btn label="Use this Ledger" onPress={async () => {
           const text = ledgerWalletText(wallet!);
           // A different wallet: forget the old one's saved lock terms (they're
           // on the register, and restoring its words finds them again).
           if (from) { await forgetSavedLocks(); await forgetLedgerStore(); }
           await saveWords(text); go({ name: "home", words: text });
         }} />
-        <Button label="Try again" kind="plain" onPress={() => { setWallet(null); setStage("start"); }} />
+        <Btn label="Try again" kind="second" onPress={() => { setWallet(null); setStage("start"); }} />
       </>}
       {error && <Text style={s.error}>{error}</Text>}
-      <Button label="Back" kind="plain" onPress={() => { stop.current?.(); go(from ? { name: "home", words: from } : { name: "welcome" }); }} />
+      <Btn label="Back" kind="second" onPress={() => { stop.current?.(); go(from ? { name: "home", words: from } : { name: "welcome" }); }} />
     </View>
   );
 }
@@ -508,7 +508,7 @@ function ShowWords({ words, go }: { words: string; go: Go }) {
         ))}
       </View>
       <Text style={s.note}>Do not screenshot them or save them in notes, email or cloud storage.</Text>
-      <Button label="I have written them down" onPress={() => go({ name: "checkWords", words })} />
+      <Btn label="I have written them down" onPress={() => go({ name: "checkWords", words })} />
     </View>
   );
 }
@@ -554,8 +554,8 @@ function CheckEveryWord({ words, onDone, onShowAgain }: { words: string; onDone:
         ))}
       </View>
       {wrong && <Text style={s.error}>That isn't word {i + 1}. Check your paper — if it's wrong there, go back and copy the words out again.</Text>}
-      <Button label="Next" disabled={!typed.trim()} onPress={() => accept(typed)} />
-      <Button label="Show the words again" kind="plain" onPress={onShowAgain} />
+      <Btn label="Next" disabled={!typed.trim()} onPress={() => accept(typed)} />
+      <Btn label="Show the words again" kind="second" onPress={onShowAgain} />
     </View>
   );
 }
@@ -616,7 +616,7 @@ function Restore({ go }: { go: Go }) {
       <Text style={s.h1}>Restore your wallet</Text>
       <Text style={s.p}>Type your recovery words, in order, with spaces between them. Usually 12 or 24.</Text>
       <WordsInput value={text} onChange={setText} />
-      <Button label="Restore" disabled={!valid} onPress={finish} />
+      <Btn label="Restore" disabled={!valid} onPress={finish} />
     </View>
   );
 }
@@ -1937,7 +1937,7 @@ function AllOf({ what, words, url, go }: { what: "locks" | "proposals"; words: s
     <View>
       <Text style={s.kick}>{c.crowdlock.name}</Text>
       {what === "locks"
-        ? <MyLocks all account={account} c={c} onChange={load} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} />
+        ? <MyLocks all account={account} c={c} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} />
         : <Proposals all c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} />}
     </View>
   );
@@ -2045,7 +2045,7 @@ function Send({ words, go }: { words: string; go: Go }) {
       <Text style={s.h1}>Sent</Text>
       <Text style={s.p}>How soon it confirms depends on the fee speed you chose.</Text>
       <Text style={s.mono} selectable>{EXPLORER_WEB}/tx/{done}</Text>
-      <Button label="Back to wallet" onPress={() => go({ name: "home", words })} />
+      <Btn label="Back to wallet" onPress={() => go({ name: "home", words })} />
     </View>
   );
 
@@ -2059,21 +2059,21 @@ function Send({ words, go }: { words: string; go: Go }) {
         style={s.input} keyboardType="decimal-pad" editable={!all}
         value={all ? "everything" : amount} onChangeText={(t) => { setAmount(t); setReview(null); }}
       />
-      <Button label={all ? "Send a set amount instead" : "Send everything"} kind="plain" onPress={() => { setAll(!all); setReview(null); }} />
+      <Btn label={all ? "Send a set amount instead" : "Send everything"} kind="second" onPress={() => { setAll(!all); setReview(null); }} />
 
       {!review && <FeeChoice />}
       {error && <Text style={s.error}>{error}</Text>}
       {!review && <LedgerHint account={account} />}
-      {!review && <Button label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Checking…") : "Review"} disabled={busy || !to} onPress={prepare} />}
+      {!review && <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Checking…") : "Review"} disabled={busy || !to} onPress={prepare} />}
       {review && (
         <View style={s.panel}>
           <Text style={s.p}>Sending <Text style={s.bold}>{btc(review.sent)}</Text></Text>
           <Text style={s.p}>Network fee {btc(review.fee)}</Text>
           <Text style={s.p}>To <Text style={s.mono}>{to}</Text></Text>
-          <Button label={busy ? "Sending…" : "Confirm and send"} disabled={busy} onPress={confirm} />
+          <Btn label={busy ? "Sending…" : "Confirm and send"} disabled={busy} onPress={confirm} />
         </View>
       )}
-      <Button label="Cancel" kind="plain" onPress={() => go({ name: "home", words })} />
+      <Btn label="Cancel" kind="second" onPress={() => go({ name: "home", words })} />
     </View>
   );
 }
@@ -2211,9 +2211,9 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         {keyChange.added.map((k) => <Text key={k} style={s.note}>Added: {k.slice(0, 10)}…{k.slice(-8)}{k === newestCosigner(c.crowdlock) ? " — new locks would use this one" : ""}</Text>)}
         {keyChange.removed.map((k) => <Text key={k} style={s.note}>Removed: {k.slice(0, 10)}…{k.slice(-8)} — locks naming it no longer count</Text>)}
         <Text style={s.note}>Founders add keys for good reasons, but a co-signer decides which purchases go ahead, so a key you don't recognise matters. Check with the founder that it was them. Every change is public, with the name of the account that made it.</Text>
-        {historyLinkFor(c.url) && <Button label="See who changed it" kind="plain" onPress={() => Linking.openURL(historyLinkFor(c.url)!)} />}
+        {historyLinkFor(c.url) && <Btn label="See who changed it" kind="second" onPress={() => Linking.openURL(historyLinkFor(c.url)!)} />}
         <Text style={s.note}>New locks are paused on this phone until you've looked. Taking money home isn't affected.</Text>
-        <Button label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
+        <Btn label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
       </View>}
 
       {toSign && <Warning level="know" title="This Crowdlock's declaration has a new version">
@@ -2263,7 +2263,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
         <Btn label="Go on to sign" onPress={() => go({ name: "sign", words, url })} />
       </>}
 
-      {me && here && <MyLocks account={account} c={c} onChange={load} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} onAll={() => go({ name: "allLocks", words, url })} />}
+      {me && here && <MyLocks account={account} c={c} paused={!!keyChange} onLock={() => go({ name: "lock", words, url })} onHome={(address, again) => go({ name: "takeHome", words, url, address, again })} onAll={() => go({ name: "allLocks", words, url })} />}
 
       {here && <Proposals c={c} account={account} onOpen={(hash) => go({ name: "proposal", words, url, hash })} onAll={() => go({ name: "allProposals", words, url })} />}
 
@@ -2291,7 +2291,7 @@ function CrowdlockScreen({ words, url, go }: { words: string; url: string; go: G
 type LockTerms = { address: string; locktime: number; cosignerPubkey: string };
 type LockRow = LockTerms & { state: string; confirmed: bigint; arriving: bigint; onRegister: boolean; note?: string };
 
-function MyLocks({ account, c, onChange, onLock, onHome, onAll, all = false, paused = false }: { account: any; c: Extract<Loaded, { ok: true }>; onChange: () => void; onLock: () => void; onHome: (address: string, again?: boolean) => void; onAll?: () => void; all?: boolean; paused?: boolean }) {
+function MyLocks({ account, c, onLock, onHome, onAll, all = false, paused = false }: { account: any; c: Extract<Loaded, { ok: true }>; onLock: () => void; onHome: (address: string, again?: boolean) => void; onAll?: () => void; all?: boolean; paused?: boolean }) {
   // New locks name the newest key; older ones stay listed for the locks that name them.
   const cosigner: string | undefined = newestCosigner(c.crowdlock);
   // A Ledger can't take home a lock whose co-signer xpub it was never given.
@@ -2375,7 +2375,7 @@ function MyLocks({ account, c, onChange, onLock, onHome, onAll, all = false, pau
         <View style={s.panel}>
           <Text style={s.p}><Text style={s.bold}>{btc(waiting.confirmed)}</Text> is waiting, enough for a lock that counts.</Text>
           {paused && <Text style={s.note}>New locks are paused until you've looked at the changed co-signer keys above.</Text>}
-          <Button label="Lock my bitcoin" disabled={paused || noLedgerXpub} onPress={onLock} />
+          <Btn label="Lock my bitcoin" disabled={paused || noLedgerXpub} onPress={onLock} />
         </View>
       ) : (
         <Text style={s.p}>
@@ -2400,8 +2400,8 @@ function MyLocks({ account, c, onChange, onLock, onHome, onAll, all = false, pau
           {r.state === "arriving" && <Text style={s.note}>Goes on the register once it confirms.</Text>}
           {all && <Text style={[s.mono, { fontSize: 12 }]} selectable>{r.address}</Text>}
           {r.state === "lapsed" && <>
-            <Button label="Take it home" onPress={() => onHome(r.address)} />
-            <Button label="Lock it again" kind="plain" disabled={paused || noLedgerXpub} onPress={() => onHome(r.address, true)} />
+            <Btn label="Take it home" onPress={() => onHome(r.address)} />
+            <Btn label="Lock it again" kind="second" disabled={paused || noLedgerXpub} onPress={() => onHome(r.address, true)} />
           </>}
         </View>
       ))}
@@ -2483,7 +2483,7 @@ function AddCrowdlock({ words, go, link: given }: { words: string; go: Go; link?
         <Text style={s.p}>{other}</Text>
         {!IS_TEST_MONEY && <TestApp />}
       </View>}
-      <Button label={busy ? "Checking…" : "Check and add"} disabled={busy || !link} onPress={() => add()} />
+      <Btn label={busy ? "Checking…" : "Check and add"} disabled={busy || !link} onPress={() => add()} />
       <Text style={s.note}>Someone showing you a Crowdlock's QR code? Point your phone's own camera at it — it opens here by itself.</Text>
     </View>
   );
@@ -2521,9 +2521,9 @@ function CosignerKey({ words: walletWords, forStart, go }: { words: string; forS
       <Text style={s.p}>A Crowdlock's co-signer adds the second signature that lets a funded purchase go through. The key can't take or keep anyone's money — it can only complete what members already signed for, or refuse.</Text>
       <Text style={[s.p, s.bold]}>Switch on airplane mode before you start, and leave it on until you've finished.</Text>
       <Text style={s.note}>You'll get 12 words to write on paper, twice — one copy kept outside your house. Those words are the key. They're never saved on this phone, and the same words work in other wallets (Sparrow, Electrum) or the project's own script, so you never depend on this app. Never use your wallet's own words for this.</Text>
-      <Button label="Make a new co-signer key" onPress={() => { setCoWords(newCosignerWords()); setStage("show"); }} />
-      <Button label="Check words I already have" kind="plain" onPress={() => setStage("existing")} />
-      <Button label="Back" kind="plain" onPress={leave} />
+      <Btn label="Make a new co-signer key" onPress={() => { setCoWords(newCosignerWords()); setStage("show"); }} />
+      <Btn label="Check words I already have" kind="second" onPress={() => setStage("existing")} />
+      <Btn label="Back" kind="second" onPress={leave} />
     </View>
   );
 
@@ -2536,7 +2536,7 @@ function CosignerKey({ words: walletWords, forStart, go }: { words: string; forS
         {list.map((w, i) => <Text key={i} style={s.word}><Text style={s.wordNum}>{i + 1}. </Text>{w}</Text>)}
       </View>
       <Text style={s.note}>No screenshots, notes, email or cloud. Once you leave this screen, these words are gone from the phone.</Text>
-      <Button label="I've written them down twice" onPress={() => setStage("check")} />
+      <Btn label="I've written them down twice" onPress={() => setStage("check")} />
     </View>
   );
 
@@ -2554,12 +2554,12 @@ function CosignerKey({ words: walletWords, forStart, go }: { words: string; forS
       <Text style={s.p}>Type the words from your paper (12, or 24 for a key made elsewhere) to see the public key they make — the way to prove the paper works.</Text>
       <WordsInput value={typed} onChange={(t) => { setTyped(t); setProblem(null); }} />
       {problem && <Text style={s.error}>{problem}</Text>}
-      <Button label="Show the key" onPress={() => {
+      <Btn label="Show the key" onPress={() => {
         if (tidyWords(typed) === tidyWords(walletWords)) { setProblem("Those are this wallet's own words. A co-signer key must have words of its own — otherwise it would be the same key as your member key."); return; }
         try { const k = cosignerKeyFromWords(typed); setPub(k.publicKey); setXpub(k.xpub); setTyped(""); setStage("result"); }
         catch (e: any) { setProblem(String(e.message ?? e)); }
       }} />
-      <Button label="Back" kind="plain" onPress={() => setStage("intro")} />
+      <Btn label="Back" kind="second" onPress={() => setStage("intro")} />
     </View>
   );
 
@@ -2570,13 +2570,13 @@ function CosignerKey({ words: walletWords, forStart, go }: { words: string; forS
       <View style={s.qr}><QRCode value={pub ?? ""} size={220} /></View>
       <Text style={s.mono} selectable>{pub}</Text>
       <Text style={s.note}>Check what's scanned starts {pub?.slice(0, 6)} and ends {pub?.slice(-6)}.</Text>
-      <Button label="Copy it" onPress={() => pub && Clipboard.setStringAsync(pub)} />
+      <Btn label="Copy it" onPress={() => pub && Clipboard.setStringAsync(pub)} />
       <Text style={s.h2}>Its xpub, for hardware wallets</Text>
       <Text style={s.p}>Also public. It's the same key in the longer form a Ledger needs before it will lock with it. Paste this one into "Add this co-signer key" instead of the key above and the app adds both.</Text>
       <Text style={s.mono} selectable>{xpub}</Text>
-      <Button label="Copy the xpub" kind="plain" onPress={() => xpub && Clipboard.setStringAsync(xpub)} />
+      <Btn label="Copy the xpub" kind="second" onPress={() => xpub && Clipboard.setStringAsync(xpub)} />
       <Text style={s.note}>You can switch airplane mode off now. Keep the two paper copies apart.</Text>
-      <Button label={forStart ? "Use this key and go back to my Crowdlock" : "Done"} onPress={leave} />
+      <Btn label={forStart ? "Use this key and go back to my Crowdlock" : "Done"} onPress={leave} />
     </View>
   );
 }
@@ -2609,8 +2609,8 @@ function useGitHub(step: (text: string) => void = () => {}) {
     <View style={s.panel}>
       <Text style={s.p}>Sign in to GitHub and type this code:</Text>
       <Text style={[s.big, { textAlign: "center", letterSpacing: 2 }]} selectable>{code.userCode}</Text>
-      <Button label="Copy the code" kind="plain" onPress={() => Clipboard.setStringAsync(code.userCode)} />
-      <Button label="Open GitHub" onPress={() => Linking.openURL(code.verificationUri)} />
+      <Btn label="Copy the code" kind="second" onPress={() => Clipboard.setStringAsync(code.userCode)} />
+      <Btn label="Open GitHub" onPress={() => Linking.openURL(code.verificationUri)} />
       <Text style={s.note}>Come back here once you've allowed it — this carries on by itself.</Text>
     </View>
   );
@@ -2647,7 +2647,7 @@ function MaintainerForm({ owner, repo }: { owner: string; repo: string }) {
     <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={name} onChangeText={setName} placeholder="e.g. janesmith" />
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-    <Button label={busy ? "Adding…" : "Add a maintainer"} disabled={busy || !name.trim()} onPress={add} />
+    <Btn label={busy ? "Adding…" : "Add a maintainer"} disabled={busy || !name.trim()} onPress={add} />
   </>;
 }
 
@@ -2694,7 +2694,7 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
       : keys.map((x, i) => (
         <View key={x} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text style={[s.note, { flex: 1 }]}>{x.slice(0, 10)}…{x.slice(-8)}{i === keys.length - 1 ? "  · new locks use this one" : "  · kept for locks already made"}{xpubForKey(c.crowdlock, x) ? "  · hardware wallets can lock" : ""}</Text>
-          <Button label="Copy" kind="plain" onPress={() => Clipboard.setStringAsync(x)} />
+          <Btn label="Copy" kind="second" onPress={() => Clipboard.setStringAsync(x)} />
         </View>))}
     <Text style={s.note}>Adding a key never removes one, so every lock already made keeps counting. Don't have one? Make it from More → "For founders and co-signers", ideally on a phone that holds no money{c.crowdlock.network === "mainnet" ? ", and keep its words on paper only" : ""}.</Text>
     <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={key} onChangeText={(t) => { setKey(t); setMsg(null); }} placeholder="Paste its xpub, or its key: 02… or 03…" />
@@ -2704,7 +2704,7 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     {!path && <Text style={s.error}>Can't tell where this Crowdlock's file sits in its repository.</Text>}
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-    <Button label={busy ? "Adding…" : "Add this co-signer key"} disabled={busy || !k || !!problem || !path} onPress={add} />
+    <Btn label={busy ? "Adding…" : "Add this co-signer key"} disabled={busy || !k || !!problem || !path} onPress={add} />
   </>;
 }
 
@@ -2766,7 +2766,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
       <Text style={s.p}>What the update brings:</Text>
       {changesSince(published, template.changes).map((x: any) => <Text key={x.version} style={s.note}>• {x.change}</Text>)}
       <Text style={s.note}>It changes only the inbox's code, in one commit anyone can read. The declaration, register and settings are untouched.</Text>
-      <Button label={busy ? "Updating…" : "Update it"} disabled={busy} onPress={update} />
+      <Btn label={busy ? "Updating…" : "Update it"} disabled={busy} onPress={update} />
     </View>}
     {status === "current" && <Text style={s.good}>Its inbox is up to date.</Text>}
     {status !== "behind" && status !== "current" && <Text style={s.note}>Nothing to update just now.</Text>}
@@ -2801,7 +2801,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
     <View>
       <Text style={s.h2}>Look after this Crowdlock</Text>
       {status === "behind" && <Text style={s.note}>An update is available for this Crowdlock's inbox.</Text>}
-      {!open ? <Button label="For its founder and maintainers" kind="plain" onPress={() => setOpen(true)} /> : <>
+      {!open ? <Btn label="For its founder and maintainers" kind="second" onPress={() => setOpen(true)} /> : <>
         {updateBox}
         <CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />
         {here && <Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />}
@@ -3007,13 +3007,13 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
       } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
       setBusy(false);
     } };
-  return !open ? <Button label="For the co-signer: declare it dead" kind="plain" onPress={() => setOpen(true)} /> : (
+  return !open ? <Btn label="For the co-signer: declare it dead" kind="second" onPress={() => setOpen(true)} /> : (
     <View style={s.panel}>
       <Text style={s.label}>It closed short of its target</Text>
       <Text style={s.note}>Nothing has to happen: without your signature no commitment can ever move. Publishing a signed notice tells every member so, publicly, and promises you won't complete any of them. Type the co-signer key's words; they're used once and not saved.</Text>
       <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-      {asking ? <Confirm title={askDead[0]} text={askDead[1]} yes="Sign and publish" onYes={deadGo} onCancel={() => setAsking(false)} /> : <Button label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !wordsAreValid(tidyWords(words))} onPress={() => setAsking(true)} />}
+      {asking ? <Confirm title={askDead[0]} text={askDead[1]} yes="Sign and publish" onYes={deadGo} onCancel={() => setAsking(false)} /> : <Btn label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !wordsAreValid(tidyWords(words))} onPress={() => setAsking(true)} />}
     </View>
   );
 }
@@ -3059,13 +3059,13 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
   };
   return (
     <View>
-      {!open ? <Button label="For the co-signer" kind="plain" onPress={() => setOpen(true)} /> : <View style={s.panel}>
+      {!open ? <Btn label="For the co-signer" kind="second" onPress={() => setOpen(true)} /> : <View style={s.panel}>
         <Text style={s.label}>Co-sign this proposal</Text>
         <Text style={s.note}>Only once the target is met, and only if the proposal and its destination are genuine. Type the co-signer key's words, ideally on a phone that is otherwise offline. They are used once and not saved.</Text>
         {!met && <Text style={s.error}>The target isn't met yet: {btc(BigInt(pile.sats))} of {btc(BigInt(p.target.sats))}. Nothing should be completed.</Text>}
         <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
         {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-        {asking ? <Confirm title={askSend[0]} text={askSend[1]} yes="Complete and send" onYes={sendGo} onCancel={() => setAsking(false)} /> : <Button label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={() => setAsking(true)} />}
+        {asking ? <Confirm title={askSend[0]} text={askSend[1]} yes="Complete and send" onYes={sendGo} onCancel={() => setAsking(false)} /> : <Btn label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={() => setAsking(true)} />}
       </View>}
     </View>
   );
@@ -3134,7 +3134,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
       {busy && !!step && <Text style={s.note}>{step}</Text>}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
       {!!address.trim() && !isAddressOn(address.trim(), c.crowdlock.network) && <Text style={s.error}>That isn't a {c.crowdlock.network === "mainnet" ? "bitcoin" : "test-network"} address. Paste the seller's whole address.</Text>}
-      <Button label={busy ? "Adding…" : "Add and attest this destination"} disabled={busy || !isAddressOn(address.trim(), c.crowdlock.network) || !text.trim() || /[|\n]/.test(text) || !path} onPress={add} />
+      <Btn label={busy ? "Adding…" : "Add and attest this destination"} disabled={busy || !isAddressOn(address.trim(), c.crowdlock.network) || !text.trim() || /[|\n]/.test(text) || !path} onPress={add} />
     </>}
   </>;
 }
@@ -3236,7 +3236,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
             title="Publish this proposal?"
             text={`"${preview.title}": ${money(preview.requires, preview.currency)} to ${preview.destination}, gathering until ${preview.closes.slice(0, 10)}. Once published it can't be changed: its wording and price are fixed by its fingerprint.`}
             yes="Publish this proposal" onYes={publish} onCancel={() => setAsking(false)} />
-        : <Button label={busy ? "Publishing…" : "Publish this proposal"} disabled={busy || !!problem} onPress={() => setAsking(true)} />}
+        : <Btn label={busy ? "Publishing…" : "Publish this proposal"} disabled={busy || !!problem} onPress={() => setAsking(true)} />}
     </>}
   </>;
 }
@@ -3301,7 +3301,7 @@ function NewDeclarationVersion({ c, owner, repo, onChange }: { c: Extract<Loaded
           title={`Publish version ${cur.version + 1}?`}
           text="This can't be undone. The new text and your reason become part of this Crowdlock's public history, and every member is asked whether they wish to sign it."
           yes={`Publish version ${cur.version + 1}`} onYes={publish} onCancel={() => setAsking(false)} />
-      : <Button label={busy ? "Publishing…" : `Publish version ${cur.version + 1}`} kind="danger" disabled={busy || !!problem} onPress={() => setAsking(true)} />}
+      : <Btn label={busy ? "Publishing…" : `Publish version ${cur.version + 1}`} kind="danger" disabled={busy || !!problem} onPress={() => setAsking(true)} />}
   </>;
 }
 
@@ -3473,8 +3473,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       {stage === "signin" && code && <>
         <Text style={s.p}>Your Crowdlock is set up in your own GitHub account, so you own it. Open GitHub, sign in, and type this code:</Text>
         <Text style={[s.big, { textAlign: "center", letterSpacing: 2, marginVertical: 12 }]} selectable>{code.userCode}</Text>
-        <Button label="Copy the code" kind="plain" onPress={() => Clipboard.setStringAsync(code.userCode)} />
-        <Button label="Open GitHub" onPress={() => Linking.openURL(code.verificationUri)} />
+        <Btn label="Copy the code" kind="second" onPress={() => Clipboard.setStringAsync(code.userCode)} />
+        <Btn label="Open GitHub" onPress={() => Linking.openURL(code.verificationUri)} />
         <Text style={s.note}>GitHub will ask whether to allow "Crowdlock" to create a public repository in your account. Come back here once you've allowed it — this screen carries on by itself. No account? Sign up on GitHub first; it's free.</Text>
       </>}
       {stage === "creating" && <>
@@ -3493,7 +3493,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
           <Text style={s.cardTitle}>{l.label}</Text>
           <Text style={s.note}>Anyone joins by adding this link in the app:</Text>
           <Text style={s.mono} selectable>{l.url}</Text>
-          <Button label="Copy the link" kind="plain" onPress={() => Clipboard.setStringAsync(l.url)} />
+          <Btn label="Copy the link" kind="second" onPress={() => Clipboard.setStringAsync(l.url)} />
         </View>
       ))}
       {!IS_TEST_MONEY && done.links.length > 1 && <View style={s.panel}>
@@ -3509,7 +3509,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       <MaintainerAdvice />
       <MaintainerForm owner={done.owner} repo={done.repo} />
       <Text style={s.note}>You can do this any time from the Crowdlock's page, under "Look after it".</Text>
-      <Button label="Back to Home" onPress={() => go({ name: "home", words })} />
+      <Btn label="Back to Home" onPress={() => go({ name: "home", words })} />
     </View>
   );
 
@@ -3587,7 +3587,8 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         {!!keyFromXpub(cosigner) && <Text style={s.note}>That xpub stands for {keyFromXpub(cosigner)!.slice(0, 10)}…, and is published beside it so hardware wallets can lock.</Text>}
         <Btn kind="second" label="Make a co-signer key now" onPress={() => go({ name: "cosignerKey", words, forStart: "cosigner" })} />
         <Btn kind="link" label="Paste what I copied" onPress={async () => { const t = (await Clipboard.getStringAsync()).trim(); if (t) { setCosigner(t); setChecked(null); } }} />
-        <Text style={s.note}>Making one here gives you 12 words to write on paper, and brings the key back to this page. Your typing is kept. You can also make it elsewhere (Sparrow, Electrum, or the method's own script) and paste its xpub. An xpub is the public half of a key in a form hardware wallets can use. Its plain key works too, but then hardware wallets can't lock until the xpub is added.</Text>
+        <Text style={s.note}>Making one here gives you 12 words to write on paper, and brings the key back to this page. Your typing is kept.</Text>
+        <Text style={s.note}>You can also make it elsewhere (Sparrow, Electrum, or the method's own script) and paste its xpub: the public half of a key, in the form hardware wallets need. A plain key works too, but hardware wallets can't lock until its xpub is added.</Text>
       </>}
 
       {here === "lengths" && <>
@@ -3705,21 +3706,9 @@ function FeeChoice({ onChange }: { onChange?: () => void } = {}) {
   );
 }
 
-function Button({ label, onPress, kind = "main", disabled }: { label: string; onPress: () => void; kind?: "main" | "plain" | "danger"; disabled?: boolean }) {
-  return (
-    <Pressable
-      accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled }}
-      onPress={disabled ? undefined : onPress}
-      style={({ pressed }) => [s.btn, kind === "plain" && s.btnPlain, kind === "danger" && s.btnDanger, (pressed || disabled) && { opacity: 0.5 }]}
-    >
-      <Text style={[s.btnText, kind !== "main" && s.btnTextPlain, kind === "danger" && s.btnTextDanger]}>{label}</Text>
-    </Pressable>
-  );
-}
-
-// The older screens' styles, drawn from the one theme (src/ui/theme.ts) so
-// they follow the phone's light or dark setting with everything else. Screens
-// move over to the shared parts in src/ui/parts.tsx as each is rebuilt.
+// Text and layout styles shared by the screens in this file, drawn from the
+// one theme (src/ui/theme.ts) so they follow the phone's light or dark
+// setting. Buttons, cards, warnings and the bars are in src/ui/parts.tsx.
 function makeStyles(t: Theme) {
   return StyleSheet.create({
     page: { flex: 1, backgroundColor: t.page },
@@ -3746,10 +3735,8 @@ function makeStyles(t: Theme) {
     panel: { borderWidth: 1, borderColor: t.rule, backgroundColor: t.panel, borderRadius: radius, padding: 14, marginTop: 14 },
     btn: { backgroundColor: t.brand, borderRadius: radius, paddingVertical: 12, paddingHorizontal: 12, minHeight: 54, alignItems: "center", justifyContent: "center", marginTop: 14 },
     btnPlain: { backgroundColor: "transparent", borderWidth: 1, borderColor: t.soft, minHeight: 48 },
-    btnDanger: { backgroundColor: "transparent", marginTop: 40, minHeight: 48 },
     btnText: { color: t.onBrand, fontSize: size.body, fontFamily: font.bold, textAlign: "center" },
     btnTextPlain: { color: t.ink },
-    btnTextDanger: { color: t.stop },
     onBrand: { color: t.onBrand, fontFamily: font.bold },
     card: { borderWidth: 1, borderColor: t.rule, borderRadius: radius, padding: 14, marginTop: 10 },
     cardTitle: { fontSize: 17, fontFamily: font.bold, color: t.ink },
