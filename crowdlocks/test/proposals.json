@@ -66,6 +66,23 @@
         "rate": "1 BTC = 10000.00 GBP",
         "at": "2026-11-15T23:21:01Z"
       }
+    },
+    {
+      "title": "Testing website",
+      "text": "Testing to see if you can sign new declarations without resigning them via the website",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-16T19:14:58Z",
+      "closes": "2026-11-30T19:14:58Z",
+      "settles_by": "2026-12-07T19:14:58Z",
+      "declaration_version": 3,
+      "hash": "398bfa1531b552c663092f1b028b4e290e26f3cecfc29c090f58ab71ec4f8f2f",
+      "target": {
+        "sats": 100000000,
+        "rate": "1 BTC = 10.00 GBP",
+        "at": "2026-11-16T19:14:58Z"
+      }
     }
   ]
 }
