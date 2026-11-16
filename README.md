@@ -49,7 +49,8 @@ Each app lists, opens and starts only Crowdlocks on its own network. Which one a
 
 | What | Where |
 | --- | --- |
-| Every screen, and moving between them | `app/App.tsx` |
+| The shell: which screen is showing, Back, pull-down, the keyboard, the bars | `app/App.tsx` |
+| The screens, by job: `wallet` (setting up, getting bitcoin in, sending), `home` (the four places, Help, About), `steps` (sign to join, lock, take it home), `proposals` (proposals, committing, the co-signer's part), `crowdlock` (the list, one Crowdlock's page, adding, finding, sharing), `founders` (starting a Crowdlock and looking after one), `shared` (screen names, small parts, styles) | `app/src/screens/` |
 | The look: colours, type and sizes; buttons, cards, warnings and the bars | `app/src/ui/theme.ts`, `app/src/ui/parts.tsx` |
 | Wallet and keys: words, addresses, locks, payments, commitments. **The only code that touches keys or builds a payment** | `app/src/wallet/core.mjs` |
 | Reading the chain and sending payments, through a block explorer and its backup | `app/src/wallet/esplora.mjs` |
