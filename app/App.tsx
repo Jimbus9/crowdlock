@@ -77,7 +77,7 @@ import { askAfresh } from "./src/wallet/esplora.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
 import { banner, font, gap, radius, setLook, size, themeFor, useLook, useTheme } from "./src/ui/theme";
 import type { Look, Theme } from "./src/ui/theme";
-import { Btn, Card, NavRow, StepBar, TabBar, TopBar, Warning } from "./src/ui/parts";
+import { Btn, Card, NavRow, NoScreenshots, StepBar, TabBar, TopBar, Warning } from "./src/ui/parts";
 import type { TabName } from "./src/ui/parts";
 // @ts-ignore — plain module, tested in test-chain
 import { nextStep } from "./src/nextStep.mjs";
@@ -497,6 +497,7 @@ function ShowWords({ words, go }: { words: string; go: Go }) {
   const list = words.split(" ");
   return (
     <View>
+      <NoScreenshots />
       <Text style={s.h1}>Write these down</Text>
       <Text style={s.p}>
         These 12 words are your wallet. Write them on paper, in order, and keep the paper safe.
@@ -507,7 +508,7 @@ function ShowWords({ words, go }: { words: string; go: Go }) {
           <Text key={i} style={s.word}><Text style={s.wordNum}>{i + 1}. </Text>{w}</Text>
         ))}
       </View>
-      <Text style={s.note}>Do not screenshot them or save them in notes, email or cloud storage.</Text>
+      <Text style={s.note}>This screen can't be screenshotted. Don't photograph the words, or save them in notes, email or cloud storage.</Text>
       <Btn label="I have written them down" onPress={() => go({ name: "checkWords", words })} />
     </View>
   );
@@ -541,6 +542,7 @@ function CheckEveryWord({ words, onDone, onShowAgain }: { words: string; onDone:
   };
   return (
     <View>
+      <NoScreenshots />
       <Text style={s.h1}>Check your paper</Text>
       <Text style={s.p}>Type each word from what you wrote down. Every word is checked — one wrong word and the paper wouldn't bring your money back.</Text>
       <Text style={s.label}>Word {i + 1} of {list.length}</Text>
@@ -580,6 +582,7 @@ function WordsInput({ value, onChange, placeholder }: { value: string; onChange:
   const rightLength = [12, 15, 18, 21, 24].includes(count);
   const valid = rightLength && wordsAreValid(value);
   return <>
+    <NoScreenshots />
     <Input
       style={[s.input, { minHeight: 100, textAlignVertical: "top" }]} multiline
       {...SECRET_WORDS} value={value} onChangeText={onChange} placeholder={placeholder}
@@ -2529,13 +2532,14 @@ function CosignerKey({ words: walletWords, forStart, go }: { words: string; forS
 
   if (stage === "show") return (
     <View>
+      <NoScreenshots />
       <Text style={s.h1}>Write these down</Text>
       <Text style={s.p}>On paper, in order, twice. Label each copy so whoever finds it in five years knows what it is:</Text>
       <Text style={s.mono}>Co-signer key · {new Date().toISOString().slice(0, 10)} · {COSIGNER_PATH}</Text>
       <View style={s.words}>
         {list.map((w, i) => <Text key={i} style={s.word}><Text style={s.wordNum}>{i + 1}. </Text>{w}</Text>)}
       </View>
-      <Text style={s.note}>No screenshots, notes, email or cloud. Once you leave this screen, these words are gone from the phone.</Text>
+      <Text style={s.note}>This screen can't be screenshotted. No photos, notes, email or cloud. Once you leave this screen, these words are gone from the phone.</Text>
       <Btn label="I've written them down twice" onPress={() => setStage("check")} />
     </View>
   );

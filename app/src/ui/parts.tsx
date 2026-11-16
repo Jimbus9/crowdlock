@@ -1,10 +1,24 @@
 // The app's shared parts: one button, one card, one warning, one step bar,
 // one bottom bar — used on every screen so the app looks and behaves the same
 // everywhere. Presentation only: nothing here touches keys or money.
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
+import { usePreventScreenCapture } from "expo-screen-capture";
 import { font, gap, mainButton, radius, size, touch, useTheme } from "./theme";
+
+/**
+ * Put on any screen that shows or takes recovery words: while it is on
+ * screen the phone refuses screenshots and screen recording, and shows a
+ * blank card in the recent-apps view. Every other screen can still be
+ * screenshotted, which is how people ask for help.
+ */
+export function NoScreenshots() {
+  // Each one holds its own claim, so one leaving doesn't lift another's.
+  const claim = useRef(`words-${Math.random().toString(36).slice(2)}`).current;
+  usePreventScreenCapture(claim);
+  return null;
+}
 
 /** The Crowdlock mark: three people arm in arm. The one in the middle is you. */
 export function Logo({ px = 30 }: { px?: number }) {
