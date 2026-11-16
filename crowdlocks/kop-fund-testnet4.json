@@ -23,6 +23,13 @@
       "sha256": "dd44d8ced7e74a51dfeb1c3d56b008d34c70103b8d8a3a90facd8344938f699c",
       "published": "2026-11-15",
       "reason": "More testing"
+    },
+    {
+      "version": 4,
+      "file": "crowdlocks/test/declaration-test-v4.txt",
+      "sha256": "a261f94401f832bbd833827b83592c74e1822065a5fc35e0908bed7d61bde886",
+      "published": "2026-11-16",
+      "reason": "To test website signing"
     }
   ],
   "network": "testnet4",
