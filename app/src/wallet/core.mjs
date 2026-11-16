@@ -126,7 +126,7 @@ export function accountFromWords(text, network = "mainnet") {
  * A co-signer key for a Crowdlock this wallet starts, from the same backup
  * words but on its own path (m/84'/coin'/7713'/0/0), so it is never the
  * member key and never an address another wallet would show by accident.
- * Only its public half is published; signing with it comes at milestone 5.
+ * Only its public half is published.
  */
 export function cosignerFromWords(text, network = "mainnet") {
   const words = tidyWords(text);
@@ -255,6 +255,26 @@ export async function waitingBalance(chain, address) {
   return { confirmed, arriving, total: confirmed + arriving };
 }
 
+/**
+ * The transaction a coin came from, checked against what the block explorer
+ * said about the coin. Every fee here is worked out from the explorer's figure
+ * for each coin, but what is signed spends the coin itself: if the explorer
+ * understated a coin, the difference would leave as fee without anybody having
+ * chosen it. So before anything is signed, the transaction must be the one the
+ * coin names and hold exactly the amount stated, or nothing is built.
+ */
+async function coinSource(chain, coin) {
+  const txHex = await chain.txHex(coin.txid);
+  let source;
+  try { source = Transaction.fromHex(String(txHex).trim()); }
+  catch { throw new Error("the block explorer's record of a coin can't be read — refusing, nothing was signed"); }
+  const output = source.outs[coin.vout];
+  if (source.getId() !== coin.txid || !output || BigInt(output.value) !== BigInt(coin.value)) {
+    throw new Error("the block explorer's figures for a coin don't agree with the coin itself — refusing, nothing was signed");
+  }
+  return txHex;
+}
+
 // ---------------------------------------------------------------------------
 // Sending waiting money out
 // ---------------------------------------------------------------------------
@@ -326,7 +346,7 @@ export async function buildSend({ account, chain, to, amount, feeRate, policies 
   const psbt = new Psbt({ network: net });
   const finalizers = [];
   for (const c of coins) {
-    const txHex = await chain.txHex(c.txid);
+    const txHex = await coinSource(chain, c);
     finalizers.push(account.output.updatePsbtAsInput({ psbt, txHex, vout: c.vout }));
   }
   dest.updatePsbtAsOutput({ psbt, value: sent });
@@ -530,7 +550,7 @@ export async function takeHome({ account, chain, lock, feeRate, medianTime, to, 
   const psbt = new Psbt({ network: net });
   const finalizers = [];
   for (const c of coins) {
-    finalizers.push(out.updatePsbtAsInput({ psbt, txHex: await chain.txHex(c.txid), vout: c.vout }));
+    finalizers.push(out.updatePsbtAsInput({ psbt, txHex: await coinSource(chain, c), vout: c.vout }));
   }
   dest.updatePsbtAsOutput({ psbt, value: sent });
   await signWith(account, psbt, [{ descriptor, name: lockPolicyName(lock.locktime) }]);
@@ -583,14 +603,14 @@ export async function relock({ account, chain, lock, newLock, feeRate, medianTim
 
   const psbt = new Psbt({ network: net });
   const finalizers = [];
-  for (const c of lockCoins) finalizers.push(oldOut.updatePsbtAsInput({ psbt, txHex: await chain.txHex(c.txid), vout: c.vout }));
+  for (const c of lockCoins) finalizers.push(oldOut.updatePsbtAsInput({ psbt, txHex: await coinSource(chain, c), vout: c.vout }));
   // Waiting coins are added by the library as usual. They are finished by
   // bitcoinjs's own standard finaliser rather than the descriptor's, which
   // refuses them: it checks every input against the transaction's date, and
   // here the date belongs to the old lock's input, not to these.
   const waitIndexes = [];
   for (const c of waitCoins) {
-    account.output.updatePsbtAsInput({ psbt, txHex: await chain.txHex(c.txid), vout: c.vout });
+    account.output.updatePsbtAsInput({ psbt, txHex: await coinSource(chain, c), vout: c.vout });
     waitIndexes.push(psbt.inputCount - 1);
   }
   dest.updatePsbtAsOutput({ psbt, value: sent });
@@ -682,7 +702,7 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
   }
 
   const psbt = new Psbt({ network: net });
-  out.updatePsbtAsInput({ psbt, txHex: await chain.txHex(coin.txid), vout: coin.vout });
+  out.updatePsbtAsInput({ psbt, txHex: await coinSource(chain, coin), vout: coin.vout });
   dest.updatePsbtAsOutput({ psbt, value: committed });
   if (remainder > 0n) back.updatePsbtAsOutput({ psbt, value: remainder });
   psbt.setLocktime(0);

@@ -221,6 +221,15 @@ await refuses("Something that is not an address at all",
   () => buildSend({ account: fan, chain, to: "send it to my mate", amount: 10_000n, feeRate: 2 }), "not an address");
 await refuses("A silly fee rate",
   () => buildSend({ account: fan, chain, to: miner.address, amount: 10_000n, feeRate: 5000 }), "fee rate");
+// A block explorer that understates what a coin holds: the fee is worked out
+// from its figure, so the difference would leave as fee. The coin's own
+// transaction says what it really holds, and the two must agree.
+const understating = { ...chain, utxos: async (a) => (await chain.utxos(a)).map((u) => ({ ...u, value: u.value - 20_000 })) };
+await refuses("A send, when the explorer understates a coin (the rest would have gone as fee)",
+  () => buildSend({ account: fan, chain: understating, to: miner.address, amount: 10_000n, feeRate: 2 }), "don't agree with the coin itself");
+const wrongCoin = { ...chain, txHex: async () => chain.txHex(top.txid) };
+await refuses("A send, when the explorer hands over a different transaction for a coin",
+  () => buildSend({ account: miner, chain: wrongCoin, to: fan.address, amount: 10_000n, feeRate: 2 }), "don't agree with the coin itself");
 await refuses("Words that are not valid backup words",
   () => accountFromWords(broken, net), "not valid backup words");
 
@@ -294,6 +303,8 @@ for (let i = 0; i < 12; i++) await rpc("generatetoaddress", [1, miner.address]);
 st = await stateOf();
 check("After the date it shows as lapsed, still holding the money", st.state === "lapsed" && st.confirmed === locking.sent);
 
+await refuses("Taking a lock home, when the explorer understates what the lock holds",
+  async () => takeHome({ account: saver, chain: understating, lock, feeRate: 2, medianTime: await chain.medianTime() }), "don't agree with the coin itself");
 const home = await takeHome({ account: saver, chain, lock, feeRate: 2, medianTime: await chain.medianTime() });
 await chain.broadcast(home.hex);
 await rpc("generatetoaddress", [1, miner.address]);
@@ -317,6 +328,8 @@ check("The new lock is one the register would rebuild",
   renewed.address === lockAddress({ ownerPubkey: saver.publicKey, cosignerPubkey: cosigner.publicKey, locktime: renewed.locktime }, "rb"));
 await refuses("Locking again into the same lock",
   () => relock({ account: saver, chain, lock: partLock, newLock: partLock, feeRate: 2, medianTime: mt2 }), "new date");
+await refuses("Locking again, when the explorer understates what the old lock holds",
+  () => relock({ account: saver, chain: understating, lock: partLock, newLock: renewed, feeRate: 2, medianTime: mt2, addWaiting: true }), "don't agree with the coin itself");
 const again = await relock({ account: saver, chain, lock: partLock, newLock: renewed, feeRate: 2, medianTime: mt2, addWaiting: true });
 await chain.broadcast(again.hex);
 await rpc("generatetoaddress", [1, miner.address]);
@@ -490,6 +503,8 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   await refuses("A commitment whose fee would pass the 1% cap",
     () => buildCommitment({ account: fan, chain, lock: fanLock, coin, proposalHash: pHash, destination, amount: 10_000n, feeRate: 20 }), "more than 1%");
 
+  await refuses("A commitment, when the coin is said to hold less than it does",
+    () => buildCommitment({ account: fan, chain, lock: fanLock, coin: { ...coin, value: coin.value - 20_000 }, proposalHash: pHash, destination, amount: 200_000n, feeRate: 2 }), "don't agree with the coin itself");
   const part = await buildCommitment({ account: fan, chain, lock: fanLock, coin, proposalHash: pHash, destination, amount: 200_000n, feeRate: 2 });
   const vPart = C.verifyCommitment(verifyArgs(part.record, coin.value));
   check("Committing part of a lock: the method's own checker accepts the record", vPart.valid && vPart.committedSats === 200_000, vPart.reason || `${vPart.committedSats} committed, fee ${part.fee}`);
