@@ -1,0 +1,86 @@
+// What the phone keeps of the wallet (app/src/storage.ts), run against a
+// pretend keystore: the words locked to a fingerprint where the phone has one,
+// read only for signing, and an older install's single entry moved over.
+//
+// storage.ts is TypeScript and talks to the phone's keystore, so this turns it
+// into plain JavaScript and swaps the keystore for the pretend one below.
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const ts = createRequire(join(here, "../package.json"))("typescript");
+const dir = mkdtempSync(join(tmpdir(), "crowdlock-storage-"));
+const FAKE = `// A pretend keystore: entries saved "locked" need the fingerprint, which the test answers.
+export const mem = new Map();
+export const world = { biometrics: true, answer: "ok", prompts: [] };
+export const WHEN_UNLOCKED_THIS_DEVICE_ONLY = 1;
+export function canUseBiometricAuthentication() { return world.biometrics; }
+function ask(prompt) { world.prompts.push(prompt ?? ""); if (world.answer !== "ok") throw new Error("User canceled the authentication. Cancel"); }
+export async function setItemAsync(k, v, o = {}) {
+  if (o.requireAuthentication) { if (!world.biometrics) throw new Error("No biometrics are currently enrolled"); ask(o.authenticationPrompt); }
+  mem.set(k, { v, locked: !!o.requireAuthentication, invalid: false });
+}
+export async function getItemAsync(k, o = {}) {
+  const e = mem.get(k); if (!e) return null;
+  if (e.locked) { if (e.invalid) return null; ask(o.authenticationPrompt); }
+  return e.v;
+}
+export async function deleteItemAsync(k) { mem.delete(k); }
+`;
+writeFileSync(join(dir, "fake-store.mjs"), FAKE);
+const js = ts.transpileModule(readFileSync(join(here, "../src/storage.ts"), "utf8"), { compilerOptions: { module: "ESNext", target: "ES2022" } }).outputText
+  .replace('from "expo-secure-store"', 'from "./fake-store.mjs"')
+  .replace('from "./moves.mjs"', `from ${JSON.stringify(pathToFileURL(join(here, "../src/moves.mjs")).href)}`);
+writeFileSync(join(dir, "storage.mjs"), js);
+const { mem, world } = await import(pathToFileURL(join(dir, "fake-store.mjs")).href);
+const S = await import(pathToFileURL(join(dir, "storage.mjs")).href);
+
+console.log("-".repeat(80));
+console.log("WHAT THE PHONE KEEPS OF THE WALLET");
+console.log("-".repeat(80));
+const ok = (name, cond, more = "") => { console.log(cond ? "PASS " : "FAIL ", name, more); if (!cond) process.exitCode = 1; };
+const W = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+const text = (locked) => `watch:{"locked":${locked}}`;
+const reset = () => { mem.clear(); world.biometrics = true; world.answer = "ok"; world.prompts.length = 0; };
+
+reset();
+let t = await S.saveWordsWallet(W, text);
+ok("New wallet on a phone with a fingerprint: saved locked, asked once", t.includes("true") && mem.get("crowdlock.secret.v2").locked && world.prompts.length === 1);
+ok("…the public text is saved beside it and read at start with no prompt", (await S.loadWalletText()) === t && world.prompts.length === 1);
+ok("…signing reads the words after the fingerprint", (await S.readWords("sign")) === W && world.prompts.at(-1) === "sign");
+world.answer = "cancel";
+let threw = ""; try { await S.readWords("sign"); } catch (e) { threw = e.message; }
+ok("…cancelling the fingerprint gives no words", /cancel/i.test(threw));
+world.answer = "ok"; mem.get("crowdlock.secret.v2").invalid = true;
+ok("…a key the phone threw away reads as nothing, not an error", (await S.readWords("sign")) === null);
+
+reset(); world.answer = "cancel";
+t = await S.saveWordsWallet(W, text);
+ok("New wallet, fingerprint cancelled: saved unlocked, and the words are there", t.includes("false") && !mem.get("crowdlock.secret.v2").locked && mem.get("crowdlock.secret.v2").v === W);
+world.answer = "ok";
+ok("…and read without a prompt", (await S.readWords("sign")) === W && world.prompts.length === 1);
+t = await S.saveWordsWallet(W, text, true);
+ok("…turning the lock on later saves them locked", t.includes("true") && mem.get("crowdlock.secret.v2").locked);
+
+reset(); world.biometrics = false;
+t = await S.saveWordsWallet(W, text);
+ok("A phone with no fingerprint: saved unlocked, never asked", t.includes("false") && world.prompts.length === 0 && (await S.readWords("x")) === W);
+
+reset(); mem.set("crowdlock.words.v1", { v: W, locked: false });
+ok("An older install's words are found", (await S.loadWalletText()) === null && (await S.loadOldEntry()) === W);
+ok("…and can sign before the move", (await S.readWords("x")) === W);
+t = await S.saveWordsWallet(W, text, false);
+ok("…moved over without a prompt; the old entry is gone", t.includes("false") && !mem.has("crowdlock.words.v1") && world.prompts.length === 0 && (await S.readWords("x")) === W);
+
+reset(); mem.set("crowdlock.words.v1", { v: 'ledger:{"deviceId":"x"}', locked: false });
+ok("An older install's Ledger entry is never read as words", (await S.readWords("x")) === null);
+await S.saveLedgerWallet('ledger:{"deviceId":"x"}');
+ok("…a Ledger wallet keeps no words at all", (await S.loadWalletText()).startsWith("ledger:") && !mem.has("crowdlock.secret.v2") && !mem.has("crowdlock.words.v1"));
+
+reset(); await S.saveWordsWallet(W, text); await S.forgetWallet();
+ok("Removing the wallet removes every entry", mem.size === 0);
+
+console.log(process.exitCode ? "\nThe wallet's storage has a problem." : "\nThe wallet's storage keeps the words apart, locked where it can.");

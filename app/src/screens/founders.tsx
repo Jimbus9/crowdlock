@@ -9,13 +9,13 @@ import * as Clipboard from "expo-clipboard";
 import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  tidyWords, cosignerFromWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH, isPublicKey, keyFromXpub, xpubForKey, signStatementWith, NETWORKS,
+  tidyWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH, isPublicKey, keyFromXpub, xpubForKey, signStatementWith, NETWORKS,
 } from "../wallet/core.mjs";
 import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
   proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
 } from "../../../method/js/proposals.mjs";
-import { isLedgerWallet, ledgerAppFor } from "../ledgerDevice";
+import { ledgerAppFor } from "../ledgerDevice";
 // @ts-ignore — plain modules shared with the tests
 import { buildCrowdlock, declarationSkeleton, slugify, DEFAULT_RELAYS, checkWithNewKey, NO_RETURNS } from "../start.mjs";
 // @ts-ignore
@@ -37,7 +37,7 @@ import { loadAddedCrowdlocks, saveAddedCrowdlocks, loadExpectedKeys, saveExpecte
 import { NETWORK, IS_TEST_MONEY } from "../config";
 // The look (one theme file) and the shared parts every screen is built from.
 import { Btn, NavRow, NoScreenshots, Warning } from "../ui/parts";
-import { whileOpen, allLinks, useBack, Input, walletAccount, minorDigits, money, parseBtc, SumRow, Confirm, Changes, s } from "./shared";
+import { whileOpen, allLinks, useBack, Input, walletAccount, minorDigits, money, parseBtc, SumRow, Confirm, Changes, s, signingAccount } from "./shared";
 import type { Go, Loaded } from "./shared";
 import { CheckEveryWord, WordsInput } from "./wallet";
 import { TestApp } from "./crowdlock";
@@ -195,8 +195,6 @@ export function StartCrowdlock({ words, go }: { words: string; go: Go }) {
   // on a path of its own. The real one is pasted in from wherever it lives.
   // A Ledger wallet has no words here to make the test copy's co-signer from,
   // so its founder pastes one (made with "Make a co-signer key").
-  const testCoKey = useMemo(() => (isLedgerWallet(words) ? { publicKey: "", xpub: "" } : cosignerFromWords(words, "testnet4")), [words]);
-  const testCo = testCoKey.publicKey;
 
   const input = (siteBase: string) => {
     const t = minimum.trim().replace(",", ".");
@@ -206,7 +204,7 @@ export function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       name, about, title, declarationText: text, network, minimumSats, waitDays: /^\d{1,3}$/.test(waitDays.trim()) ? Number(waitDays.trim()) : NaN,
       gatherDays: /^\d{1,3}$/.test(gatherDays.trim()) ? Number(gatherDays.trim()) : NaN,
       settleDays: /^\d{1,3}$/.test(settleDays.trim()) ? Number(settleDays.trim()) : NaN,
-      cosignerPubkey: keyFromXpub(cosigner) ? cosigner.trim() : cosigner.trim().toLowerCase(), testCosignerPubkey: testPasted.trim() || testCoKey.xpub, testCopy: network !== "mainnet" || wantTest,
+      cosignerPubkey: keyFromXpub(cosigner) ? cosigner.trim() : cosigner.trim().toLowerCase(), testCosignerPubkey: testPasted.trim(), testCopy: network !== "mainnet" || wantTest,
       siteBase, today: new Date().toISOString().slice(0, 10),
     };
   };
@@ -310,7 +308,7 @@ export function StartCrowdlock({ words, go }: { words: string; go: Go }) {
     : here === "minimum" ? !days(waitDays) || !minimum.trim()
     : here === "cosigner" ? !cosigner.trim() || badKey(cosigner)
     : here === "lengths" ? !days(gatherDays) || !days(settleDays)
-    : here === "testkey" ? (network === "mainnet" && !wantTest ? false : badKey(testPasted) || (!testCo && !testPasted.trim()))
+    : here === "testkey" ? (network === "mainnet" && !wantTest ? false : badKey(testPasted) || !testPasted.trim())
     : false;
 
   return (
@@ -398,8 +396,8 @@ export function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         {(network !== "mainnet" || wantTest) && <>
         {network === "mainnet" && <Text style={s.h2}>Its practice key</Text>}
         {network === "mainnet" && <Text style={s.p}>This is a second key, on purpose. The test copy is where you practise co-signing, and co-signing means typing a key's 12 words into a phone. A separate practice key means the real key's words never get typed while you practise.</Text>}
-        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : !testCo ? "This wallet is on a Ledger, so the app can't make this key for you from recovery words. Make one now with the button below, or paste one you already have (its xpub, ideally)." : `One has been made on this phone from your recovery words: ${testCo.slice(0, 10)}…${testCo.slice(-8)}. Tap Next to use it, or paste a practice key you made instead.`}</Text>
-        <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder={testCo ? "Optional: an xpub, or a key 02… or 03…" : "An xpub, or a key 02… or 03…"} />
+        <Text style={s.p}>{testPasted.trim() ? "Using the key you pasted." : "Make one now with the button below, or paste one you already have (its xpub, ideally)."}</Text>
+        <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={testPasted} onChangeText={(t) => { setTestPasted(t); setChecked(null); }} placeholder="An xpub, or a key 02… or 03…" />
         {badKey(testPasted) && <Text style={s.error}>That isn't a public key or an xpub. Copy it whole from where the key was made.</Text>}
         <Btn kind="second" label={network === "mainnet" ? "Make a practice key now" : "Make a co-signer key now"} onPress={() => go({ name: "cosignerKey", words, forStart: "testPasted" })} />
         <Btn kind="link" label="Paste what I copied" onPress={async () => { const t = (await Clipboard.getStringAsync()).trim(); if (t) { setTestPasted(t); setChecked(null); } }} />
@@ -731,7 +729,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
           makeEntry: (file: any) => nextDestination(file, { address, text }),
           attest: async (entry: any) => {
             setStep(account.kind === "ledger" ? `Waiting for your Ledger — unlock it, open ${ledgerAppFor(NETWORK)}, and approve the message it shows.` : "Signing…");
-            const signature = await signStatementWith(account, attestationStatement(entry));
+            const signature = await signStatementWith(await signingAccount(account), attestationStatement(entry));
             setStep("Saving it to the Crowdlock on GitHub…");
             return { address: account.address, signature };
           },

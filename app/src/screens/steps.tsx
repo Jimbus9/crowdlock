@@ -23,7 +23,7 @@ import { NETWORK, chain } from "../config";
 import { Btn, NavRow, Warning } from "../ui/parts";
 import {
   whileOpen, finishedLocks, signedHere, markSignedJustNow, useBack, Input, walletAccount, LedgerHint, btc, when, lengthLabel, SPEED_LABEL, VB_HOME, VB_AGAIN,
-  VB_WAITING, useFeeRate, aboutFee, FeeChoice, SumRow, Changes, s,
+  VB_WAITING, useFeeRate, aboutFee, FeeChoice, SumRow, Changes, s, signingAccount,
 } from "./shared";
 import type { Go, Loaded, LockTerms, LockRow } from "./shared";
 
@@ -55,7 +55,7 @@ export function SignScreen({ words, url, go }: { words: string; url: string; go:
   const join = async () => {
     setBusy(true); setResult(null);
     let signature: string;
-    try { signature = await signStatementWith(account, c.statement); }
+    try { signature = await signStatementWith(await signingAccount(account), c.statement); }
     catch (e: any) { setResult({ ok: false, text: String(e.message ?? e) }); setBusy(false); return; }
     // A Crowdlock that names relays takes its members from there: posted
     // publicly, collected by its own repository within a few minutes.
@@ -80,7 +80,7 @@ export function SignScreen({ words, url, go }: { words: string; url: string; go:
     if (!toSign) return;
     setBusy(true); setResult(null);
     let signature: string;
-    try { signature = await signStatementWith(account, toSign.current.statement); }
+    try { signature = await signStatementWith(await signingAccount(account), toSign.current.statement); }
     catch (e: any) { setResult({ ok: false, text: String(e.message ?? e) }); setBusy(false); return; }
     if (!Array.isArray(c.crowdlock.relays)) {
       setResult({ ok: false, text: "This Crowdlock doesn't collect signatures from relays, so the app can't send this one. Ask its founder how to sign the new version." });
@@ -274,7 +274,7 @@ export function LockFlow({ words, url, go }: { words: string; url: string; go: G
     try {
       const lock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner!) };
       const feeRate = await chain.feeRate(whileOpen.feeSpeed);
-      const tx = await buildLock({ account, chain, lock, feeRate, amount: chosen.amount });
+      const tx = await buildLock({ account: await signingAccount(account), chain, lock, feeRate, amount: chosen.amount });
       // The terms are saved before the money moves, and checked saved.
       await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner! });
       await chain.broadcast(tx.hex);
@@ -475,7 +475,7 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
   const takeIt = async () => {
     setBusy(true); setError(null);
     try {
-      const tx = await takeHome({ account, chain, lock: oldLock, feeRate: await chain.feeRate(whileOpen.feeSpeed), medianTime: await chain.medianTime() });
+      const tx = await takeHome({ account: await signingAccount(account), chain, lock: oldLock, feeRate: await chain.feeRate(whileOpen.feeSpeed), medianTime: await chain.medianTime() });
       await chain.broadcast(tx.hex);
       whileOpen.overview = null;
       setDone(`${btc(tx.sent)} is on its way back to your waiting balance. The network fee was ${btc(tx.fee)}.`);
@@ -526,7 +526,7 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
     try {
       const newLock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner!) };
       const tx = await relock({
-        account, chain, lock: oldLock, newLock, addWaiting: extra > 0n,
+        account: await signingAccount(account), chain, lock: oldLock, newLock, addWaiting: extra > 0n,
         feeRate: await chain.feeRate(whileOpen.feeSpeed), medianTime: await chain.medianTime(),
       });
       // The new terms are saved before the money moves.

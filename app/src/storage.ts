@@ -1,24 +1,99 @@
-// Where the backup words live on the phone: the system's encrypted keystore
-// (Android Keystore), via expo-secure-store. Never in plain app storage, never
-// sent anywhere. If the app is deleted, they are gone from the phone — which
-// is why the fan writes them down first, and why restoring from them must work.
+// What the phone keeps, all of it in the system's encrypted keystore (Android
+// Keystore, via expo-secure-store): never in plain app storage, never sent
+// anywhere. If the app is deleted it is gone from the phone, which is why the
+// recovery words are written down first, and why restoring from them must work.
 import * as SecureStore from "expo-secure-store";
 import { moveRecords } from "./moves.mjs";
 
-const KEY = "crowdlock.words.v1";
+// ---------------------------------------------------------------------------
+// The wallet, in two entries
+//
+//   WALLET  what the app needs to show the wallet: its public account, or a
+//           Ledger's details. Not secret. Read at every start.
+//   SECRET  the recovery words (a words wallet only; a Ledger keeps its own
+//           key). Read only at the moment something is signed. Where the
+//           phone has a fingerprint or face unlock, the keystore hands the
+//           words over only after the person passes it ("locked").
+//
+// A locked entry is thrown away by the phone itself if a fingerprint or face
+// is added or removed in its settings: reading it then gives nothing, and the
+// person types their recovery words again. That is the phone's own rule, and
+// the safe one.
+// ---------------------------------------------------------------------------
+const WALLET = "crowdlock.wallet.v2";
+const SECRET = "crowdlock.secret.v2";
+// Before 16 November 2026 one entry held either the words or a Ledger's details.
+const OLD = "crowdlock.words.v1";
 
-export async function loadWords(): Promise<string | null> {
-  return SecureStore.getItemAsync(KEY);
+/** Can this phone lock the words to a fingerprint or face? (It needs one set up, of the strong kind.) */
+export function canLock(): boolean {
+  try { return SecureStore.canUseBiometricAuthentication(); } catch { return false; }
 }
 
-export async function saveWords(words: string): Promise<void> {
-  await SecureStore.setItemAsync(KEY, words, {
+async function writeWords(words: string, lock: boolean): Promise<void> {
+  await SecureStore.deleteItemAsync(SECRET).catch(() => {});
+  await SecureStore.setItemAsync(SECRET, words, {
     keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    ...(lock ? { requireAuthentication: true, authenticationPrompt: "Confirm it's you, to lock this wallet to you" } : {}),
   });
 }
 
-export async function forgetWords(): Promise<void> {
-  await SecureStore.deleteItemAsync(KEY);
+/** The saved wallet, as the public text the app starts from; null if there is none. */
+export async function loadWalletText(): Promise<string | null> {
+  return SecureStore.getItemAsync(WALLET);
+}
+
+/** What an install from before the two entries saved: the words, or a Ledger's details. */
+export async function loadOldEntry(): Promise<string | null> {
+  return SecureStore.getItemAsync(OLD);
+}
+
+/**
+ * Save a words wallet. The words are locked to the person's fingerprint or
+ * face where the phone can (it asks for it now); if they cancel, or the phone
+ * can't, the words are saved unlocked and the lock can be turned on later.
+ * `textFor(locked)` gives the public text to save beside them. Returns it.
+ */
+export async function saveWordsWallet(words: string, textFor: (locked: boolean) => string, lock = canLock()): Promise<string> {
+  let locked = lock;
+  try { await writeWords(words, locked); }
+  catch (e) {
+    if (!locked) throw e;
+    locked = false;
+    await writeWords(words, false);
+  }
+  // Unlocked words can be read back, so they are: if the phone did not keep them, say so now.
+  if (!locked && (await SecureStore.getItemAsync(SECRET)) !== words) throw new Error("the phone did not save the recovery words");
+  const text = textFor(locked);
+  await SecureStore.setItemAsync(WALLET, text);
+  await SecureStore.deleteItemAsync(OLD).catch(() => {});
+  return text;
+}
+
+/** Save a Ledger wallet: only its public details; any words on this phone are forgotten. */
+export async function saveLedgerWallet(text: string): Promise<void> {
+  await SecureStore.setItemAsync(WALLET, text);
+  await SecureStore.deleteItemAsync(SECRET).catch(() => {});
+  await SecureStore.deleteItemAsync(OLD).catch(() => {});
+}
+
+/**
+ * The recovery words, for signing. On a locked wallet the phone asks for the
+ * fingerprint or face first, showing `prompt`; cancelling rejects. Null means
+ * the phone no longer has them (see the note above about changed fingerprints).
+ */
+export async function readWords(prompt: string): Promise<string | null> {
+  const words = await SecureStore.getItemAsync(SECRET, { authenticationPrompt: prompt });
+  if (words) return words;
+  // An install from before the two entries whose move didn't finish.
+  const old = await SecureStore.getItemAsync(OLD);
+  return old && !old.startsWith("ledger:") ? old : null;
+}
+
+export async function forgetWallet(): Promise<void> {
+  await SecureStore.deleteItemAsync(WALLET);
+  await SecureStore.deleteItemAsync(SECRET);
+  await SecureStore.deleteItemAsync(OLD);
 }
 
 // How fast the fan wants their transactions to confirm: slow, normal or fast.

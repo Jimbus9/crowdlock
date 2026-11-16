@@ -20,7 +20,7 @@ import { NETWORK, chain } from "../config";
 import { Btn, NavRow, Warning } from "../ui/parts";
 import {
   whileOpen, useBack, useRefresh, CheckedLine, Input, walletAccount, LedgerHint, btc, when, money, parseBtc, atUtc, VB_COMMIT, VB_COMMIT_PART, useFeeRate, aboutFee,
-  FeeChoice, SumRow, Confirm, s,
+  FeeChoice, SumRow, Confirm, s, signingAccount,
 } from "./shared";
 import type { Go, Loaded } from "./shared";
 import { WordsInput } from "./wallet";
@@ -326,9 +326,11 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
     let committed = 0n, fee = 0n, remainder = 0n, made = 0;
     try {
       const feeRate = await chain.feeRate(whileOpen.feeSpeed);
+      // Unlocked once, for every commitment in this go.
+      const signer = await signingAccount(account);
       for (const x of chosen) {
         if (several) setProgress(`Signing ${made + 1} of ${chosen.length}…`);
-        const r = await buildCommitment({ account, chain, lock: x.lock, coin: x.coin, proposalHash: p.hash, destination: p.destination, amount: sats === null ? "all" : sats, feeRate, maxFee: c.crowdlock.max_commitment_fee });
+        const r = await buildCommitment({ account: signer, chain, lock: x.lock, coin: x.coin, proposalHash: p.hash, destination: p.destination, amount: sats === null ? "all" : sats, feeRate, maxFee: c.crowdlock.max_commitment_fee });
         const v = await checkCommitment({ record: r.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
         if (!v.valid) throw new Error(`the commitment didn't pass its own check: ${v.reason}`);
         const posted = await postCommitment(c.crowdlock, { type: "commitment", proposal: p.hash, record: r.record });

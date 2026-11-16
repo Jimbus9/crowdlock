@@ -11,7 +11,7 @@ import { accountFromWords, ledgerAccountFrom } from "../wallet/core.mjs";
 import { isLedgerWallet, readLedgerWallet, ledgerUser, ledgerAppFor } from "../ledgerDevice";
 // @ts-ignore — plain module shared with the chain tests
 import { STARTING_LIST } from "../crowdlocks.mjs";
-import { loadAddedCrowdlocks, loadFeeSpeed, saveFeeSpeed } from "../storage";
+import { loadAddedCrowdlocks, loadFeeSpeed, saveFeeSpeed, loadWalletText, loadOldEntry, saveWordsWallet, saveLedgerWallet, readWords } from "../storage";
 import type { FeeSpeed } from "../storage";
 import { NETWORK, chain } from "../config";
 // The look (one theme file) and the shared parts every screen is built from.
@@ -28,7 +28,7 @@ export type Screen =
   | { name: "welcome" }
   | { name: "showWords"; words: string }
   | { name: "checkWords"; words: string }
-  | { name: "restore" }
+  | { name: "restore"; again?: string }
   | { name: "home"; words: string }
   | { name: "addMoney"; words: string }
   | { name: "lock"; words: string; url: string }
@@ -214,15 +214,79 @@ export function Input(props: TextInputProps) {
 
 // The wallet on this phone: recovery words, or a Ledger that holds the key.
 // Everything else in the app treats them the same; only signing differs.
-export function walletAccount(words: string): any {
-  if (isLedgerWallet(words)) {
-    const w = readLedgerWallet(words);
-    return { ...ledgerAccountFrom({ keyExpression: w.keyExpression, network: NETWORK, useLedger: ledgerUser(w, NETWORK) }), ledgerName: w.name };
+//
+// What the screens pass around (their `words` prop) is the wallet's public
+// text, never the recovery words: "ledger:{…}" for a Ledger, "watch:{…}" for
+// a words wallet. It is enough to show addresses, balances and locks. The
+// words themselves are read from the keystore only by signingAccount, at the
+// moment something is signed.
+const WATCH = "watch:";
+const watchText = (keyExpression: string, locked: boolean) => WATCH + JSON.stringify({ keyExpression, locked });
+
+export function walletAccount(text: string): any {
+  if (isLedgerWallet(text)) {
+    const w = readLedgerWallet(text);
+    return { ...ledgerAccountFrom({ keyExpression: w.keyExpression, network: NETWORK, useLedger: ledgerUser(w, NETWORK) }), ledgerName: w.name, ledgerVia: w.via };
   }
-  return accountFromWords(words, NETWORK);
+  if (text.startsWith(WATCH)) {
+    const w = JSON.parse(text.slice(WATCH.length));
+    // The same public account a Ledger wallet is shown from; it cannot sign.
+    return {
+      ...ledgerAccountFrom({ keyExpression: w.keyExpression, network: NETWORK, useLedger: null }),
+      kind: "words", locked: !!w.locked,
+      signer: () => { throw new Error("the wallet has to be unlocked before it can sign"); },
+    };
+  }
+  // An install from before the words were kept apart, whose move didn't finish: as it was.
+  return { ...accountFromWords(text, NETWORK), holdsKey: true };
 }
 
-// Shown wherever a Ledger wallet is about to be asked to sign.
+/** Save a new or restored words wallet (see saveWordsWallet in src/storage). Returns its public text. */
+export async function keepWords(words: string, lock?: boolean): Promise<string> {
+  const { keyExpression } = accountFromWords(words, NETWORK);
+  return saveWordsWallet(words, (locked) => watchText(keyExpression, locked), lock);
+}
+
+/**
+ * The wallet this phone starts with, as its public text; null if there is none.
+ * An install from before the words were kept apart is moved over here, once,
+ * without asking for a fingerprint (so starting never waits on one): the lock
+ * is offered on the Wallet screen.
+ */
+export async function loadWallet(): Promise<string | null> {
+  const saved = await loadWalletText();
+  if (saved) return saved;
+  const old = await loadOldEntry();
+  if (!old) return null;
+  if (isLedgerWallet(old)) { await saveLedgerWallet(old).catch(() => {}); return old; }
+  try { return await keepWords(old, false); }
+  catch { return old; }   // shown and signed with as before; tried again next start
+}
+
+const KEY_GONE = "This phone can no longer unlock your wallet. That happens when a fingerprint or face is added or removed in the phone's settings: the phone throws its copy of the key away. Your money is safe. Go to More, then Wallet, then \"Type my recovery words again\", and use the words on your paper. Nothing was signed.";
+
+/**
+ * The account that can sign. A Ledger wallet signs on the device, so it is
+ * the account as it is. A words wallet's words are read from the keystore
+ * now, after the fingerprint or face check where the wallet is locked, and
+ * are gone again when the caller has finished with what this returns.
+ * Throws, in words for the screen, if the person cancels or the phone no
+ * longer has the words.
+ */
+export async function signingAccount(account: any): Promise<any> {
+  if (account.kind === "ledger" || account.holdsKey) return account;
+  let words: string | null;
+  try { words = await readWords("Confirm it's you, to sign"); }
+  catch (e: any) {
+    const why = String(e?.message ?? e);
+    throw new Error(/cancel/i.test(why) ? "You cancelled, so nothing was signed." : `The phone wouldn't unlock your wallet, so nothing was signed. (${why})`);
+  }
+  if (!words) throw new Error(KEY_GONE);
+  const full = accountFromWords(words, NETWORK);
+  if (full.address !== account.address) throw new Error("The recovery words saved on this phone don't make this wallet's address, so nothing was signed.");
+  return full;
+}
+
 export function LedgerHint({ account }: { account: any }) {
   if (account?.kind !== "ledger") return null;
   return <Text style={s.note}>This wallet signs on your Ledger ({account.ledgerName}). Keep it unlocked, close by or plugged in, with the {ledgerAppFor(NETWORK)} app open, and approve on its screen when it asks.</Text>;

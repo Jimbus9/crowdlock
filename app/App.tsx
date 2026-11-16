@@ -24,14 +24,14 @@ import { StatusBar } from "expo-status-bar";
 import { takeHome } from "./src/wallet/core.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import { STARTING_LIST, MOVED_ADDRESSES, fileUrlFromOpenLink } from "./src/crowdlocks.mjs";
-import { loadWords, loadFeeSpeed, loadLook, moveSavedRecords } from "./src/storage";
+import { loadFeeSpeed, loadLook, moveSavedRecords } from "./src/storage";
 import { NETWORK, IS_TEST_MONEY } from "./src/config";
 import { askAfresh } from "./src/wallet/esplora.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
 import { setLook, useTheme } from "./src/ui/theme";
 import { NavRow, TabBar, TopBar } from "./src/ui/parts";
 import type { TabName } from "./src/ui/parts";
-import { whileOpen, finishedLocks, BackCtx, RefreshCtx, RevealCtx, s, setStyles } from "./src/screens/shared";
+import { whileOpen, finishedLocks, BackCtx, RefreshCtx, RevealCtx, s, setStyles, loadWallet } from "./src/screens/shared";
 import type { Screen, Refresher, Box } from "./src/screens/shared";
 import { Welcome, LedgerSetup, ShowWords, CheckWords, Restore, AddMoney, Send, WalletScreen, FeeSpeedScreen } from "./src/screens/wallet";
 import { Tabs, Help, About } from "./src/screens/home";
@@ -129,13 +129,13 @@ export default function App() {
     // anything reads it (see src/moves.mjs).
     moveSavedRecords(MOVED_ADDRESSES, STARTING_LIST).catch(() => false).then(() => Linking.getInitialURL()).then((u) => {
       pending.current = fileUrlFromOpenLink(u ?? null);
-      loadWords().then((w) => setScreen(w ? { name: "home", words: w } : { name: "welcome" }));
+      loadWallet().then((w) => setScreen(w ? { name: "home", words: w } : { name: "welcome" }));
     });
     const sub = Linking.addEventListener("url", (e) => {
       const file = fileUrlFromOpenLink(e.url);
       if (!file) return;
       pending.current = file;
-      loadWords().then((w) => { if (w) setScreen({ name: "home", words: w }); });
+      loadWallet().then((w) => { if (w) setScreen({ name: "home", words: w }); });
     });
     return () => sub.remove();
   }, [setScreen]);
@@ -199,7 +199,7 @@ export default function App() {
             {screen.name === "welcome" && <Welcome go={setScreen} />}
             {screen.name === "showWords" && <ShowWords words={screen.words} go={setScreen} />}
             {screen.name === "checkWords" && <CheckWords words={screen.words} go={setScreen} />}
-            {screen.name === "restore" && <Restore go={setScreen} />}
+            {screen.name === "restore" && <Restore again={screen.again} go={setScreen} />}
             {screen.name === "home" && <Tabs words={screen.words} tab={tab} setTab={setTab} go={setScreen} />}
             {screen.name === "addMoney" && <AddMoney words={screen.words} />}
             {screen.name === "lock" && <LockFlow words={screen.words} url={screen.url} go={setScreen} />}

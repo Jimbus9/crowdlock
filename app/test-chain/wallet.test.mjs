@@ -230,6 +230,22 @@ await refuses("A send, when the explorer understates a coin (the rest would have
 const wrongCoin = { ...chain, txHex: async () => chain.txHex(top.txid) };
 await refuses("A send, when the explorer hands over a different transaction for a coin",
   () => buildSend({ account: miner, chain: wrongCoin, to: fan.address, amount: 10_000n, feeRate: 2 }), "don't agree with the coin itself");
+// What the app shows a words wallet from: its public account only. The words
+// stay in the keystore until something is signed, so every screen works from
+// this, and it must be the same wallet in every respect but signing.
+{
+  const { ledgerAccountFrom } = await import("../src/wallet/core.mjs");
+  const other = accountFromWords(newWords(), net);
+  const shown = { ...ledgerAccountFrom({ keyExpression: fan.keyExpression, network: net, useLedger: null }), kind: "words", signer: () => { throw new Error("the wallet has to be unlocked before it can sign"); } };
+  check("A wallet shown from its public half has the same address and key as the words give", shown.address === fan.address && shown.publicKey === fan.publicKey && shown.path === fan.path, shown.address);
+  const LT = 1900000000;
+  const a = lockFor({ account: shown, cosignerPubkey: other.publicKey, locktime: LT }), b = lockFor({ account: fan, cosignerPubkey: other.publicKey, locktime: LT });
+  check("…and makes the same lock, so a lock planned on screen is the lock the words then sign for", a.address === b.address && a.ownerPubkey === b.ownerPubkey, a.address);
+  await refuses("…but it cannot sign: a payment built with it is refused, nothing leaves",
+    () => buildSend({ account: shown, chain, to: miner.address, amount: 10_000n, feeRate: 2 }), "has to be unlocked");
+  const viaWords = await buildSend({ account: fan, chain, to: miner.address, amount: 10_000n, feeRate: 2 });
+  check("The same payment signs once the words are read", /^[0-9a-f]{64}$/.test(viaWords.txid));
+}
 await refuses("Words that are not valid backup words",
   () => accountFromWords(broken, net), "not valid backup words");
 

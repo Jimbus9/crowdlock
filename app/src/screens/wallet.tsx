@@ -7,14 +7,14 @@ import * as Clipboard from "expo-clipboard";
 import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  newWords, wordsAreValid, tidyWords, suggestWords, buildSend, checkLedgerKey, readLedgerAccount,
+  newWords, wordsAreValid, tidyWords, suggestWords, buildSend, checkLedgerKey, readLedgerAccount, accountFromWords,
 } from "../wallet/core.mjs";
 import { ledgerWalletText, withLedger, lookForLedgers, askForBluetooth, ledgerAppFor } from "../ledgerDevice";
-import { saveWords, forgetWords, forgetAddedCrowdlocks, forgetSavedLocks, forgetLedgerStore } from "../storage";
+import { saveLedgerWallet, forgetWallet, canLock, readWords, forgetAddedCrowdlocks, forgetSavedLocks, forgetLedgerStore } from "../storage";
 import { NETWORK, chain, EXPLORER_WEB } from "../config";
 // The look (one theme file) and the shared parts every screen is built from.
 import { Btn, NoScreenshots, Warning } from "../ui/parts";
-import { whileOpen, SECRET_WORDS, Input, walletAccount, LedgerHint, btc, FeeChoice, Confirm, s } from "./shared";
+import { whileOpen, SECRET_WORDS, Input, walletAccount, LedgerHint, btc, FeeChoice, Confirm, s, signingAccount, keepWords } from "./shared";
 import type { Go } from "./shared";
 
 export function Welcome({ go }: { go: Go }) {
@@ -95,7 +95,7 @@ export function LedgerSetup({ from, go }: { from?: string; go: Go }) {
           // A different wallet: forget the old one's saved lock terms (they're
           // on the register, and restoring its words finds them again).
           if (from) { await forgetSavedLocks(); await forgetLedgerStore(); }
-          await saveWords(text); go({ name: "home", words: text });
+          await saveLedgerWallet(text); go({ name: "home", words: text });
         }} />
         <Btn label="Try again" kind="second" onPress={() => { setWallet(null); setStage("start"); }} />
       </>}
@@ -130,7 +130,7 @@ export function CheckWords({ words, go }: { words: string; go: Go }) {
   return (
     <CheckEveryWord
       words={words}
-      onDone={async () => { await saveWords(words); go({ name: "home", words }); }}
+      onDone={async () => { go({ name: "home", words: await keepWords(words) }); }}
       onShowAgain={() => go({ name: "showWords", words })}
     />
   );
@@ -212,8 +212,13 @@ export function WordsInput({ value, onChange, placeholder }: { value: string; on
   </>;
 }
 
-export function Restore({ go }: { go: Go }) {
+// Restoring a wallet from its recovery words. With `again` (the public text of
+// the wallet already on this phone) it is that same wallet's words typed in
+// again, after the phone has thrown its copy away: only the words that make
+// this wallet's address are accepted.
+export function Restore({ again, go }: { again?: string; go: Go }) {
   const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
   // 12 is what this app makes; 15 to 24 come from other wallets (a Ledger
   // makes 24). All are standard, so all are accepted.
   const count = tidyWords(text).split(" ").filter(Boolean).length;
@@ -222,16 +227,24 @@ export function Restore({ go }: { go: Go }) {
 
   const finish = async () => {
     const words = tidyWords(text);
-    await saveWords(words);
-    go({ name: "home", words });
+    setError(null);
+    try {
+      if (again && accountFromWords(words, NETWORK).address !== walletAccount(again).address) {
+        setError("Those words are valid, but they make a different wallet from the one on this phone. Check you have the right paper.");
+        return;
+      }
+      go({ name: "home", words: await keepWords(words) });
+    } catch (e: any) { setError(String(e.message ?? e)); }
   };
 
   return (
     <View>
-      <Text style={s.h1}>Restore your wallet</Text>
+      <Text style={s.h1}>{again ? "Type your recovery words again" : "Restore your wallet"}</Text>
       <Text style={s.p}>Type your recovery words, in order, with spaces between them. Usually 12 or 24.</Text>
-      <WordsInput value={text} onChange={setText} />
-      <Btn label="Restore" disabled={!valid} onPress={finish} />
+      {again && <Text style={s.note}>This puts the key back on this phone for the wallet you already have here. Your locks and your bitcoin are untouched.</Text>}
+      <WordsInput value={text} onChange={(t) => { setText(t); setError(null); }} />
+      {error && <Text style={s.error}>{error}</Text>}
+      <Btn label={again ? "Use these words" : "Restore"} disabled={!valid} onPress={finish} />
     </View>
   );
 }
@@ -278,7 +291,7 @@ export function Send({ words, go }: { words: string; go: Go }) {
     try {
       const sats = all ? "all" : BigInt(Math.round(Number(amount) * 1e8));
       const feeRate = await chain.feeRate(whileOpen.feeSpeed);
-      setReview(await buildSend({ account, chain, to, amount: sats, feeRate }));
+      setReview(await buildSend({ account: await signingAccount(account), chain, to, amount: sats, feeRate }));
     } catch (e: any) { setError(String(e.message ?? e)); }
     setBusy(false);
   };
@@ -346,7 +359,7 @@ export function WalletScreen({ words, go }: { words: string; go: Go }) {
   };
 
   const [asking, setAsking] = useState(false);
-  const remove = async () => { await forgetWords(); await forgetAddedCrowdlocks(); await forgetSavedLocks(); await forgetLedgerStore(); go({ name: "welcome" }); };
+  const remove = async () => { await forgetWallet(); await forgetAddedCrowdlocks(); await forgetSavedLocks(); await forgetLedgerStore(); go({ name: "welcome" }); };
 
   return (
     <View>
@@ -354,6 +367,7 @@ export function WalletScreen({ words, go }: { words: string; go: Go }) {
       <Text style={s.p}>{account.kind === "ledger"
         ? `This wallet signs on your Ledger (${account.ledgerName}). The key never leaves the Ledger.`
         : "This wallet's key is kept on this phone. Your recovery words on paper are its only backup."}</Text>
+      {account.kind !== "ledger" && <WordsLock words={words} account={account} go={go} />}
       <Text style={s.label}>Your address</Text>
       <Text style={s.mono} selectable>{account.address}</Text>
       {account.kind === "ledger" && <>
@@ -370,6 +384,44 @@ export function WalletScreen({ words, go }: { words: string; go: Go }) {
               : "Only do this if your recovery words are written down. Without them the money cannot be recovered."}
             yes="Remove this wallet" onYes={remove} onCancel={() => setAsking(false)} />
         : <Btn kind="danger" label="Remove wallet from this phone" onPress={() => setAsking(true)} />}
+    </View>
+  );
+}
+
+// A words wallet's lock: whether signing asks for a fingerprint or face first,
+// turning that on, and typing the words in again if the phone has thrown its
+// copy of the key away.
+function WordsLock({ words, account, go }: { words: string; account: any; go: Go }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const able = canLock();
+  // Turning the lock on: the words are read (unlocked, so no prompt) and saved
+  // again locked, which is when the phone asks for the fingerprint or face.
+  const turnOn = async () => {
+    setBusy(true); setError(null);
+    try {
+      const saved = await readWords("Confirm it's you");
+      if (!saved || accountFromWords(saved, NETWORK).address !== account.address) throw new Error("This phone no longer has this wallet's recovery words. Use \"Type my recovery words again\" below.");
+      const text = await keepWords(saved, true);
+      if (!walletAccount(text).locked) setError("The lock wasn't turned on: the fingerprint or face check didn't finish. Your wallet is as it was.");
+      // Every screen starts again from the wallet as it now is, then back here.
+      else { go({ name: "home", words: text }); go({ name: "wallet", words: text }); }
+    } catch (e: any) { setError(String(e.message ?? e)); }
+    setBusy(false);
+  };
+  return (
+    <View>
+      {account.locked
+        ? <Text style={s.good}>Signing asks for your fingerprint or face first.</Text>
+        : able
+          ? <Warning level="know" title="Anyone holding this phone unlocked can sign">
+              Turn on the lock and every payment, lock and signature will ask for your fingerprint or face first.
+            </Warning>
+          : <Text style={s.note}>This phone has no fingerprint or face unlock set up, so anyone holding it unlocked can sign with this wallet. Set one up in the phone's settings, then come back here to turn on the lock.</Text>}
+      {!account.locked && able && <Btn label={busy ? "Turning it on…" : "Lock signing to my fingerprint or face"} disabled={busy} onPress={turnOn} />}
+      {account.locked && <Text style={s.note}>If a fingerprint or face is added or removed in the phone's settings, the phone throws away its copy of the key, and the app asks for your recovery words again. Keep the paper.</Text>}
+      {error && <Text style={s.error}>{error}</Text>}
+      <Btn kind="second" label="Type my recovery words again" onPress={() => go({ name: "restore", again: words })} />
     </View>
   );
 }
