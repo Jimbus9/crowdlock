@@ -220,7 +220,7 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
       const named = () => get("/v1/fees/recommended", "json", false, backup ? 0 : undefined);
       const byBlocks = async () => {
         const e = await get("/fee-estimates", "json", false, 1);
-        return { fastestFee: e?.["1"] ?? e?.["2"], halfHourFee: e?.["3"], hourFee: e?.["6"] };
+        return { fastestFee: rateWithin(e, 1), halfHourFee: rateWithin(e, 3), hourFee: rateWithin(e, 6) };
       };
       let f = null;
       for (const way of !backup ? [named] : backupFirst() ? [byBlocks, named] : [named, byBlocks]) {
@@ -265,23 +265,41 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
   };
 }
 
+// The backup explorer gives a fee rate for each number of blocks a payment may
+// wait, and only for the waits it has an estimate for (on a quiet network that
+// can be just "144", "504" and "1008"). The rate for a wait is the one given
+// for it, or else for the shortest longer wait, or else for the longest there is.
+function rateWithin(estimates, blocks) {
+  const waits = Object.keys(estimates ?? {}).map(Number).filter((n) => Number.isFinite(n) && Number.isFinite(estimates[n])).sort((a, b) => a - b);
+  if (!waits.length) return undefined;
+  return estimates[waits.find((n) => n >= blocks) ?? waits[waits.length - 1]];
+}
+
 // What an explorer says when offered a payment the network already has.
 const ALREADY_SENT = /already in (the )?(block ?chain|mempool|utxo set)|txn-already-(known|in-mempool)/i;
 
-// How long the backup stays first in line after the main explorer fails.
-export const PREFER_MS = 60000;
+// How long the backup stays first in line after the main explorer fails. Ten
+// minutes, not one: on a network that can't reach the main explorer at all,
+// every return to it costs the fan an eight-second wait before the backup is
+// asked, and the two explorers are equals, so nothing is lost by staying.
+export const PREFER_MS = 600000;
 
 /**
  * A second explorer the app may ask when the first is silent, busy or broken,
- * by the first one's address. Real bitcoin only: nobody else runs a public
- * one for testnet4. Both speak the same language (mempool.space's is built on
- * Blockstream's). Neither can move money; each is believed about balances and
- * the chain's clock while it is the one answering. A caller opts in by passing
- * `backup`; nothing gets one by default.
+ * by the first one's address. Both speak the same language (mempool.space's
+ * is built on Blockstream's). Neither can move money; each is believed about
+ * balances and the chain's clock while it is the one answering. A caller opts
+ * in by passing `backup`; nothing gets one by default.
+ *
+ * The test network has one too (16 November 2026): James's mobile network
+ * could not reach mempool.space at all, in the app or in a browser, while it
+ * was up for everyone else. An app with one explorer is an app that doesn't
+ * work on whichever networks can't reach that one.
  * @type {Record<string, string>}
  */
 export const BACKUP_EXPLORERS = {
   "https://mempool.space/api": "https://blockstream.info/api",
+  "https://mempool.space/testnet4/api": "https://blockstream.info/testnet4/api",
 };
 
 /** Public explorers by network. A fan can swap in their own. */
