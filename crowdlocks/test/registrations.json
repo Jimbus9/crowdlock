@@ -39,6 +39,11 @@
           "version": 2,
           "signature": "IF9//lYCeZaBix6B19E03i9DaZ82z/v0zsHmPYgUamcsNZUhw5Vrqv+0EAjLKbD2BZmZA64RKbNBBp8syUCvPgQ=",
           "signed": "2026-11-15"
+        },
+        {
+          "version": 3,
+          "signature": "IE6Aqj8hbpDShLqc/Q/tSOkY2ey0uEHk/HUy6Lgo304kW9YHpaGmxwe4QryXKYdrjGRXMgkm3SLkEa7iCJFXkk8=",
+          "signed": "2026-11-16"
         }
       ]
     }
