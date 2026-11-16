@@ -463,6 +463,10 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         let sent = 0; const failed: string[] = [];
         for (const g of take) {
           try {
+            // Checked when the page loaded, and checked again now: the co-signer's
+            // signature goes only on a commitment that passes at the moment of signing.
+            const v = await checkCommitment({ record: g.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
+            if (!v.valid) throw new Error(`A commitment no longer passes its check, so it was not completed: ${v.reason}`);
             const hex = await completeCommitmentWith({ words, record: g.record, chain });
             await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
             if (sendHere) await chain.broadcast(hex);
