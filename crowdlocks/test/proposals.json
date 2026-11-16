@@ -83,6 +83,23 @@
         "rate": "1 BTC = 10.00 GBP",
         "at": "2026-11-16T19:14:58Z"
       }
+    },
+    {
+      "title": "Actual version 4 declaration test",
+      "text": "To test the website",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-16T21:06:39Z",
+      "closes": "2026-11-30T21:06:39Z",
+      "settles_by": "2026-12-07T21:06:39Z",
+      "declaration_version": 4,
+      "hash": "a5df4958f19036e672ea1732894da9681af114883884c90809569473f361c0f8",
+      "target": {
+        "sats": 100000000,
+        "rate": "1 BTC = 10.00 GBP",
+        "at": "2026-11-16T21:06:39Z"
+      }
     }
   ]
 }
