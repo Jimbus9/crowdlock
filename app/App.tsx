@@ -3539,7 +3539,7 @@ function StartCrowdlock({ words, go }: { words: string; go: Go }) {
         <Text style={s.p}>A Crowdlock lets a crowd commit money to buying something together, without anyone pooling it or holding anyone else's. You write what it's for; the app sets it up in your own GitHub account.</Text>
         <Text style={s.label}>Which money?</Text>
         {network === "mainnet"
-          ? <Text style={s.p}><Text style={s.bold}>Real bitcoin.</Text> Later on you can add a test copy, if you or your co-signer want to practise with test money first. You don't have to.</Text>
+          ? <Text style={s.p}><Text style={s.bold}>Real bitcoin.</Text> A few pages on, you can choose to add a test copy, if you or your co-signer want to practise with test money first. You don't have to.</Text>
           : <Text style={s.p}><Text style={s.bold}>Test bitcoin.</Text> This is the test app, so what you start here uses test bitcoin, which has no value. Practise everything (joining, locking, committing, taking a lock home) before anything is real. To start one with real bitcoin, use the Crowdlock app for real bitcoin.</Text>}
       </>}
 

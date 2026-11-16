@@ -105,11 +105,27 @@ export async function withLedger<T>(w: { deviceId: string; device?: any }, netwo
     })(), CONNECT_LIMIT_MS, "timed out", resetKit);
   } catch (e: any) { throw new Error(plain(e, network) + (/timed out|timeout/i.test(String(e?.message ?? e)) ? ` (It stopped while ${stage}.${/Bluetooth/.test(stage) ? " If your phone is asking to pair with the Ledger, accept that first." : ""})` : "")); }
   try { return await fn(session); }
-  catch (e: any) { throw new Error(plain(e, network)); }
+  catch (e: any) {
+    const said = plain(e, network);
+    // Say where it was, so a dropped link after connecting isn't mistaken for never finding the Ledger.
+    throw new Error(/^Couldn't reach the Ledger/.test(said) ? `${said} (It had connected; the link was lost while the Ledger was being asked to sign.)` : said);
+  }
   finally {
     await saveLedgerStore(store).catch(() => {});
     await session.close().catch(() => {});
   }
+}
+
+/**
+ * What the Ledger's own code reported, for the small print under "Couldn't
+ * reach the Ledger": that sentence covers several different faults, and this
+ * is the only way to tell them apart from a screenshot. Wording only.
+ */
+function detail(e: any): string {
+  const parts = [e?._tag, e?.name, e?.message, e?.originalError?._tag, e?.originalError?.message]
+    .map((x) => (typeof x === "string" ? x.trim() : "")).filter((x) => x && x !== "Error");
+  const said = [...new Set(parts)].join(" · ").slice(0, 240);
+  return said ? ` (What the Ledger connection reported: ${said})` : "";
 }
 
 /** Ledger, Bluetooth and cable errors, in words a fan can act on. */
@@ -124,7 +140,7 @@ export function plain(e: any, network = "testnet4"): string {
   if (/Permissions not granted|BlePermissionsNotGranted|Unauthorized/i.test(m)) return "Allow Crowdlock's Nearby devices permission in your phone's settings (Apps → Crowdlock → Permissions), then try again — or plug the Ledger in with a USB cable.";
   if (/BluetoothRequired|PoweredOff|bluetooth.*off|BleNotSupported/i.test(m)) return "Turn on Bluetooth and try again — or plug the Ledger in with a USB cable.";
   if (/Couldn't find your Ledger/i.test(m)) return m;
-  if (/timeout|timed out|disconnected|Disconnected|not found|no device|NoAccessibleDevice|OpeningConnection/i.test(m)) return "Couldn't reach the Ledger. Keep it unlocked and close to the phone (or plugged in), then try again.";
+  if (/timeout|timed out|disconnected|Disconnected|not found|no device|NoAccessibleDevice|OpeningConnection/i.test(m)) return `Couldn't reach the Ledger. Keep it unlocked and close to the phone (or plugged in), then try again.${detail(e)}`;
   return m;
 }
 

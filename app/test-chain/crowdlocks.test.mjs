@@ -692,6 +692,10 @@ console.log("-".repeat(80));
   const v2Text = canonicalise(v1Text.replace(/\n$/, "") + "\nA sentence added in version 2.\n");
   const withV2 = { ...tFile, declaration_versions: [{ version: 2, file: "crowdlocks/test/declaration-test-v2.txt", sha256: declarationHash(v2Text), published: "2027-01-31", reason: "Clearer wording." }] };
   const reg = JSON.parse(readFileSync(join(REPO, "crowdlocks/test/registrations.json"), "utf8"));
+  // The live test register changes as people test: members sign whatever
+  // versions the real test Crowdlock has published. This section invents its
+  // own version 2, so it starts from members who have signed only version 1.
+  reg.members = reg.members.map(({ also_signed, version, ...m }) => m);
   const someone = reg.members[0];
   const serve = (r) => siteFetch({ "crowdlocks/kop-fund-testnet4.json": JSON.stringify(withV2), "crowdlocks/test/declaration-test-v2.txt": v2Text, "crowdlocks/test/registrations.json": JSON.stringify(r) });
   const v = await loadCrowdlock(`${SITE}crowdlocks/kop-fund-testnet4.json`, serve(reg));
