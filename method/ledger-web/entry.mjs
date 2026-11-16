@@ -1,4 +1,5 @@
-// The Lock and Commit pages' Ledger support, as one browser bundle.
+// The Lock, Commit and joining pages' Ledger support, as one browser bundle.
+// (The joining page uses signStatementWith: the app's own Signed Message call.)
 //
 // WHAT THIS IS. A thin join between three things that already exist and are
 // already proved on a real Nano X in the app: the app's key module
@@ -20,7 +21,7 @@ import * as bitcoinApi from "@ledgerhq/ledger-bitcoin";
 import TransportBase from "@ledgerhq/hw-transport";
 import {
   NETWORKS, readLedgerAccount, ledgerAccountFrom, lockFor, buildLock, takeHome, lockState,
-  xpubForKey, checkLedgerKey, buildCommitment, checkCommitment, commitmentPaid,
+  xpubForKey, checkLedgerKey, buildCommitment, checkCommitment, commitmentPaid, signStatementWith,
 } from "../../app/src/wallet/core.mjs";
 import { esploraChain } from "../../app/src/wallet/esplora.mjs";
 import { transportFor, withTimeout } from "../../app/src/ledgerLink.mjs";
@@ -60,7 +61,7 @@ export function plain(e, network = "testnet4") {
   if (/Open the .* app|0x6e01|0x6d02|0x6511|0x6e00|CLA_NOT_SUPPORTED|app.*not open/i.test(m)) return `Open the ${app} app on your Ledger and try again.`;
   if (/upgrade/i.test(m)) return `Update the ${app} app on your Ledger (in Ledger Live), then try again.`;
   if (/locked|0x5515|0x6b0c|DeviceLocked/i.test(m)) return "Unlock your Ledger with its PIN and try again.";
-  if (/NotAllowed|SecurityError|No device selected|no device|cancel/i.test(m)) return "No Ledger was chosen. Plug it in, unlock it, open the Bitcoin app, and choose it when the browser asks.";
+  if (/NotAllowed|SecurityError|No device selected|no device|NoAccessibleDevice|cancel/i.test(m)) return "No Ledger was chosen. Plug it in, unlock it, open the Bitcoin app, and choose it when the browser asks.";
   if (/busy|already|in use|claimInterface|Access denied/i.test(m)) return "Another program is using the Ledger. Close Ledger Live and any other wallet that is open, then try again.";
   if (/timeout|timed out|disconnected|not found/i.test(m)) return "Couldn't reach the Ledger. Keep it unlocked and plugged in, then try again.";
   return m;
@@ -119,4 +120,4 @@ export async function connectLedger(network) {
   } catch (e) { throw new Error(plain(e, network)); }
 }
 
-export { lockFor, buildLock, takeHome, lockState, xpubForKey, checkLedgerKey, esploraChain, buildCommitment, checkCommitment, commitmentPaid };
+export { lockFor, buildLock, takeHome, lockState, xpubForKey, checkLedgerKey, esploraChain, buildCommitment, checkCommitment, commitmentPaid, signStatementWith };
