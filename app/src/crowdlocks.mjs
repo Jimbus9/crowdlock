@@ -22,7 +22,7 @@
 import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, currentVersion, signedVersions, hasSigned } from "../../method/js/crowdlock.mjs";
 import { proposalVersion } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
-import { esploraChain, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
+import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
 import { earlyReleases } from "../../method/js/release.mjs";
 import { checkCosignerXpubs } from "./wallet/core.mjs";
 
@@ -256,9 +256,29 @@ export function membershipOf(register, address) {
 }
 
 /**
+ * Where the app reads the chain for a Crowdlock: its own block explorer for
+ * the Crowdlock's network (with its backup), and never the address the
+ * Crowdlock's file names as `chain_api`. A total is only worth showing if
+ * nobody with something to gain chose who counted it: a founder who could
+ * name the explorer could name one of their own that reports locks which
+ * don't exist, and hides the releases the co-signer's record is there to show.
+ * Throws for a network this app has no explorer for.
+ */
+export function explorerFor(crowdlock) {
+  const api = EXPLORERS[crowdlock?.network];
+  if (!api) throw new Error(`this app has no block explorer for the ${crowdlock?.network} network`);
+  return api;
+}
+const chainFor = (crowdlock, fetchImpl) => {
+  const api = explorerFor(crowdlock);
+  return esploraChain(api, fetchImpl, undefined, { backup: BACKUP_EXPLORERS[api] ?? "" });
+};
+
+/**
  * The committed total, by the counting rule: confirmed coins at every lock
- * whose date is still ahead and which meets the minimum. Read from the
- * Crowdlock's own chain source, never from anything the register claims.
+ * whose date is still ahead and which meets the minimum. Read from the app's
+ * own explorer (see explorerFor), never from anything the register or the
+ * Crowdlock's file claims.
  *
  * The only count of people it gives is committed members: members holding at
  * least one lock that counts. A count of signatures is never shown, because a
@@ -267,7 +287,7 @@ export function membershipOf(register, address) {
  */
 export async function committedTotal(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000)) {
   const { crowdlock, register } = loaded;
-  const chain = esploraChain(crowdlock.chain_api, fetchImpl, undefined, { backup: BACKUP_EXPLORERS[crowdlock.chain_api] ?? "" });
+  const chain = chainFor(crowdlock, fetchImpl);
   const seen = new Set();
   const committed = new Set();
   let sats = 0n, counted = 0;
@@ -296,7 +316,7 @@ const closedRecords = new Map();
  */
 export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000)) {
   const { crowdlock, register, destinations } = loaded;
-  const chain = esploraChain(crowdlock.chain_api, fetchImpl, undefined, { backup: BACKUP_EXPLORERS[crowdlock.chain_api] ?? "" });
+  const chain = chainFor(crowdlock, fetchImpl);
   const seen = new Set();
   const releases = [];
   let unreadable = 0;
@@ -310,7 +330,7 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
       // as long as the app is open, and a page doesn't re-ask about every lock
       // the register has ever held. (The margin covers how far a block's own
       // time can sit from the real time.)
-      const key = `${crowdlock.chain_api} ${address}`;
+      const key = `${explorerFor(crowdlock)} ${address}`;
       const closed = lock.locktime + CLOSED_AFTER < now;
       let txs = closed ? closedRecords.get(key) : undefined;
       if (!txs) {
@@ -339,7 +359,7 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
 export async function poundsPerBtc(crowdlock, fetchImpl = globalThis.fetch) {
   if (crowdlock.network !== "mainnet") return null;
   try {
-    const r = await fetchImpl(`${crowdlock.chain_api}/v1/prices`, { cache: "no-store" });
+    const r = await fetchImpl(`${EXPLORERS.mainnet}/v1/prices`, { cache: "no-store" });
     const gbp = (await r.json()).GBP;
     return typeof gbp === "number" && gbp > 0 ? gbp : null;
   } catch { return null; }

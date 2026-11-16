@@ -95,7 +95,7 @@ console.log("-".repeat(80));
 // and one whose date has passed — only the first may count.
 const now = 1800000000;
 const fakeLoaded = {
-  crowdlock: { chain_api: "https://chain.example", minimum_counted_lock_sats: 10000 },
+  crowdlock: { network: "testnet4", chain_api: "https://chain.example", minimum_counted_lock_sats: 10000 },
   // Three signed; only member one holds a lock that counts.
   register: { members: [{ n: 1, address: "tb1qone" }, { n: 2, address: "tb1qtwo" }, { n: 3, address: "tb1qthree" }], locks: [
     { address: "tb1qcounts", member: "tb1qone", locktime: now + 1000 },
@@ -280,7 +280,7 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   const early = { txid: "e9", status: { confirmed: true, block_time: now - 5 * 3600 }, vin: [{ prevout: { scriptpubkey_address: "tb1qold", value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
   const seenUrls = [];
   const recFetch = async (url) => { seenUrls.push(String(url)); return Response.json(String(url).includes("tb1qold") ? [early] : []); };
-  const reg = { crowdlock: { chain_api: "https://closed" }, register: { locks: [old, recent, open] }, destinations: { entries: [] } };
+  const reg = { crowdlock: { network: "testnet4", chain_api: "https://closed" }, register: { locks: [old, recent, open] }, destinations: { entries: [] } };
   const r1 = await coSignerRecord(reg, recFetch, now);
   askAfresh(recFetch);
   const r2 = await coSignerRecord(reg, recFetch, now);
@@ -485,7 +485,7 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
     return Response.json(url.startsWith("https://blockstream.info/api/address/bc1qlock/utxo") ? [{ txid: "aa", vout: 0, value: 250000, status: { confirmed: true } }] : []);
   };
   const total = await committedTotal({
-    crowdlock: { chain_api: "https://mempool.space/api", minimum_counted_lock_sats: 200000 },
+    crowdlock: { network: "mainnet", chain_api: "https://mempool.space/api", minimum_counted_lock_sats: 200000 },
     register: { locks: [{ address: "bc1qlock", locktime: 4000000000, member: "bc1qm" }] },
   }, mainDown);
   check("A Crowdlock's total is still counted when its explorer is down, from the backup", total.sats === 250000n && total.members === 1, String(total.sats));
@@ -530,7 +530,7 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   const L = { address: "tb1qlock", locktime: 2000000000, member: "tb1qm", cosigner_pubkey: "02cc" };
   const early = { txid: "e1", status: { confirmed: true, block_time: 1900000000 }, vin: [{ prevout: { scriptpubkey_address: "tb1qlock", value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
   const onDate = { txid: "h1", status: { confirmed: true, block_time: 2000000100 }, vin: [{ prevout: { scriptpubkey_address: "tb1qlock2", value: 5000 }, witness: ["01", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qm" }] };
-  const loaded = { crowdlock: { chain_api: "https://rec" }, register: { locks: [L, { ...L, address: "tb1qlock2" }, L] }, destinations: { entries: [] } };
+  const loaded = { crowdlock: { network: "testnet4", chain_api: "https://rec" }, register: { locks: [L, { ...L, address: "tb1qlock2" }, L] }, destinations: { entries: [] } };
   const fake = async (url) => Response.json(String(url).includes("tb1qlock2") ? [onDate] : [early]);
   const rec = await coSignerRecord(loaded, fake);
   check("The Crowdlock screen finds a co-signer's early release, once, and nothing else",
@@ -679,6 +679,34 @@ console.log("-".repeat(80));
   check("…so a co-signer key change there links to its history",
     historyLinkFor(NEW_KOP) === "https://github.com/Jimbus9/the-kop-fund/commits/main/crowdlocks/kop-fund.json");
   check("A domain the build doesn't know names no repository", repoFromFileUrl("https://example.org/crowdlocks/x.json") === null && pathInRepo("https://example.org/crowdlocks/x.json") === null);
+}
+
+console.log("-".repeat(80));
+console.log("A CROWDLOCK CAN'T CHOOSE WHO COUNTS ITS MONEY");
+console.log("-".repeat(80));
+{
+  const { coSignerRecord, explorerFor } = await import("../src/crowdlocks.mjs");
+  // A Crowdlock whose file names an explorer of its founder's own, which
+  // reports a fortune at a lock that holds nothing, and no early releases.
+  const asked = [];
+  const liar = async (url) => {
+    url = String(url); asked.push(url);
+    if (url.startsWith("https://founders-own.example")) return Response.json(url.endsWith("/utxo") ? [{ txid: "ff", vout: 0, value: 5000000000, status: { confirmed: true } }] : []);
+    return Response.json([]);   // the app's own explorer: nothing there
+  };
+  const faked = {
+    crowdlock: { network: "mainnet", chain_api: "https://founders-own.example/api", minimum_counted_lock_sats: 10000 },
+    register: { locks: [{ address: "bc1qnothinghere", locktime: 4000000000, member: "bc1qm" }] }, destinations: { entries: [] },
+  };
+  const t = await committedTotal(faked, liar);
+  await coSignerRecord(faked, liar);
+  await poundsPerBtc(faked.crowdlock, liar);
+  check("A total is counted from the app's own explorer, whatever explorer the Crowdlock's file names", t.sats === 0n && t.members === 0, String(t.sats));
+  check("…and the explorer it names is never asked: not for its total, its co-signer's record or a price",
+    asked.length > 0 && !asked.some((u) => u.includes("founders-own")) && asked.every((u) => u.startsWith("https://mempool.space/api/") || u.startsWith("https://blockstream.info/api/")), asked.join(" "));
+  let refused = false;
+  try { explorerFor({ network: "somewhere-else" }); } catch { refused = true; }
+  check("A network this app has no explorer for is refused, not guessed at", refused);
 }
 
 console.log("-".repeat(80));
