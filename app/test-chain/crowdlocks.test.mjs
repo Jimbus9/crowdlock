@@ -401,7 +401,7 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   await new Promise((r) => setTimeout(r, 100));
   mainMode = "fine"; log = [];
   const back = await c.utxos("tb1qc");
-  check("…until a minute has passed, when the main one is asked first again", back.length === 0 && log[0].startsWith("https://m1") && toBackup() === 0, log.join(" "));
+  check("…until a while has passed, when the main one is asked first again", back.length === 0 && log[0].startsWith("https://m1") && toBackup() === 0, log.join(" "));
 
   mainMode = "busy"; log = [];
   let waited = false;
@@ -465,8 +465,20 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   const unreachable = async (url) => { log.push(String(url)); throw new TypeError("Network request failed"); };
   try { await esploraChain("https://mempool.space/api", unreachable, 50).utxos("bc1qa"); } catch {}
   check("Nothing gets a backup unless it is given one", log.length === 2 && log.every((u) => u.startsWith("https://mempool.space/api")), log.join(" "));
-  check("Real bitcoin has a backup explorer and the test network has none",
-    BACKUP_EXPLORERS[EXPLORERS.mainnet] === "https://blockstream.info/api" && BACKUP_EXPLORERS[EXPLORERS.testnet4] === undefined);
+  check("Real bitcoin and the test network each have a backup explorer",
+    BACKUP_EXPLORERS[EXPLORERS.mainnet] === "https://blockstream.info/api" && BACKUP_EXPLORERS[EXPLORERS.testnet4] === "https://blockstream.info/testnet4/api");
+  // A quiet network: the backup has no estimate for short waits at all.
+  const sparse = async (url, init) => {
+    url = String(url);
+    if (url.startsWith("https://q")) throw new TypeError("Network request failed");
+    return Response.json(url.endsWith("/fee-estimates") ? { "1008": 0.495, "144": 0.495, "504": 30.009 } : []);
+  };
+  const quietFees = await esploraChain("https://q", sparse, 50, { backup: "https://b", minFee: 5 }).feeRates();
+  check("Fee rates still come out when the backup only has estimates for long waits",
+    quietFees.fast === 5 && quietFees.normal === 5 && quietFees.slow === 5, JSON.stringify(quietFees));
+  const some = async (url) => (String(url).startsWith("https://r") ? Promise.reject(new TypeError("x")) : Response.json(String(url).endsWith("/fee-estimates") ? { "2": 40.2, "4": 21, "25": 3 } : []));
+  const someFees = await esploraChain("https://r", some, 50, { backup: "https://b" }).feeRates();
+  check("…and a wait it has no figure for takes the next longer one", someFees.fast === 41 && someFees.normal === 21 && someFees.slow === 3, JSON.stringify(someFees));
   const mainDown = async (url) => {
     url = String(url);
     if (url.startsWith("https://mempool.space")) throw new TypeError("Network request failed");

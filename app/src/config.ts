@@ -13,8 +13,8 @@ export const NETWORK: "testnet4" | "mainnet" = process.env.EXPO_PUBLIC_NETWORK =
 export const IS_TEST_MONEY = NETWORK !== "mainnet";
 // Test coins are free, and testnet4's blocks are bursty: at 1 sat/vB a send can
 // wait hours. Real bitcoin follows the network's own estimate.
-// Real bitcoin has a second explorer to fall back on when the first doesn't
-// answer (James, 14 November 2026); the test network has no second public one.
+// A second explorer to fall back on when the first doesn't answer: real
+// bitcoin since 14 November 2026 (James), the test network since 16 November.
 const BACKUP: string = BACKUP_EXPLORERS[EXPLORERS[NETWORK]] ?? "";
 export const chain = esploraChain(EXPLORERS[NETWORK], undefined, undefined, { minFee: IS_TEST_MONEY ? 5 : 1, backup: BACKUP });
 export const EXPLORER_WEB = NETWORK === "mainnet" ? "https://mempool.space" : "https://mempool.space/testnet4";
