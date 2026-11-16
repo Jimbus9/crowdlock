@@ -51,6 +51,13 @@
           "signed": "2026-11-16"
         }
       ]
+    },
+    {
+      "n": 6,
+      "address": "tb1qlheu5a2eqxewv9lrrne4w5gk48r67vwzxyh6cu",
+      "signature": "H/74LwZ19OyBZGRg6YXvI1HOtuY1r2z7/4Tt3UM0TGTAbhtD6i94Ap+ZP4AcSiH/WcSG64ZZ2wOWV/ww2L1j7ro=",
+      "signed": "2026-11-16",
+      "version": 5
     }
   ],
   "locks": [
