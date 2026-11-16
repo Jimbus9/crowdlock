@@ -13,6 +13,7 @@ import { membershipStatement, checkCrowdlock } from "../js/crowdlock.mjs";
 import { lockAddress } from "../js/lockrecord.mjs";
 import { applyRecords, recordEventTemplate, recordFromEvent, RECORD_KIND, announcementTemplate, announcementFromEvent, announcementDue, ANNOUNCE_KIND } from "../js/inbox.mjs";
 import { recordPass, planSwaps } from "../js/relayhealth.mjs";
+import { readBack } from "./nostr.mjs";
 
 const ROOT = joinPath(dirname(fileURLToPath(import.meta.url)), "..", "..");
 let failures = 0;
@@ -197,6 +198,49 @@ check("An announcement with no name, or junk, is ignored",
     && announcementFromEvent({ ...ann, content: "{nope" }) === null && announcementFromEvent({ ...ann, kind: 1 }) === null);
 check("Announced weekly: not again within six days, again on the seventh",
   announcementDue(undefined, "2026-11-01") && !announcementDue("2026-11-01", "2026-11-07") && announcementDue("2026-11-01", "2026-11-08"));
+
+// ------------------------------------------------------------------ reading back
+// A pretend relay: newest first, never more than `cap` at a time, like a real one.
+const pretendRelay = (all, cap, log = []) => async ({ since, until, limit }) => {
+  log.push(until);
+  return all.filter((e) => e.created_at >= since && (until === undefined || e.created_at <= until))
+    .sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1)).slice(0, Math.min(limit, cap));
+};
+const ev = (id, created_at) => ({ id, created_at });
+{
+  // One real record from an hour ago, under 2,000 newer pieces of junk, on a relay that gives 300 at a time.
+  const real = ev("real", now - 3600);
+  const junk = Array.from({ length: 2000 }, (_, i) => ev("junk" + i, now - 1800 + Math.floor(i / 3)));
+  const oneBatch = await pretendRelay([real, ...junk], 300)({ since: now - 86400, limit: 1000 });
+  const all = await readBack(pretendRelay([real, ...junk], 300), now - 86400);
+  check("A record buried under junk is missed by one batch and found by reading back",
+    !oneBatch.some((e) => e.id === "real") && all.complete && all.events.length === 2001 && all.events.some((e) => e.id === "real"));
+
+  const asks = [];
+  const few = await readBack(pretendRelay([ev("a", now - 10), ev("b", now - 20)], 300, asks), now - 86400);
+  check("A quiet relay is read in full, in three short asks", few.complete && few.events.length === 2 && asks.length === 3, `${asks.length} asks`);
+
+  const sameSecond = Array.from({ length: 250 }, (_, i) => ev("s" + i, now - 50));
+  const split = await readBack(pretendRelay([...sameSecond, ev("older", now - 60)], 100), now - 86400);
+  check("A second holding more than a batch does not stop it reaching older records",
+    split.complete && split.events.some((e) => e.id === "older"));
+
+  const old = await readBack(pretendRelay([ev("in", now - 100), ev("out", now - 200)], 300), now - 150);
+  check("Nothing older than the window is read", old.complete && old.events.length === 1 && old.events[0].id === "in");
+
+  const deaf = async () => [ev("x", now - 5), ev("y", now - 6)];   // ignores `until`
+  const stuck = await readBack(deaf, now - 86400);
+  check("A relay that ignores the question is given up on, keeping what it gave", !stuck.complete && stuck.events.length === 2);
+
+  const capped = await readBack(pretendRelay(junk, 300), now - 86400, { maxPages: 3 });
+  check("A pass stops at its limit and says it did not finish", !capped.complete && capped.events.length > 300 && capped.events.length < 2000);
+
+  let n = 0;
+  const flaky = async (q) => { if (n++ === 1) throw new Error("reading timed out"); return pretendRelay(junk, 300)(q); };
+  const part = await readBack(flaky, now - 86400);
+  let threw = false; try { await readBack(async () => { throw new Error("down"); }, now - 86400); } catch { threw = true; }
+  check("A later batch failing keeps the earlier ones; the first failing is an error", !part.complete && part.events.length === 300 && threw);
+}
 
 console.log("-".repeat(80));
 console.log(failures === 0 ? "The relay inbox takes in valid records and only those." : `${failures} check(s) failed.`);
