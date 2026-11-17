@@ -4,6 +4,8 @@
 
 **15 November 2026:** a proposal published under a later version of the declaration names it, and only members who signed that version may commit to it. Version-1 proposals are unchanged.
 
+**17 November 2026:** the relay inbox now checks the owner's signature before it takes a commitment into the pile, and both signatures before it records a completed payment. Nothing about a commitment or a proposal changes.
+
 How money committed to this fund is actually spent.
 
 **There is no vote.** A proposal is funded or it is not. Nobody counts anything,
@@ -399,17 +401,22 @@ repository first received it, which is the order oversubscription settles in.
 
 The repository's relay inbox keeps this file. It records what arrived and when;
 it refuses a commitment whose lock is not on the register, one posted outside
-the gathering window, a malformed one, a copy, and more than five per lock. It
-does not judge signatures or coins: **every reader checks every commitment in
-full** before counting or completing it (`method/js/proposals.mjs`).
+the gathering window, a malformed one, a copy, more than five per lock, and one
+the lock's owner has not signed. It records a completed payment only if the
+owner and the co-signer have both signed it. (Anybody can post to the relays:
+without those two checks a stranger could use up a member's five places with
+junk, or post a fake completion ahead of the real one.) It judges nothing else
+about a commitment: **every reader checks every commitment in full** before
+counting or completing it (`method/js/proposals.mjs`).
 
 Two more keys appear as the co-signer acts:
 
 - `completed`: `[{ "txid", "tx", "published", "sent" }]` — each completed
   transaction, **published here so that anybody can broadcast it**. One is
   recorded only if its txid is the txid of a commitment in the pile (a txid
-  leaves out the signatures, so a completion and its commitment share it).
-  `sent` is when the repository broadcast it.
+  leaves out the signatures, so a completion and its commitment share it) and
+  it carries the owner's signature and the co-signer's. `sent` is when the
+  repository broadcast it, or first found it already on the network.
 - `notice`: the co-signer's failure notice (below), once, if genuine. After it,
   no completion is recorded.
 

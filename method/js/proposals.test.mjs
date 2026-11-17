@@ -111,20 +111,37 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   const prop = { ...p, hash };
   const inWindow = Math.floor(Date.parse(p.opens) / 1000) + 60;
   const ev = (tx, at = inWindow, l = lock) => ({ id: tx, ...commitmentEventTemplate({ type: "commitment", proposal: hash, record: { proposal: hash, lock: l, tx } }, instance, at) });
-  const run = (pile, events) => applyCommitments(pile, events, { crowdlock, proposal: prop, register, nowIso: "2026-11-12T09:00:00Z" });
-  const r1 = run(emptyPile(hash), [ev("aa"), ev("aa"), ev("bb", inWindow + 5)]);
+  // The owner's signature is the caller's to check (the relay inbox asks the
+  // chain); here every commitment is taken as signed unless a check says not.
+  const allSigned = async (records) => records.map(() => ({ ok: true }));
+  const run = (pile, events, signed = allSigned) => applyCommitments(pile, events, { crowdlock, proposal: prop, register, nowIso: "2026-11-12T09:00:00Z", signed });
+  const r1 = await run(emptyPile(hash), [ev("aa"), ev("aa"), ev("bb", inWindow + 5)]);
   check("The inbox adds each commitment once, in the order it first saw them, with its own time",
     r1.pile.commitments.length === 2 && r1.pile.commitments[0].record.tx === "aa" && r1.pile.commitments.every((c) => c.submitted === "2026-11-12T09:00:00Z"));
-  const r2 = run(r1.pile, [ev("aa"), ev("bb")]);
+  const r2 = await run(r1.pile, [ev("aa"), ev("bb")]);
   check("…and nothing again on the next run", r2.pile === r1.pile);
-  const r3 = run(emptyPile(hash), [ev("cc", inWindow, { ...lock, address: "tb1qnotregistered" }), ev("dd", Math.floor(Date.parse(p.opens) / 1000) - 10), ev("zz-not-hex")]);
+  const r3 = await run(emptyPile(hash), [ev("cc", inWindow, { ...lock, address: "tb1qnotregistered" }), ev("dd", Math.floor(Date.parse(p.opens) / 1000) - 10), ev("zz-not-hex")]);
   check("It refuses a lock not on the register, one posted before the proposal opened, and a malformed one",
     r3.pile.commitments.length === 0 && r3.outcome.length === 3 && r3.outcome.every((o) => !o.added), r3.outcome.map((o) => o.reason).join("; "));
   const many = Array.from({ length: PER_LOCK_LIMIT + 2 }, (_, i) => ev(`e${i}`.replace(/[^0-9a-f]/g, "e"), inWindow + i));
-  const r4 = run(emptyPile(hash), many);
+  const r4 = await run(emptyPile(hash), many);
   check(`It keeps at most ${PER_LOCK_LIMIT} per lock, so nobody can flood the file`, r4.pile.commitments.length === PER_LOCK_LIMIT);
   check("A completed transaction posted to the relays is not put in the pile",
-    run(emptyPile(hash), [{ id: "x", ...commitmentEventTemplate({ type: "completed", proposal: hash, tx: "ab" }, instance, inWindow) }]).pile.commitments.length === 0);
+    (await run(emptyPile(hash), [{ id: "x", ...commitmentEventTemplate({ type: "completed", proposal: hash, tx: "ab" }, instance, inWindow) }])).pile.commitments.length === 0);
+
+  // Unsigned junk must not take a lock's places. Before 17 November 2026 five
+  // junk records naming a lock were enough to shut its owner out.
+  const asked = [];
+  const onlyReal = async (records) => { asked.push(...records.map((r) => r.tx)); return records.map((r) => r.tx === "ee" ? { ok: true } : { ok: false, reason: "the lock's owner has not signed it" }); };
+  const junk = Array.from({ length: PER_LOCK_LIMIT + 3 }, (_, i) => ev(`0${i}`, inWindow + i));
+  const r5 = await run(emptyPile(hash), [...junk, ev("ee", inWindow + 50)], onlyReal);
+  check("Junk the owner never signed takes none of a lock's places, and the owner's own commitment still gets in",
+    r5.pile.commitments.length === 1 && r5.pile.commitments[0].record.tx === "ee" && r5.outcome.filter((o) => !o.added).every((o) => /has not signed/.test(o.reason)));
+  const r6 = await run(emptyPile(hash), [ev("cc", inWindow, { ...lock, address: "tb1qnotregistered" }), ev("dd", Math.floor(Date.parse(p.opens) / 1000) - 10)], onlyReal);
+  check("The signature is only asked about for records that passed every other check", !asked.includes("cc") && !asked.includes("dd") && r6.pile.commitments.length === 0);
+  let threw = false;
+  try { await applyCommitments(emptyPile(hash), [ev("aa")], { crowdlock, proposal: prop, register, nowIso: "x" }); } catch { threw = true; }
+  check("A caller that leaves the signature check out is refused, not trusted", threw);
 }
 
 // What the co-signer does: completions published in the pile, paced, and the notice.
@@ -136,8 +153,9 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   const cosignerKey = ECPair.makeRandom({ network: NET });
   const cl = { ...crowdlock, cosigner_keys: [Buffer.from(cosignerKey.publicKey).toString("hex")] };
   const pile = { ...emptyPile(hash), commitments: [1, 2, 3].map((n) => ({ submitted: "2026-11-12T09:00:00Z", record: { proposal: hash, lock: {}, tx: half(n) } })) };
-  const args = { crowdlock: cl, hash, hrp: "tb", addressOf: memberAddressForOwnerKey, txidOf, nowIso: "2026-11-12T10:00:00Z" };
-  const done = applySettlement(pile, [{ type: "completed", tx: full(2), at: 5 }, { type: "completed", tx: full(1), at: 6 }, { type: "completed", tx: full(9), at: 7 }, { type: "completed", tx: full(2), at: 8 }], args);
+  const allGood = async (candidates) => candidates.map(() => ({ ok: true }));
+  const args = { crowdlock: cl, hash, hrp: "tb", addressOf: memberAddressForOwnerKey, txidOf, nowIso: "2026-11-12T10:00:00Z", completedBy: allGood };
+  const done = await applySettlement(pile, [{ type: "completed", tx: full(2), at: 5 }, { type: "completed", tx: full(1), at: 6 }, { type: "completed", tx: full(9), at: 7 }, { type: "completed", tx: full(2), at: 8 }], args);
   check("Completed payments are recorded in the pile, once each, and only if they complete a commitment in it",
     done.pile.completed.length === 2 && done.outcome.some((o) => !o.added && /completes no commitment/.test(o.reason)));
   check("They go out oldest commitment first, a few per pass", dueToSend(done.pile, 1, txidOf)[0].txid === txidOf(half(1)) && dueToSend(done.pile, 5, txidOf).length === 2);
@@ -148,7 +166,17 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   check("The notice is a fixed sentence naming the proposal", noticeStatement(hash) === `I declare proposal ${hash} dead: it did not reach its target, and I will complete none of its commitments.`);
   check("A notice signed by the co-signer is genuine; one signed by anyone else is not",
     noticeIsGenuine(signNotice(cosignerKey), args).ok && !noticeIsGenuine(signNotice(key), args).ok);
-  const dead = applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }, { type: "completed", tx: full(1), at: 2 }], args);
+  // A copy with a made-up co-signer signature has the real completion's id.
+  // Posted first, it used to be recorded and the real one then ignored.
+  const fake = (n) => mk(n, [Buffer.from("dead", "hex"), Buffer.alloc(0), Buffer.from("aa", "hex"), Buffer.from("bb", "hex")]);
+  const realOnly = async (candidates) => candidates.map((c) => c.tx === full(1) ? { ok: true } : { ok: false, reason: "the co-signer has not signed it" });
+  const mixed = await applySettlement(pile, [{ type: "completed", tx: fake(1), at: 1 }, { type: "completed", tx: full(1), at: 2 }], { ...args, completedBy: realOnly });
+  check("A completion the co-signer never signed is not recorded, and the real one posted after it is",
+    mixed.pile.completed.length === 1 && mixed.pile.completed[0].tx === full(1) && mixed.outcome.some((o) => !o.added && /co-signer has not signed/.test(o.reason)));
+  const onlyFake = await applySettlement(pile, [{ type: "completed", tx: fake(1), at: 1 }], { ...args, completedBy: realOnly });
+  check("…and with only the fake posted, the commitment stays open for the real one", !onlyFake.pile.completed && dueToSend(onlyFake.pile, 5, txidOf).length === 0);
+
+  const dead = await applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }, { type: "completed", tx: full(1), at: 2 }], args);
   check("Once declared dead, no completion is recorded after it", !!dead.pile.notice && !dead.pile.completed && dead.outcome.some((o) => /declared this proposal dead/.test(o.reason ?? "")));
 }
 

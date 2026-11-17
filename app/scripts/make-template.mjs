@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-16";
+export const TEMPLATE_VERSION = "2026-11-17";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -40,6 +40,7 @@ export const CHANGES = [
   { version: "2026-11-15", change: "Ready for a new version of your declaration: accepts later versions listed in your Crowdlock file, records members who sign one (keeping their number), and only takes a commitment from a member who signed the version its proposal was published under. Nothing changes until you publish a new version" },
   { version: "2026-11-15b", change: "Turns your repository's Actions red, and emails whoever pushed, when your Crowdlock file or a version of its declaration doesn't check out; and fails the inbox's run instead of quietly skipping your Crowdlock if that ever happens. No change to what is collected" },
   { version: "2026-11-16", change: "Reads each relay further back, a batch at a time, so nobody can push real registrations and locks out of sight by posting junk under your Crowdlock's fingerprint. No change to what is accepted" },
+  { version: "2026-11-17", change: "Three fixes to how proposals are handled. Completed payments are now really sent by your repository (it used to mark them sent without sending). A commitment is only taken if its lock's owner signed it, so nobody can use up a member's five places with junk. A completed payment is only recorded if owner and co-signer both signed it, so a fake cannot block the real one" },
 ];
 
 const FROM_REPO = [
@@ -47,7 +48,7 @@ const FROM_REPO = [
   "method/js/vendor/noble-secp256k1.js",
   "method/js/vendor/noble-hashes/_assert.js", "method/js/vendor/noble-hashes/_md.js", "method/js/vendor/noble-hashes/crypto.js",
   "method/js/vendor/noble-hashes/ripemd160.js", "method/js/vendor/noble-hashes/sha256.js", "method/js/vendor/noble-hashes/utils.js",
-  "method/relay/inbox.mjs", "method/relay/check.mjs", "method/relay/nostr.mjs", "method/relay/package.json", "method/relay/package-lock.json",
+  "method/relay/inbox.mjs", "method/relay/check.mjs", "method/relay/nostr.mjs", "method/relay/signed.mjs", "method/relay/package.json", "method/relay/package-lock.json",
   "LICENSE",
 ];
 

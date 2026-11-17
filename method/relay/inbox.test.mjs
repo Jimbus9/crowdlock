@@ -242,6 +242,138 @@ const ev = (id, created_at) => ({ id, created_at });
   check("A later batch failing keeps the earlier ones; the first failing is an error", !part.complete && part.events.length === 300 && threw);
 }
 
+// ---------------------------------------------------------------------------
+// Signatures on commitments, and sending completed payments (signed.mjs).
+// Real keys, real signatures, a pretend block explorer.
+// ---------------------------------------------------------------------------
+{
+  const { Transaction, script: bscript } = await import("bitcoinjs-lib");
+  const { lockScript } = await import("../js/lockrecord.mjs");
+  const { ownerSigned, completedBy, ownersSigned, completedByBoth, coinsAt, coinValue, coinOf, sendCompleted } = await import("./signed.mjs");
+  const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+  const ownerPriv = utils.randomPrivateKey(), coPriv = utils.randomPrivateKey();
+  const pubOf = (k) => Buffer.from(getPublicKey(k, true)).toString("hex");
+  const lock = { owner_pubkey: pubOf(ownerPriv), cosigner_pubkey: pubOf(coPriv), locktime: 1900000000 };
+  lock.address = lockAddress({ ownerPubkey: lock.owner_pubkey, cosignerPubkey: lock.cosigner_pubkey, locktime: lock.locktime }, "tb");
+  const script = Buffer.from(lockScript({ ownerPubkey: lock.owner_pubkey, cosignerPubkey: lock.cosigner_pubkey, locktime: lock.locktime }));
+  const FUNDING = "ab".repeat(32), VALUE = 500000;
+  const COIN = `${FUNDING}:0`;
+
+  const unsigned = () => {
+    const tx = new Transaction(); tx.version = 2; tx.locktime = 0;
+    tx.addInput(Buffer.from(FUNDING, "hex").reverse(), 0, 0xfffffffd);
+    tx.addOutput(Buffer.from("0014" + "11".repeat(20), "hex"), 499000n);
+    return tx;
+  };
+  const der = (compact, hashType = Transaction.SIGHASH_ALL) => bscript.signature.encode(Buffer.from(compact), hashType);
+  const sigBy = async (priv, tx, { value = VALUE, high = false, hashType = Transaction.SIGHASH_ALL } = {}) => {
+    const sig = await signAsync(tx.hashForWitnessV0(0, script, BigInt(value), hashType), priv);
+    let raw = Buffer.from(sig.toCompactRawBytes());
+    if (high) raw = Buffer.concat([raw.subarray(0, 32), Buffer.from((N - BigInt("0x" + raw.subarray(32).toString("hex"))).toString(16).padStart(64, "0"), "hex")]);
+    return der(raw, hashType);
+  };
+  const commitment = async (opts = {}) => {
+    const tx = unsigned();
+    tx.setWitness(0, [Buffer.alloc(0), Buffer.alloc(0), opts.ownerSig ?? await sigBy(ownerPriv, tx, opts), script]);
+    return { proposal: "p", lock, tx: tx.toHex() };
+  };
+  const completion = async (record, coSig) => {
+    const tx = Transaction.fromHex(record.tx);
+    const w = tx.ins[0].witness;
+    tx.setWitness(0, [coSig ?? await sigBy(coPriv, tx), w[1], w[2], w[3]]);
+    return tx.toHex();
+  };
+  const coins = { [COIN]: VALUE };
+
+  const real = await commitment();
+  check("A commitment its lock's owner signed is recognised", ownerSigned(real, coins).ok === true && coinOf(real.tx) === COIN);
+  const junkSig = await commitment({ ownerSig: der(Buffer.concat([Buffer.alloc(31), Buffer.from([1]), Buffer.alloc(31), Buffer.from([1])])) });
+  check("One with a made-up signature is not", ownerSigned(junkSig, coins).ok === false, ownerSigned(junkSig, coins).reason);
+  check("One signed by somebody else is not", ownerSigned(await commitment({ ownerSig: await sigBy(coPriv, unsigned()) }), coins).ok === false);
+  check("One signed for a different amount than the coin holds is not", ownerSigned(await commitment({ value: VALUE + 1 }), coins).ok === false);
+  check("One spending a coin the lock does not hold is refused without a question",
+    /does not spend a coin that lock holds/.test(ownerSigned(real, {}).reason));
+  check("One whose signature has a high S value is not taken: the network would not pass its payment on",
+    ownerSigned(await commitment({ high: true }), coins).ok === false);
+  check("One whose signature does not cover the whole payment is not taken",
+    ownerSigned(await commitment({ hashType: Transaction.SIGHASH_NONE }), coins).ok === false);
+  check("With the explorer unreachable it is left for the next pass, not refused for good",
+    /next/.test(ownerSigned(real, null).reason));
+  check("Junk that is not a spend of the lock it names is refused",
+    ownerSigned({ lock, tx: "00".repeat(60) }, coins).ok === false && ownerSigned({ lock: { ...lock, locktime: lock.locktime + 1 }, tx: real.tx }, coins).ok === false);
+
+  const done = await completion(real);
+  check("A completion signed by owner and co-signer is recognised", completedBy(done, real, VALUE).ok === true);
+  check("A copy with a made-up co-signer signature is not", completedBy(await completion(real, der(Buffer.concat([Buffer.alloc(31), Buffer.from([2]), Buffer.alloc(31), Buffer.from([2])]))), real, VALUE).ok === false);
+  check("The commitment itself, relabelled as completed, is not", completedBy(real.tx, real, VALUE).ok === false);
+  const highCo = await completion(real, await sigBy(coPriv, unsigned(), { high: true }));
+  check("A stranger's reworked copy of the real completion (high S) is not",
+    Transaction.fromHex(highCo).getId() === Transaction.fromHex(done).getId() && completedBy(highCo, real, VALUE).ok === false);
+
+  // The pretend explorer: counts every question.
+  const explorer = (over = {}) => {
+    const asked = [];
+    const answer = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => typeof body === "string" ? body : JSON.stringify(body) });
+    const fetchImpl = async (url, init = {}) => {
+      asked.push(`${init.method ?? "GET"} ${url.replace("https://x", "")}`);
+      if (over.down) throw new Error("no answer");
+      if (url.endsWith(`/address/${lock.address}/utxo`)) return answer(200, [{ txid: FUNDING, vout: 0, value: VALUE }]);
+      if (url.endsWith(`/tx/${FUNDING}`)) return answer(200, { vout: [{ value: VALUE }] });
+      // The real explorers answer this for ANY payment, seen or not.
+      if (/\/tx\/[0-9a-f]{64}\/status$/.test(url)) return answer(200, { confirmed: false });
+      if (/\/tx\/[0-9a-f]{64}\/hex$/.test(url)) return over.has ? answer(200, "00") : answer(404, "Transaction not found");
+      if (url.endsWith("/tx") && init.method === "POST") return over.refuse ? answer(400, over.refuse) : answer(200, "txid");
+      return answer(404, "not found");
+    };
+    return { asked, fetchImpl };
+  };
+
+  {
+    const x = explorer();
+    const coinsFor = coinsAt("https://x", x.fetchImpl);
+    const many = [real, junkSig, { ...real, tx: (await commitment({ value: VALUE + 5 })).tx }];
+    const v = await ownersSigned(many, { coinsFor });
+    check("Three records for one lock cost the explorer one question", v[0].ok && !v[1].ok && !v[2].ok && x.asked.length === 1, x.asked.join(", "));
+    const other = { ...lock, address: "tb1qanotherlock" };
+    const v2 = await ownersSigned([real, { ...real, lock: other }], { coinsFor, limit: 1, seed: "a" });
+    check("More locks than one pass asks about: the rest are left for a later pass, not refused for good",
+      v2.filter((a) => /later pass/.test(a.reason ?? "")).length === 1);
+    const first = new Set();
+    for (let i = 0; i < 40; i++) { const r = await ownersSigned([real, { ...real, lock: other }], { coinsFor: async () => coins, limit: 1, seed: String(i) }); first.add(r[0].ok === true); }
+    check("…and which ones are asked about changes from pass to pass", first.size === 2);
+  }
+  {
+    const x = explorer();
+    const v = await completedByBoth([{ tx: done, record: real }, { tx: highCo, record: real }], { valueFor: coinValue("https://x", x.fetchImpl) });
+    check("Two completions of one commitment cost one question, and only the real one passes", v[0].ok && !v[1].ok && x.asked.length === 1);
+    const down = explorer({ down: true });
+    const v2 = await completedByBoth([{ tx: done, record: real }], { valueFor: coinValue("https://x", down.fetchImpl) });
+    check("With the explorer down a completion waits for the next pass", !v2[0].ok && /next/.test(v2[0].reason));
+  }
+
+  const payment = { txid: Transaction.fromHex(done).getId(), tx: done };
+  {
+    const x = explorer();
+    const r = await sendCompleted("https://x", payment, x.fetchImpl);
+    check("A completed payment the network has never seen is SENT (until 17 November 2026 it was marked sent and never was)",
+      r.state === "sent" && x.asked.some((q) => q === "POST /tx") && !x.asked.some((q) => q.endsWith("/status")), x.asked.join(", "));
+  }
+  {
+    const x = explorer({ has: true });
+    const r = await sendCompleted("https://x", payment, x.fetchImpl);
+    check("One the network already has is not sent again", r.state === "already on the network" && !x.asked.some((q) => q.startsWith("POST")));
+  }
+  {
+    const r = await sendCompleted("https://x", payment, explorer({ refuse: "sendrawtransaction RPC error: bad-txns-inputs-missingorspent" }).fetchImpl);
+    check("One the network refuses is not marked sent, and the reason is kept", r.state === null && /missingorspent/.test(r.refused));
+    const r2 = await sendCompleted("https://x", payment, explorer({ refuse: "sendrawtransaction RPC error: Transaction already in block chain" }).fetchImpl);
+    check("One somebody else sent in the meantime counts as on the network", r2.state === "already on the network");
+    const r3 = await sendCompleted("https://x", payment, explorer({ down: true }).fetchImpl);
+    check("With the explorer down nothing is marked sent", r3.state === null && !!r3.unreachable);
+  }
+}
+
 console.log("-".repeat(80));
 console.log(failures === 0 ? "The relay inbox takes in valid records and only those." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

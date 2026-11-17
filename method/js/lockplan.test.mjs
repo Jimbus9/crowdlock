@@ -50,14 +50,17 @@ check("a compressed public key is recovered from it", /^0[23][0-9a-f]{64}$/.test
 check("it is the key the app really used for that member's locks", viaPlan.ownerPubkey === known?.owner_pubkey);
 
 // --- The plan, against a lock Bitcoin has already accepted ----------------------
-const plan = planLock({ crowdlock, register, member: first.address, years: 1, now: noon31Oct });
+// That lock was made when its co-signer key was the newest one listed, so the
+// Crowdlock is taken as it stood then: a new lock always uses the newest key.
+const then = { ...crowdlock, cosigner_keys: crowdlock.cosigner_keys.slice(0, crowdlock.cosigner_keys.indexOf(known?.cosigner_pubkey) + 1) };
+const plan = planLock({ crowdlock: then, register, member: first.address, years: 1, now: noon31Oct });
 check("a plan is made for a registered member", plan.ok, plan.reason ?? "");
 check("it reaches EXACTLY the address of the real lock", plan.address === known?.address, plan.address);
 check("same keys and same date as the real lock",
   plan.ownerPubkey === known?.owner_pubkey && plan.cosignerPubkey === known?.cosigner_pubkey && plan.locktime === known?.locktime);
 check("it says the lock is already on the register (same day, same length)", plan.alreadyOnRegister === true);
 check("the member can be named by number as well as by address",
-  planLock({ crowdlock, register, member: "1", years: 1, now: noon31Oct }).address === plan.address);
+  planLock({ crowdlock: then, register, member: "1", years: 1, now: noon31Oct }).address === plan.address);
 check("an upper-case address is accepted",
   planLock({ crowdlock, register, member: first.address.toUpperCase(), years: 1, now: noon31Oct }).ok);
 check("the record to publish carries exactly what the inbox reads",
@@ -67,6 +70,17 @@ check("a different day gives a different address",
   planLock({ crowdlock, register, member: "1", years: 1, now: noon31Oct + 2 * 86400 }).address !== plan.address);
 check("a new lock (not yet registered) is not marked as already there",
   planLock({ crowdlock, register: { ...register, locks: [] }, member: "1", years: 1, now: noon31Oct }).alreadyOnRegister === false);
+
+// --- Which co-signer key ---------------------------------------------------------
+{
+  // The newest key is the last in the list; the planner took the first until
+  // 17 November 2026, so a replaced key would have gone on being used.
+  const newer = "02" + "11".repeat(32);
+  const two = { ...then, cosigner_keys: [...then.cosigner_keys, newer] };
+  const r = planLock({ crowdlock: two, register, member: "1", years: 1, now: noon31Oct });
+  check("with two co-signer keys listed, a new lock uses the newest (the last)", r.ok && r.cosignerPubkey === newer, r.reason ?? r.cosignerPubkey);
+  check("…so it is not the lock made with the older key", r.address !== plan.address);
+}
 
 // --- Refusals -------------------------------------------------------------------
 const refuses = (what, args) => {

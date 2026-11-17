@@ -176,14 +176,15 @@ const commit = (lock, p, t) => ({ ...commitmentEventTemplate({ type: "commitment
   record: { proposal: p.hash, tx: (t % 256).toString(16).padStart(2, "0") + "00", lock: { address: lock.address, owner_pubkey: lock.owner_pubkey, cosigner_pubkey: lock.cosigner_pubkey, locktime: lock.locktime } } },
   v1.declaration.sha256, t), id: `c${t}` });
 const t = Date.parse("2027-02-05T00:00:00Z") / 1000;
-const out = applyCommitments(emptyPile(pv2.hash), [commit(regWithLocks.locks[0], pv2, t), commit(regWithLocks.locks[1], pv2, t + 1)],
-  { crowdlock: v2, proposal: pv2, register: regWithLocks, nowIso: "2027-02-05T00:00:00Z" });
+const signed = async (records) => records.map(() => ({ ok: true })); // the owner's signature is the relay inbox's to check
+const out = await applyCommitments(emptyPile(pv2.hash), [commit(regWithLocks.locks[0], pv2, t), commit(regWithLocks.locks[1], pv2, t + 1)],
+  { crowdlock: v2, proposal: pv2, register: regWithLocks, nowIso: "2027-02-05T00:00:00Z", signed });
 check("Committing to a version-2 proposal: refused for a member who signed only version 1, taken for one who signed version 2",
   out.outcome.length === 2 && !out.outcome[0].added && /not signed version 2/.test(out.outcome[0].reason) && out.outcome[1].added,
   out.outcome.map((o) => o.reason ?? "added").join("; "));
 const pv1 = prop({});
-const out1 = applyCommitments(emptyPile(pv1.hash), [commit(regWithLocks.locks[0], pv1, t), commit(regWithLocks.locks[1], pv1, t + 1)],
-  { crowdlock: v2, proposal: pv1, register: regWithLocks, nowIso: "2027-02-05T00:00:00Z" });
+const out1 = await applyCommitments(emptyPile(pv1.hash), [commit(regWithLocks.locks[0], pv1, t), commit(regWithLocks.locks[1], pv1, t + 1)],
+  { crowdlock: v2, proposal: pv1, register: regWithLocks, nowIso: "2027-02-05T00:00:00Z", signed });
 check("Committing to a version-1 proposal: taken for the version-1 member, refused for one who joined with version 2",
   out1.outcome[0].added && !out1.outcome[1].added, out1.outcome.map((o) => o.reason ?? "added").join("; "));
 
