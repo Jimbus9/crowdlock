@@ -258,6 +258,14 @@ Before a lock is published, the register checks that:
 A lock **below the minimum is still published**. The minimum is a counting rule,
 not a validity rule; such a lock is shown and not counted.
 
+**A lock record carries no signature**, so anybody can post any number of
+them naming a member's published key, and each costs the register a question
+to a block explorer. The repository's inbox therefore asks about a limited
+number in each pass: at most 200 in all and 5 for any one owner's key, a
+different selection each pass. A flood naming one member's key can delay that
+member's next lock reaching the register by this route; it does not hold up
+anybody else's, and a pull request is not affected.
+
 **Submit** either way, and both count the same:
 
 - Post the three terms — `owner_pubkey`, `cosigner_pubkey`, `locktime` — to the

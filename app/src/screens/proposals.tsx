@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith, commitmentsToComplete, commitmentCoin,
+  wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith, commitmentsToComplete, commitmentCoin, commitmentPayment,
 } from "../wallet/core.mjs";
 import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments } from "../../../method/js/proposals.mjs";
@@ -43,7 +43,10 @@ const PHASE_TEXT: Record<string, string> = {
   over: "Over",
 };
 
-type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number; notice: any | null; noticeContradicted?: boolean };
+// `sent`: completed by the co-signer and on the network, waiting for a block.
+// It counts toward the target, with what is waiting and what is paid, so a
+// payment in flight is never added up as missing (security loop, round 4).
+type Pile = { sent: number; sentCount: number; count: number; sats: number; mine: { sats: number; record: any; paid?: boolean; sent?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number; notice: any | null; noticeContradicted?: boolean };
 
 async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
   // The repository's pile first — the lasting record, in the order the
@@ -74,7 +77,7 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
     // Not yet in the repository: ordered after everything that is.
     items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
   }
-  const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0, notice };
+  const pile: Pile = { sent: 0, sentCount: 0, count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0, notice };
   // One coin, one commitment, per proposal: a second commitment spending the
   // same coin is ignored and the earlier one stands (spec/commitment-format.md,
   // "Counting the pile"). Only one of them could ever be paid, so counting
@@ -101,11 +104,11 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
       if (/already been spent/.test(v.reason)) {
         const id = commitmentTxid(it.record);
         if (id && paidIds.has(id)) continue;
-        const paid = await commitmentPaid({ record: it.record, chain });
-        if (paid > 0) {
+        const pay = await commitmentPayment({ record: it.record, chain });
+        if (pay && pay.sats > 0) {
           if (id) paidIds.add(id);
-          pile.paid += paid; pile.paidCount++;
-          if (it.record.lock?.owner_pubkey === account.publicKey) pile.mine.push({ sats: paid, record: it.record, paid: true });
+          if (pay.confirmed) { pile.paid += pay.sats; pile.paidCount++; } else { pile.sent += pay.sats; pile.sentCount++; }
+          if (it.record.lock?.owner_pubkey === account.publicKey) pile.mine.push({ sats: pay.sats, record: it.record, paid: pay.confirmed, sent: !pay.confirmed });
           continue;
         }
       }
@@ -121,7 +124,7 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
   // have, so a notice then is ignored (OpenAI review H-04). One against a
   // pile that reaches its target is shown for what it is: contradicted.
   if (pile.notice && (phaseOf(p) === "soon" || phaseOf(p) === "gathering")) pile.notice = null;
-  if (pile.notice && pile.sats + pile.paid >= p.target.sats) pile.noticeContradicted = true;
+  if (pile.notice && pile.sats + pile.paid + pile.sent >= p.target.sats) pile.noticeContradicted = true;
   return pile;
 }
 
@@ -193,7 +196,7 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
   const funded = !!pile && pile.paid >= p.target.sats;
   const dead = !!pile?.notice && !funded;
   const phase = funded ? "funded" : dead ? "dead" : timePhase;
-  const met = pile ? pile.paid + pile.sats >= p.target.sats : false;
+  const met = pile ? pile.paid + pile.sent + pile.sats >= p.target.sats : false;
   return (
     <View>
       <Text style={s.declaration}>{p.text}</Text>
@@ -211,11 +214,11 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
         </> : funded ? <>
           <Text style={s.good}>Funded and paid. {btc(BigInt(pile.paid))} went to the seller in {pile.paidCount} payment{pile.paidCount === 1 ? "" : "s"}, completed by the co-signer and sent. This proposal is closed.</Text>
         </> : <>
-          <Text style={s.big}>{btc(BigInt(pile.sats + pile.paid))}</Text>
-          <Text style={s.note}>{pile.count} waiting{pile.paidCount ? ` · ${pile.paidCount} paid (${btc(BigInt(pile.paid))})` : ""}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats - pile.paid)))} to go.`}</Text>
+          <Text style={s.big}>{btc(BigInt(pile.sats + pile.paid + pile.sent))}</Text>
+          <Text style={s.note}>{pile.count} waiting{pile.sentCount ? ` · ${pile.sentCount} sent by the co-signer and waiting for a block (${btc(BigInt(pile.sent))})` : ""}{pile.paidCount ? ` · ${pile.paidCount} paid (${btc(BigInt(pile.paid))})` : ""}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats - pile.paid)))} to go.`}</Text>
         </>}
         {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
-        {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
+        {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : pile.mine.some((m) => m.sent) ? "Your commitment was completed and sent, and is waiting for a block: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
       </>}
       {member && phase === "gathering" && !paused && <Btn label={pile && pile.mine.length > 0 ? "Commit more to this purchase" : "Commit to this purchase"} onPress={onCommit} />}
       {!member && phase === "gathering" && <Text style={s.note}>Only members can commit. Join this Crowdlock and lock bitcoin first.</Text>}
@@ -504,16 +507,18 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const met = pile.sats + pile.paid >= p.target.sats;
+  // What is already paid, or sent and waiting for a block, counts first.
+  const settledSoFar = pile.paid + pile.sent;
+  const met = pile.sats + settledSoFar >= p.target.sats;
   // Settled in submission order, until the target is met and no further
   // (counting what has already been paid).
   const order = pile.good.slice().sort((a, b) => a.at - b.at);
   const take: typeof order = [];
-  let sum = pile.paid;
+  let sum = settledSoFar;
   for (const g of order) { if (sum >= p.target.sats) break; take.push(g); sum += g.sats; }
   const [asking, setAsking] = useState(false);
   const askSend: [string, string] = ["Complete and send?",
-      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - pile.paid))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`];
+      `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - settledSoFar))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`];
   const sendGo = async () => {
      setAsking(false); {
         setBusy(true); setMsg(null);
@@ -532,8 +537,8 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         // would send members' money to a purchase that stays short.
         let recheck: { ok: boolean; still: any[]; total: number; problems: string[] };
         try {
-          recheck = await commitmentsToComplete({ words, records: take.map((g) => g.record), crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK, alreadyPaid: pile.paid });
-        } catch (e: any) { recheck = { ok: false, still: [], total: pile.paid, problems: [String(e.message ?? e)] }; }
+          recheck = await commitmentsToComplete({ words, records: take.map((g) => g.record), crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK, alreadyPaid: settledSoFar });
+        } catch (e: any) { recheck = { ok: false, still: [], total: settledSoFar, problems: [String(e.message ?? e)] }; }
         const still = recheck.still.map((record) => ({ record }));
         const total = recheck.total;
         failed.push(...recheck.problems);
@@ -546,13 +551,20 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         for (const g of still) {
           try {
             const hex = await completeCommitmentWith({ words, record: g.record, chain });
-            const posted = await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
+            // Sent from here: to the network first. If it refuses one, stop:
+            // that payment will not arrive, so the purchase is now short, and
+            // every further one sent would be money paid toward it for nothing
+            // (security loop, round 4). The ones already sent cannot be recalled.
             if (sendHere) await chain.broadcast(hex);
+            const posted = await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
             // Published only: if no relay took it, it has gone nowhere, and saying
             // "published" would be false. (Sent from here, the network has it.)
-            else if (!posted.ok) throw new Error("A completed payment could not be published: no relay took it. Check the connection and try again; nothing is lost.");
+            if (!sendHere && !posted.ok) throw new Error("A completed payment could not be published: no relay took it. Check the connection and try again; nothing is lost.");
             sent++;
-          } catch (e: any) { failed.push(String(e.message ?? e)); }
+          } catch (e: any) {
+            failed.push(sendHere ? `Stopped there, and sent no more: ${String(e.message ?? e)}` : String(e.message ?? e));
+            if (sendHere) break;
+          }
         }
         setWords("");
         setMsg(failed.length

@@ -817,6 +817,16 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   {
     const { commitmentPaid } = await import("../src/wallet/core.mjs");
     check("A completed payment the network has but no block yet is not shown as paid", (await commitmentPaid({ record: good, chain })) === 0);
+    // …but it is not forgotten either (security loop, round 4). It read as
+    // "void": counted neither as waiting nor as paid. So after the co-signer
+    // sent the first commitments of an oversubscribed proposal, the pile's
+    // total dropped, the ones left out reached the target on their own, the
+    // button went live again, and pressing it paid the seller twice over.
+    const { commitmentPayment } = await import("../src/wallet/core.mjs");
+    const inFlight = await commitmentPayment({ record: good, chain });
+    const asVoid = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    check("A completed payment waiting for a block is known as sent: its amount, and that no block holds it yet",
+      !asVoid.valid && /already been spent/.test(asVoid.reason) && inFlight?.sats === 100_000 && inFlight?.confirmed === false, JSON.stringify(inFlight));
   }
   await rpc("generatetoaddress", [1, miner.address]);
   const paid3 = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
@@ -868,6 +878,9 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
       !vFake.valid && /never a coin of the lock/.test(vFake.reason), vFake.reason);
     check("…and is not counted as paid", paidFake === 0, `${paidFake} sats`);
     check("A commitment the co-signer really completed still reads as paid", (await commitmentPaid({ record: good, chain })) === 100_000);
+    const { commitmentPayment } = await import("../src/wallet/core.mjs");
+    const settled = await commitmentPayment({ record: good, chain });
+    check("…and as in a block; the dressed-up payment is no payment at all", settled?.confirmed === true && settled.sats === 100_000 && (await commitmentPayment({ record: fake, chain })) === null);
   }
   const P = await import("../../method/js/proposals.mjs");
   const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");

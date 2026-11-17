@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-17j";
+export const TEMPLATE_VERSION = "2026-11-17k";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -48,6 +48,7 @@ export const CHANGES = [
   { version: "2026-11-17h", change: "Fixes from a security review. A stranger's altered or misdated copy of a member's commitment can no longer keep the member's own out of a proposal; the remainder lock on a commitment of part of a lock is checked; only the parts a commitment has are kept in your repository; a lock dated by block height is refused; nothing posted to the relays can start a line of its own in your inbox's log; and the inbox installs its libraries without running their install scripts" },
   { version: "2026-11-17i", change: "One more fix from the security review. Your inbox no longer takes a copy of a member's commitment that has a script added to its input: such a copy could never be paid, and posted first it kept the member's own commitment out" },
   { version: "2026-11-17j", change: "More from the security review. Your inbox can still take a member's commitment after somebody sends hundreds of tiny coins to their lock's address (block explorers refuse to list more than 500 coins; the inbox now reads the address's history instead). A lock naming the mirror image of your co-signer key is no longer counted as yours. Adds one file, js/release.mjs, which the inbox now uses" },
+  { version: "2026-11-17k", change: "More from the security review. Junk lock records posted to the relays can no longer stop your inbox: it asks the block explorer about at most 200 a pass, and 5 for any one member's key. And junk commitments can no longer use up the questions it needs to record and send a completed payment" },
 ];
 
 const FROM_REPO = [

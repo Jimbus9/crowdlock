@@ -209,6 +209,46 @@ check("Announced weekly: not again within six days, again on the seventh",
 
 // ------------------------------------------------------------------ reading back
 // A pretend relay: newest first, never more than `cap` at a time, like a real one.
+{
+  // Lock records cost a question to the block explorer each (security loop,
+  // round 4). A lock record needs no signature, so anybody can post any
+  // number naming a member's published key. With no limit, 20,000 of them
+  // made one pass longer than the job is allowed to run, on every pass for
+  // ninety days: no lock was registered and no commitment taken.
+  const { LOCKS_ASKED_PER_PASS, LOCKS_ASKED_PER_OWNER } = await import("../js/inbox.mjs");
+  const base = { ...register, members: [...register.members, { n: 9001, address: bob.address, signature: bob.signature, signed: today }] };
+  const lockFor = (owner, t) => ({ type: "lock", owner_pubkey: owner.pub, cosigner_pubkey: COSIGNER, locktime: t,
+    address: lockAddress({ ownerPubkey: owner.pub, cosignerPubkey: COSIGNER, locktime: t }, "tb") });
+  const junk = Array.from({ length: 3000 }, (_, i) => post(lockFor(bob, now + 86400 * 30 + i), now - 100));
+  let asked = 0;
+  const counting = async () => { asked++; return 0; };
+  const flooded = await applyRecords(base, junk, { crowdlock, statement, now, today, confirmedSats: counting, seed: "pass-1" });
+  check("3,000 junk lock records naming one member's key cost a pass a handful of questions, not 3,000",
+    asked > 0 && asked <= LOCKS_ASKED_PER_OWNER && asked <= LOCKS_ASKED_PER_PASS, `${asked} questions`);
+  check("…and the rest are put off, each saying so", flooded.outcome.filter((o) => /later pass/.test(o.reason ?? "")).length === 3000 - asked);
+  // Somebody else's genuine lock, posted in the same pass, is still looked at.
+  const carol = await newMember();
+  const withCarol = { ...base, members: [...base.members, { n: 9002, address: carol.address, signature: carol.signature, signed: today }] };
+  const real = lockFor(carol, now + 86400 * 365);
+  const mixed = await applyRecords(withCarol, [...junk, post(real, now)], { crowdlock, statement, now, today, confirmedSats: async (a) => (a === real.address ? 50000 : 0), seed: "pass-1" });
+  check("A flood naming one member's key does not keep another member's lock off the register",
+    mixed.register.locks.some((l) => l.address === real.address), mixed.outcome.find((o) => o.address === real.address)?.reason ?? "added");
+  // Many owners at once: the pass's own limit holds, and which are asked changes from pass to pass.
+  const owners = [];
+  for (let i = 0; i < 60; i++) owners.push(await newMember());
+  const crowd = { ...base, members: [...base.members, ...owners.map((o, i) => ({ n: 9100 + i, address: o.address, signature: o.signature, signed: today }))] };
+  const wide = owners.flatMap((o) => Array.from({ length: 10 }, (_, i) => post(lockFor(o, now + 86400 * 40 + i), now - 50)));
+  const askedA = new Set(), askedB = new Set();
+  await applyRecords(crowd, wide, { crowdlock, statement, now, today, confirmedSats: async (a) => { askedA.add(a); return 0; }, seed: "pass-1" });
+  await applyRecords(crowd, wide, { crowdlock, statement, now, today, confirmedSats: async (a) => { askedB.add(a); return 0; }, seed: "pass-2" });
+  check("However many owners are named, one pass asks no more than its limit", askedA.size === LOCKS_ASKED_PER_PASS, `${askedA.size} questions for ${wide.length} records`);
+  check("…and a different selection each pass, so the same records are not kept waiting for ever", [...askedB].some((a) => !askedA.has(a)));
+  // An explorer that has stopped answering is not asked two hundred times.
+  let tries = 0;
+  const down = await applyRecords(crowd, wide, { crowdlock, statement, now, today, confirmedSats: async () => { tries++; throw new Error("429"); }, seed: "pass-3" });
+  check("An explorer that has stopped answering is left alone after a few tries", tries <= 5 && down.outcome.every((o) => !o.added), `${tries} tries`);
+}
+
 const pretendRelay = (all, cap, log = []) => async ({ since, until, limit }) => {
   log.push(until);
   return all.filter((e) => e.created_at >= since && (until === undefined || e.created_at <= until))
@@ -387,6 +427,19 @@ const ev = (id, created_at) => ({ id, created_at });
       ]);
       return answer(404, "not found");
     };
+    {
+      // Junk for many locks must not use up the questions a completed payment
+      // needs (round 4): the two checks share one budget, and junk
+      // "commitments" for 200 registered locks left the completion check none,
+      // so the inbox recorded and sent no completed payment while it lasted.
+      const { explorerBudget } = await import("./signed.mjs");
+      const budget = explorerBudget();
+      const manyLocks = Array.from({ length: 400 }, (_, i) => ({ ...real, lock: { ...lock, address: `tb1qjunk${i}` } }));
+      await ownersSigned(manyLocks, { coinsFor: async () => ({}), budget });
+      check("Commitments for hundreds of locks leave the completion check some of the pass's questions", budget.left >= 50, `${budget.left} left of 200`);
+      const done2 = await completedByBoth([{ tx: done, record: real }], { valueFor: async () => VALUE, budget });
+      check("…so a completed payment posted in the same pass is still checked", done2[0].ok === true, done2[0].reason ?? "");
+    }
     const v = await ownersSigned([real], { coinsFor: coinsAt("https://x", crowded) });
     check("A lock with 501 tiny coins sent to it can still have its commitment taken", v[0].ok === true, `${v[0].reason ?? "signed"}; asked ${asked.join(", ").slice(0, 60)}`);
   }

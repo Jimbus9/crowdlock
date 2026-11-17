@@ -315,6 +315,15 @@ Submission order is used because it is already recorded, timestamped and public
 in the repository, so anybody can verify that the rule was followed. Unsettled
 commitments are harmless: those coins never moved.
 
+### If the network refuses a payment, the co-signer stops
+
+Payments are sent in submission order. If the network refuses one (a fee
+signed weeks ago can fall below what the network takes that day), that
+payment will not arrive and the purchase is now short by it. The co-signer
+sends no more: every further payment would be a member's money paid toward a
+purchase that is no longer funded. The ones already sent cannot be recalled,
+which is why this risk is stated in "Fees" below and is not closed by it.
+
 ### What the co-signer adds up before signing
 
 Before completing anything the co-signer checks every commitment again and

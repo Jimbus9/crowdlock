@@ -216,6 +216,14 @@ committed = Σ (output 0 value of every commitment that passes verification
   written around it. Only a coin that really sat in the lock can have left it
   this way, and only with the co-signer's signature, because the payment
   declares no date and the lock's going-home exit refuses it.
+- **A payment that has been sent and is waiting for a block is neither
+  "waiting" nor "paid", and is counted beside them.** Once the co-signer has
+  completed a commitment and sent it, its coin is spent on the network before
+  any block holds the payment. A reader that called such a commitment void
+  would see the pile's total fall, and in an oversubscribed proposal the
+  commitments that were left out could then reach the target by themselves
+  and be completed too. So a reader adds up three things toward the target:
+  what is waiting, what is sent and awaiting a block, and what is paid.
 - **The value a signature is checked against must come from a coin at the
   lock's address** (or, once spent, from the output that paid that address).
   A value read from any other coin proves nothing about the lock.

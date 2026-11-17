@@ -1085,19 +1085,39 @@ export function commitmentTxid(record) {
  * refuses it.
  */
 export async function commitmentPaid({ record, chain }) {
+  const p = await commitmentPayment({ record, chain });
+  return p?.confirmed ? p.sats : 0;
+}
+
+/**
+ * The payment a commitment became, if the co-signer completed it and it was
+ * sent: { sats, confirmed }, or null. `confirmed` is false while the network
+ * has it and no block holds it yet.
+ *
+ * A payment waiting for a block is not "paid", and must not be forgotten
+ * either. Until 17 November 2026 (security loop, round 4) its commitment
+ * read as void, counted neither as waiting nor as paid. After the co-signer
+ * sent the first commitments of an oversubscribed proposal, the total fell,
+ * the ones left out reached the target by themselves, the co-signer's button
+ * went live again, and pressing it sent those too: the seller was paid twice
+ * the target, from members the settlement rule leaves alone.
+ */
+export async function commitmentPayment({ record, chain }) {
   let tx;
-  try { tx = Transaction.fromHex(record.tx); } catch { return 0; }
-  if (tx.ins.length !== 1) return 0;
+  try { tx = Transaction.fromHex(record.tx); } catch { return null; }
+  if (tx.ins.length !== 1) return null;
   try {
     const L = record.lock ?? {};
     const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
     const from = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
     const src = Transaction.fromHex(String(await chain.txHex(from)).trim());
     const spent = src.getId() === from ? src.outs[tx.ins[0].index] : null;
-    if (!spent || toHex(spent.script) !== toHex(lockOutputScript(script))) return 0;
-  } catch { return 0; }
-  try { if (!(await chain.tx(tx.getId()))?.status?.confirmed) return 0; } catch { return 0; }
-  return Number(tx.outs[0].value);
+    if (!spent || toHex(spent.script) !== toHex(lockOutputScript(script))) return null;
+  } catch { return null; }
+  let seen;
+  try { seen = await chain.tx(tx.getId()); } catch { return null; }
+  if (!seen) return null;
+  return { sats: Number(tx.outs[0].value), confirmed: !!seen.status?.confirmed };
 }
 
 /**

@@ -21,7 +21,7 @@ import * as bitcoinApi from "@ledgerhq/ledger-bitcoin";
 import TransportBase from "@ledgerhq/hw-transport";
 import {
   NETWORKS, readLedgerAccount, ledgerAccountFrom, lockFor, buildLock, takeHome, lockState,
-  xpubForKey, checkLedgerKey, buildCommitment, checkCommitment, commitmentPaid, commitmentTxid, signStatementWith,
+  xpubForKey, checkLedgerKey, buildCommitment, checkCommitment, commitmentPaid, commitmentPayment, commitmentTxid, signStatementWith,
 } from "../../app/src/wallet/core.mjs";
 import { esploraChain } from "../../app/src/wallet/esplora.mjs";
 import { transportFor, withTimeout } from "../../app/src/ledgerLink.mjs";
@@ -120,4 +120,4 @@ export async function connectLedger(network) {
   } catch (e) { throw new Error(plain(e, network)); }
 }
 
-export { lockFor, buildLock, takeHome, lockState, xpubForKey, checkLedgerKey, esploraChain, buildCommitment, checkCommitment, commitmentPaid, commitmentTxid, signStatementWith };
+export { lockFor, buildLock, takeHome, lockState, xpubForKey, checkLedgerKey, esploraChain, buildCommitment, checkCommitment, commitmentPaid, commitmentPayment, commitmentTxid, signStatementWith };
