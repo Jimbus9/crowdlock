@@ -116,11 +116,11 @@ reset();
 reset();
 {
   const url = "https://a.example/crowdlocks/x.json";
-  ok("Nothing seen yet reads as nothing", (await S.loadSeenLocks(url)).length === 0);
-  const seen = [{ owner_pubkey: "02" + "aa".repeat(32), cosigner_pubkey: "03" + "bb".repeat(32), locktime: 1900000000 }];
+  ok("Nothing seen yet reads as nothing", (await S.loadSeenLocks(url)) === null);
+  const seen = { locks: [{ owner_pubkey: "02" + "aa".repeat(32), cosigner_pubkey: "03" + "bb".repeat(32), locktime: 1900000000 }], count: 1, chain: "ab".repeat(32) };
   await S.saveSeenLocks(url, seen);
-  await S.saveSeenLocks("https://b.example/crowdlocks/y.json", []);
-  ok("The locks seen on a register are kept, each Crowdlock's apart", JSON.stringify(await S.loadSeenLocks(url)) === JSON.stringify(seen) && (await S.loadSeenLocks("https://b.example/crowdlocks/y.json")).length === 0);
+  await S.saveSeenLocks("https://b.example/crowdlocks/y.json", { locks: [], count: 0, chain: "" });
+  ok("The locks seen on a register are kept, each Crowdlock's apart", JSON.stringify(await S.loadSeenLocks(url)) === JSON.stringify(seen) && (await S.loadSeenLocks("https://b.example/crowdlocks/y.json")).count === 0);
 }
 
 console.log(process.exitCode ? "\nThe wallet's storage has a problem." : "\nThe wallet's storage keeps the words apart, locked where it can.");

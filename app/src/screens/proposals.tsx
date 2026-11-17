@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith,
+  wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith, commitmentsToComplete, commitmentCoin,
 } from "../wallet/core.mjs";
 import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments } from "../../../method/js/proposals.mjs";
@@ -300,21 +300,31 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [already, setAlready] = useState(0);
 
   useEffect(() => {
     if (!c || !c.ok || !p) return;
     (async () => {
       const out: { lock: any; coin: any }[] = [];
       const now = Math.floor(Date.now() / 1000);
+      // A coin already committed to this proposal can't be committed to it
+      // again: one coin counts once, and the earlier commitment stands. It
+      // used to be offered again under "Commit more", and the second
+      // commitment was signed, posted, shown as committed, and never counted.
+      const committed = new Set<string>();
+      try { for (const m of (await readPile(c, p, account)).mine) { const k = commitmentCoin(m.record); if (k) committed.add(k); } } catch {}
+      let skipped = 0;
       for (const l of locksOnRegister(c.register, account.address, c.crowdlock)) {
         // A lock that opens before this proposal's settling ends can't back it:
         // its owner could take the money home first.
         if (l.locktime <= now || l.locktime <= Date.parse(p.settles_by) / 1000) continue;
         for (const coin of (await chain.utxos(l.address)).filter((u: any) => u.confirmed)) {
+          if (committed.has(`${coin.txid}:${coin.vout}`)) { skipped++; continue; }
           out.push({ lock: { ...l, cosignerXpub: xpubForKey(c.crowdlock, l.cosignerPubkey) }, coin });
         }
       }
       out.sort((a, b) => b.coin.value - a.coin.value);
+      setAlready(skipped);
       setCoins(out);
     })().catch(() => setCoins([]));
   }, [c, p, account.address]);
@@ -347,6 +357,7 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
     : rulesMoved ? `Who approves where ${c.crowdlock.name}'s money may go has changed since you last looked. Check it on ${c.crowdlock.name}'s page first.`
     : !mayCommitTo(c, meNow, p) ? `This proposal was published under version ${proposalVersion(p, c.crowdlock)} of the declaration, and you haven't signed that version. Sign it from ${c.crowdlock.name}'s page first; it can take a few minutes to reach the register.`
     : phaseOf(p) !== "gathering" ? "This proposal isn't gathering commitments just now."
+    : coins && coins.length === 0 && already > 0 ? "Everything you could commit to this proposal is already committed to it. A coin counts once for a proposal, so there is nothing more to commit unless you lock more."
     : coins && coins.length === 0 ? `You have no locked bitcoin on this Crowdlock's register that stays locked until this proposal finishes settling (${atUtc(p.settles_by)}). Lock some for longer first.`
     : null;
   if (stop) return (
@@ -515,15 +526,18 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         // from those that still pass. If they no longer reach the target,
         // nothing is completed: one coin that has gone, or never confirmed,
         // must not leave the others paying for a purchase that is short.
-        const still: typeof take = [];
-        let total = pile.paid;
-        for (const g of take) {
-          try {
-            const v = await checkCommitment({ record: g.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
-            if (v.valid) { still.push(g); total += v.committedSats; } else failed.push(`A commitment no longer passes its check: ${v.reason}`);
-          } catch (e: any) { failed.push(String(e.message ?? e)); }
-        }
-        if (total < p.target.sats) {
+        // And only those the typed words can complete are added up: a lock
+        // names one co-signer key, and a Crowdlock may list more than one.
+        // Counting one these words can't complete, then completing the rest,
+        // would send members' money to a purchase that stays short.
+        let recheck: { ok: boolean; still: any[]; total: number; problems: string[] };
+        try {
+          recheck = await commitmentsToComplete({ words, records: take.map((g) => g.record), crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK, alreadyPaid: pile.paid });
+        } catch (e: any) { recheck = { ok: false, still: [], total: pile.paid, problems: [String(e.message ?? e)] }; }
+        const still = recheck.still.map((record) => ({ record }));
+        const total = recheck.total;
+        failed.push(...recheck.problems);
+        if (!recheck.ok) {
           setWords(""); setBusy(false);
           setMsg({ ok: false, text: `Nothing was completed. Checked again just now, the commitments add up to ${btc(BigInt(total))}, short of the ${btc(BigInt(p.target.sats))} target.${failed[0] ? ` ${failed[0]}` : ""}` });
           onDone();
@@ -532,8 +546,11 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         for (const g of still) {
           try {
             const hex = await completeCommitmentWith({ words, record: g.record, chain });
-            await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
+            const posted = await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
             if (sendHere) await chain.broadcast(hex);
+            // Published only: if no relay took it, it has gone nowhere, and saying
+            // "published" would be false. (Sent from here, the network has it.)
+            else if (!posted.ok) throw new Error("A completed payment could not be published: no relay took it. Check the connection and try again; nothing is lost.");
             sent++;
           } catch (e: any) { failed.push(String(e.message ?? e)); }
         }

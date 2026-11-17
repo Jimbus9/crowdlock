@@ -193,6 +193,13 @@ Given a lock address, an owner key, a co-signer key and a locktime:
 3. Derive the P2WSH address from it.
 4. The lock is genuine if and only if the derived address matches.
 
+The co-signer key is compared **whole**, sign byte included, with the keys
+the Crowdlock's file names. A key and its mirror image (`02…` and `03…` over
+the same x-coordinate) make different locks, and the co-signer's key opens
+only one of them: a lock naming the mirror is not a lock of this Crowdlock.
+(Step 1 compares the owner's key and the co-signer's on the x-coordinate alone,
+because there the question is whether one person holds both.)
+
 The co-signer therefore cannot lock their own coins with their co-signing key.
 Anyone who is both a member and a co-signer uses a separate key for each role.
 

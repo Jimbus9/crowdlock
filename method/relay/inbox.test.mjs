@@ -372,6 +372,25 @@ const ev = (id, created_at) => ({ id, created_at });
   };
 
   {
+    // An address holding more than 500 coins: the explorers refuse to list
+    // them, so the inbox works them out from the address's history instead
+    // (security loop, round 3). Before, 501 tiny coins sent to a lock's
+    // address meant none of its commitments could ever be taken.
+    const answer = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+    const asked = [];
+    const crowded = async (url) => {
+      asked.push(url.replace("https://x", ""));
+      if (url.endsWith("/utxo")) return answer(400, "Too many unspent transaction outputs (>500). Contact support to raise limits.");
+      if (url.endsWith("/txs")) return answer(200, [
+        { txid: "dd".repeat(32), status: { confirmed: true }, vin: [{ txid: "00".repeat(32), vout: 0, prevout: { scriptpubkey_address: "tb1qsomebody" } }], vout: Array.from({ length: 501 }, () => ({ scriptpubkey_address: lock.address, value: 330 })) },
+        { txid: FUNDING, status: { confirmed: true }, vin: [{ txid: "01".repeat(32), vout: 0, prevout: { scriptpubkey_address: "tb1qsomebody" } }], vout: [{ scriptpubkey_address: lock.address, value: VALUE }] },
+      ]);
+      return answer(404, "not found");
+    };
+    const v = await ownersSigned([real], { coinsFor: coinsAt("https://x", crowded) });
+    check("A lock with 501 tiny coins sent to it can still have its commitment taken", v[0].ok === true, `${v[0].reason ?? "signed"}; asked ${asked.join(", ").slice(0, 60)}`);
+  }
+  {
     const x = explorer();
     const coinsFor = coinsAt("https://x", x.fetchImpl);
     const many = [real, junkSig, { ...real, tx: (await commitment({ value: VALUE + 5 })).tx }];

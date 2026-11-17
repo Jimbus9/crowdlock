@@ -56,6 +56,28 @@ export const NETWORKS = {
 // transaction creating one, so it would be stuck. Bitcoin Core's figure.
 export const DUST_SATS = 294n;
 
+// The most coins one payment spends. A payment's size is limited by the
+// network; 200 lock coins come to about a sixth of that.
+export const MOST_INPUTS = 200;
+const TOO_SMALL = "every coin here is too small to be worth its own fee at this fee rate — choose a slower fee";
+
+/**
+ * The coins worth spending at this fee rate: each must hold more than it
+ * costs to spend, largest first, at most MOST_INPUTS. Anybody can send tiny
+ * coins to a published address. Until 17 November 2026 (security loop,
+ * round 3) every coin at an address was spent in one payment, so a few
+ * hundred of them made the app refuse to send, lock or take a lock home, or
+ * build a payment too large for the network. A coin left out is not lost: it
+ * stays where it is.
+ *   inputWeight  the weight of one such input, from the library
+ */
+export function worthSpending(coins, inputWeight, feeRate, most = MOST_INPUTS) {
+  const cost = BigInt(Math.ceil((inputWeight / 4) * feeRate));
+  return coins.filter((c) => BigInt(c.value) > cost)
+    .sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : BigInt(b.value) < BigInt(a.value) ? -1 : 0))
+    .slice(0, most);
+}
+
 /**
  * The same limit for any kind of output, by Bitcoin Core's rule: three sats
  * for every byte the output takes up, counting what it will cost to spend.
@@ -317,8 +339,11 @@ export async function buildSend({ account, chain, to, amount, feeRate, policies 
   try { dest = new Output({ descriptor: `addr(${String(to).trim()})`, network: net }); }
   catch { throw new Error("that is not an address on this network"); }
 
-  const coins = (await chain.utxos(account.address)).filter((c) => c.confirmed);
-  if (coins.length === 0) throw new Error("there is no confirmed money to send yet");
+  const everyCoin = (await chain.utxos(account.address)).filter((c) => c.confirmed);
+  if (everyCoin.length === 0) throw new Error("there is no confirmed money to send yet");
+  // Coins that cost more to spend than they hold are left where they are.
+  const coins = worthSpending(everyCoin, account.output.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate);
+  if (coins.length === 0) throw new Error(TOO_SMALL);
   const inputTotal = coins.reduce((s, c) => s + BigInt(c.value), 0n);
 
   const sendAll = amount === "all";
@@ -590,8 +615,11 @@ export async function takeHome({ account, chain, lock, feeRate, medianTime, to, 
   try { dest = new Output({ descriptor: `addr(${String(to ?? account.address).trim()})`, network: net }); }
   catch { throw new Error("that is not an address on this network"); }
 
-  const coins = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
-  if (coins.length === 0) throw new Error("there is no confirmed money in this lock");
+  const everyCoin = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
+  if (everyCoin.length === 0) throw new Error("there is no confirmed money in this lock");
+  // Coins that cost more to spend than they hold are left where they are.
+  const coins = worthSpending(everyCoin, out.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate);
+  if (coins.length === 0) throw new Error(TOO_SMALL);
   const total = coins.reduce((s, c) => s + BigInt(c.value), 0n);
 
   const weight = 44 + coins.length * out.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES") + dest.outputWeight();
@@ -641,9 +669,12 @@ export async function relock({ account, chain, lock, newLock, feeRate, medianTim
   const oldOut = new Output({ descriptor: oldDescriptor, network: net, signersPubKeys: [fromHex(account.publicKey)] });
   const dest = new Output({ descriptor: `addr(${next.address})`, network: net });
 
-  const lockCoins = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
-  if (lockCoins.length === 0) throw new Error("there is no confirmed money in this lock");
-  const waitCoins = addWaiting ? (await chain.utxos(account.address)).filter((c) => c.confirmed) : [];
+  const everyLockCoin = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
+  if (everyLockCoin.length === 0) throw new Error("there is no confirmed money in this lock");
+  // Coins that cost more to spend than they hold are left where they are.
+  const lockCoins = worthSpending(everyLockCoin, oldOut.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate);
+  if (lockCoins.length === 0) throw new Error(TOO_SMALL);
+  const waitCoins = addWaiting ? worthSpending((await chain.utxos(account.address)).filter((c) => c.confirmed), account.output.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate) : [];
   const total = [...lockCoins, ...waitCoins].reduce((s, c) => s + BigInt(c.value), 0n);
 
   const weight = 44
@@ -987,6 +1018,44 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
   const sig = toBase64(out);
   if (!verifyMembership({ address, signature: sig, message: statement, hrp: net.bech32 }).valid) throw new Error("the notice did not verify — refusing");
   return { address, signature: sig };
+}
+
+/** The coin a commitment spends, as "txid:vout", or null if it won't read. */
+export function commitmentCoin(record) {
+  try {
+    const tx = Transaction.fromHex(record.tx);
+    return tx.ins.length === 1 ? `${toHex(Uint8Array.from(tx.ins[0].hash).reverse())}:${tx.ins[0].index}` : null;
+  } catch { return null; }
+}
+
+/**
+ * Which of these commitments the co-signer key these words make can
+ * complete, and what they add up to. A Crowdlock may list more than one
+ * co-signer key, and a commitment can only be completed with the key its own
+ * lock names. Until 17 November 2026 (security loop, round 3) the co-signer's
+ * screen added up every commitment that passed its check, then completed
+ * those the typed words could and skipped the rest: honest members' money
+ * went to a purchase that stayed short. So those the words cannot complete
+ * are left out of the sum BEFORE anything is signed.
+ *
+ * Returns { ok, still, total, problems }: `ok` only if `total` (what is
+ * already paid plus what `still` commits) reaches the proposal's target.
+ */
+export async function commitmentsToComplete({ words, records, crowdlock, proposal, destinations, chain, network, alreadyPaid = 0 }) {
+  const key = cosignerKeyFromWords(words).publicKey;
+  const still = [], problems = [];
+  let total = alreadyPaid;
+  for (const record of records) {
+    if (String(record?.lock?.cosigner_pubkey ?? "").toLowerCase() !== key) {
+      problems.push("A commitment's lock names a co-signer key these words don't make, so they can't complete it and it isn't counted.");
+      continue;
+    }
+    try {
+      const v = await checkCommitment({ record, crowdlock, proposal, destinations, chain, network });
+      if (v.valid) { still.push(record); total += v.committedSats; } else problems.push(`A commitment no longer passes its check: ${v.reason}`);
+    } catch (e) { problems.push(String(e?.message ?? e)); }
+  }
+  return { ok: total >= proposal.target.sats, still, total, problems };
 }
 
 /** The output script of a lock: segwit v0, the SHA-256 of its witness script. */

@@ -236,12 +236,14 @@ export async function saveSeenRules(url: string, rules: any): Promise<void> {
 // src/crowdlocks.mjs).
 const SEEN_LOCKS = "crowdlock.seenlocks.v1";
 
-export async function loadSeenLocks(url: string): Promise<any[]> {
-  try { const v = JSON.parse((await SecureStore.getItemAsync(SEEN_LOCKS)) ?? "{}")[url]; return Array.isArray(v) ? v : []; } catch { return []; }
+// (What is kept: the terms of up to 500 locks, how many there were, and a
+// running fingerprint of all of them, so a rewrite further back still shows.)
+export async function loadSeenLocks(url: string): Promise<any> {
+  try { return JSON.parse((await SecureStore.getItemAsync(SEEN_LOCKS)) ?? "{}")[url] ?? null; } catch { return null; }
 }
 
-export async function saveSeenLocks(url: string, locks: any[]): Promise<void> {
-  let all: Record<string, any[]> = {};
+export async function saveSeenLocks(url: string, locks: any): Promise<void> {
+  let all: Record<string, any> = {};
   try { all = JSON.parse((await SecureStore.getItemAsync(SEEN_LOCKS)) ?? "{}"); } catch {}
   all[url] = locks;
   await SecureStore.setItemAsync(SEEN_LOCKS, JSON.stringify(all));

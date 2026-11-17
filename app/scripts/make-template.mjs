@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-17i";
+export const TEMPLATE_VERSION = "2026-11-17j";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -47,10 +47,11 @@ export const CHANGES = [
   { version: "2026-11-17e", change: "Fixes from a second review. Your inbox no longer takes a commitment spending a coin that hasn't confirmed, or from a lock that opens before the proposal finishes settling, or with anything in the co-signer's place; copies of a payment written another way no longer take a member's places or block a real completion; and a large flood of junk on the relays can delay a record but no longer hide it for good" },
   { version: "2026-11-17h", change: "Fixes from a security review. A stranger's altered or misdated copy of a member's commitment can no longer keep the member's own out of a proposal; the remainder lock on a commitment of part of a lock is checked; only the parts a commitment has are kept in your repository; a lock dated by block height is refused; nothing posted to the relays can start a line of its own in your inbox's log; and the inbox installs its libraries without running their install scripts" },
   { version: "2026-11-17i", change: "One more fix from the security review. Your inbox no longer takes a copy of a member's commitment that has a script added to its input: such a copy could never be paid, and posted first it kept the member's own commitment out" },
+  { version: "2026-11-17j", change: "More from the security review. Your inbox can still take a member's commitment after somebody sends hundreds of tiny coins to their lock's address (block explorers refuse to list more than 500 coins; the inbox now reads the address's history instead). A lock naming the mirror image of your co-signer key is no longer counted as yours. Adds one file, js/release.mjs, which the inbox now uses" },
 ];
 
 const FROM_REPO = [
-  "method/js/inbox.mjs", "method/js/append.mjs", "method/js/lockrecord.mjs", "method/js/verify.mjs", "method/js/crowdlock.mjs", "method/js/relayhealth.mjs", "method/js/proposals.mjs",
+  "method/js/inbox.mjs", "method/js/append.mjs", "method/js/lockrecord.mjs", "method/js/verify.mjs", "method/js/crowdlock.mjs", "method/js/relayhealth.mjs", "method/js/proposals.mjs", "method/js/release.mjs",
   "method/js/vendor/noble-secp256k1.js",
   "method/js/vendor/noble-hashes/_assert.js", "method/js/vendor/noble-hashes/_md.js", "method/js/vendor/noble-hashes/crypto.js",
   "method/js/vendor/noble-hashes/ripemd160.js", "method/js/vendor/noble-hashes/sha256.js", "method/js/vendor/noble-hashes/utils.js",

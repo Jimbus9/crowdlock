@@ -331,9 +331,9 @@ const closedRecords = new Map();
  * @param {any} loaded
  * @param {any} [fetchImpl]
  * @param {number} [now]
- * @param {{ remembered?: any[] }} [options]
+ * @param {{ remembered?: any }} [options]
  */
-export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000), { remembered = [] } = {}) {
+export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000), { remembered = null } = {}) {
   const { crowdlock, register, destinations } = loaded;
   const chain = chainFor(crowdlock, fetchImpl);
   const seen = new Set();
@@ -379,7 +379,9 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
       if (undecided) unreadable++;
     } catch { unreadable++; }
   }
-  return { releases, unreadable, gone: watched.gone.length };
+  // `rewritten`: the locks this phone saw before are not all still there as
+  // they were. Then the record cannot be called clean, whatever it found.
+  return { releases, unreadable, gone: watched.gone.length, rewritten: watched.rewritten };
 }
 
 // ---------------------------------------------------------------------------
@@ -390,12 +392,12 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
 // ---------------------------------------------------------------------------
 
 /** The locks to read the co-signer's record for: the register's, and those this phone saw there before. */
-export function locksToWatch(loaded, remembered = []) {
+export function locksToWatch(loaded, remembered = null) {
   return watchLocks({ crowdlock: loaded.crowdlock, register: loaded.register, remembered, hrp: lockHrp(loaded.crowdlock) });
 }
 
 /** What this phone remembers of a register's locks now: their terms. */
-export function locksSeen(loaded, remembered = []) {
+export function locksSeen(loaded, remembered = null) {
   return seenLocks({ crowdlock: loaded.crowdlock, register: loaded.register, remembered, hrp: lockHrp(loaded.crowdlock) });
 }
 
@@ -519,7 +521,30 @@ export function rulesOf(loaded) {
     entries: entries.length,
     head,
     hashes: entries.map((e) => { try { return destinationHash(e); } catch { return "unreadable"; } }),
+    // Two more numbers the file's writer could change unseen (security loop,
+    // round 3): the largest fee a commitment may leave, which also decides
+    // what the early-release record lets pass as a purchase; and each
+    // proposal's target, which is outside its hash and decides "the target
+    // is met" and whether the co-signer's button is live.
+    fee: typeof c.max_commitment_fee === "number" ? c.max_commitment_fee : null,
+    targets: Object.fromEntries((Array.isArray(loaded?.proposals) ? loaded.proposals : [])
+      .filter((p) => typeof p?.hash === "string" && Number.isInteger(p?.target?.sats))
+      .map((p) => [p.hash, p.target.sats])),
+    titles: Object.fromEntries((Array.isArray(loaded?.proposals) ? loaded.proposals : [])
+      .filter((p) => typeof p?.hash === "string").map((p) => [p.hash, String(p.title ?? "a proposal").slice(0, 60)])),
   };
+}
+
+/**
+ * What to remember when nothing changed: the rules as they are now, with
+ * each proposal's target kept at the HIGHEST this phone has seen. A target is
+ * restated as the price moves, so a small fall is ordinary; remembering the
+ * highest means one walked down in small steps is still noticed.
+ */
+export function rulesKept(seen, now) {
+  const targets = { ...(now.targets ?? {}) };
+  for (const [hash, sats] of Object.entries(seen?.targets ?? {})) if (hash in targets && sats > targets[hash]) targets[hash] = sats;
+  return { ...now, targets };
 }
 
 /**
@@ -539,6 +564,18 @@ export function rulesChanges(seen, now) {
   const kept = (seen.hashes ?? []).every((h, i) => now.hashes[i] === h);
   if (now.entries < (seen.entries ?? 0)) notes.push(`The destinations list is shorter than when you last looked (${now.entries} entries, was ${seen.entries}). Nothing is ever meant to be taken off it: a revocation may have been removed.`);
   else if (!kept) notes.push("An earlier entry in the destinations list has been rewritten. Nothing on it is ever meant to change.");
+  // Only where this phone has something to compare: rules remembered before
+  // these two were kept say nothing about them.
+  if ("fee" in seen && seen.fee !== now.fee) {
+    const pc = (v) => (typeof v === "number" ? `${+(v * 100).toFixed(4)}%` : "not set");
+    notes.push(`The largest network fee a commitment may leave went from ${pc(seen.fee)} to ${pc(now.fee)} of what it commits. The same limit decides what the co-signer's record lets pass as a purchase.`);
+  }
+  for (const [hash, was] of Object.entries(seen.targets ?? {})) {
+    const is = now.targets?.[hash];
+    if (Number.isInteger(is) && is * 2 < was) {
+      notes.push(`The target of "${now.titles?.[hash] ?? "a proposal"}" was cut from ${was} to ${is} sats, to less than half. A target is restated as the price moves, but not by that much: with a lower target, far less has to be committed before the co-signer completes.`);
+    }
+  }
   return { changed: notes.length > 0, notes };
 }
 

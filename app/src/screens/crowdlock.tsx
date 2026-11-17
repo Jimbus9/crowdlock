@@ -12,7 +12,7 @@ import { DEFAULT_RELAYS } from "../start.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
   STARTING_LIST, loadCrowdlock, membershipOf, committedTotal, COUNTING_RULE_URL, poundsPerBtc, shortBtc, locksOnRegister, submitLock, newestCosigner, keyChanges,
-  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges, locksSeen, markCopies,
+  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges, rulesKept, locksSeen, markCopies,
 } from "../crowdlocks.mjs";
 // @ts-ignore — plain module
 import { TEST_APP_URL } from "../build.mjs";
@@ -86,7 +86,7 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
   const [showText, setShowText] = useState(false);
   const [gbp, setGbp] = useState<number | null>(null);
   const [keyChange, setKeyChange] = useState<{ added: string[]; removed: string[] } | null>(null);
-  const [record, setRecord] = useState<{ releases: any[]; unreadable: number; gone?: number } | null>(null);
+  const [record, setRecord] = useState<{ releases: any[]; unreadable: number; gone?: number; rewritten?: boolean } | null>(null);
   const [ruleChange, setRuleChange] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
@@ -110,8 +110,9 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
       // period, and the destinations list itself. The list growing at its end
       // is how it is meant to change, and is simply remembered.
       const rules = rulesOf(loaded);
-      const rch = rulesChanges(await loadSeenRules(url), rules);
-      if (!rch.changed) await saveSeenRules(url, rules).catch(() => {});
+      const seenRules = await loadSeenRules(url);
+      const rch = rulesChanges(seenRules, rules);
+      if (!rch.changed) await saveSeenRules(url, rulesKept(seenRules, rules)).catch(() => {});
       setRuleChange(rch.changed ? rch.notes : null);
       // One after the other, not both at once: each asks the explorer about every
       // lock on the register, and a phone only keeps a few questions open at a time.
@@ -233,8 +234,11 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
         ? <><Text style={s.label}>The declaration you signed{c.versions.length > 1 && mine ? ` (version ${mine.version})` : ""}</Text><Text style={s.declaration}>{mine?.text ?? c.declarationText}</Text></>
         : <NavRow title="The declaration" sub={c.versions.length > 1 && mine ? `The words you signed: version ${mine.version}` : "The words you signed"} onPress={() => setShowText(true)} />)}
       {record && (record.gone ?? 0) > 0 && <Text style={s.error}>{record.gone === 1 ? "A lock this phone saw on the register is" : `${record.gone} locks this phone saw on the register are`} no longer on it as {record.gone === 1 ? "it was" : "they were"}. Nothing is ever meant to be taken off a register or changed. This phone still checks {record.gone === 1 ? "it" : "them"} for early releases. Ask the founder why.</Text>}
-      {record && record.releases.length === 0 && ((c.register.locks ?? []).length > 0 || (record.gone ?? 0) > 0) && <Text style={s.note}>{record.unreadable
+      {record && record.rewritten && !((record.gone ?? 0) > 0) && <Text style={s.error}>The register no longer matches what this phone saw before: a lock's record has been removed or changed, further back than this phone can name. Nothing is ever meant to be taken off a register or changed. Ask the founder why.</Text>}
+      {record && record.releases.length === 0 && ((c.register.locks ?? []).length > 0 || (record.gone ?? 0) > 0 || record.rewritten) && <Text style={s.note}>{record.unreadable
         ? `Co-signer's record: couldn't check every lock. ${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be read in full, so this phone can't say there were no early releases.`
+        : record.rewritten
+        ? "Co-signer's record: no early release found among the locks this phone can still check. The register has been rewritten since this phone first saw it, so it can't say there were none."
         : "Co-signer's record: no early releases."}</Text>}
       <NavRow title="Share it" sub="A link or a code that opens it in someone's app" onPress={() => go({ name: "share", words, url })} />
       {repoFromFileUrl(c.url) && <NavRow title="Look after it" sub="For its founder and maintainers" onPress={() => go({ name: "lookAfter", words, url })} />}

@@ -211,6 +211,12 @@ rule();
   not("a lock dated by a block height, on a real network", byHeight("bc"), read, "block height");
   check("…though a private test chain may date a lock by height",
     lockIsGenuine(byHeight("bcrt"), { crowdlock: { ...crowdlock, network: "regtest" }, register: onRegister }).ok);
+  // A co-signer key's mirror image (02… for 03…) is another key, and makes
+  // another lock: one the co-signer's words cannot open (security loop, round 3).
+  not("a lock co-signed by the mirror image of this Crowdlock's key", (() => {
+    const m = mirror(record.cosigner_pubkey);
+    return { ...record, cosigner_pubkey: m, address: lockAddress({ ownerPubkey: OWNER, cosignerPubkey: m, locktime: record.locktime }, "bc") };
+  })(), read, "co-signer is not this Crowdlock's");
   not("a lock whose owner and co-signer are one key", { ...record, cosigner_pubkey: "03" + OWNER.slice(2) }, read, "same key");
   not("anything at all, for a network the checker does not know", record, { crowdlock: { ...crowdlock, network: "nowhere" }, register: onRegister }, "network");
   // The real registers, as they stand: every lock on them is genuine.

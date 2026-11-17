@@ -64,6 +64,11 @@ committed = Σ (confirmed balance of every lock address in state "locked"
   published with the figure.
 - **Unconfirmed transactions do not count.** A lock counts from its first
   confirmation.
+- **A balance must be readable however many coins sit at the address.**
+  Public block explorers refuse to list the coins at an address holding more
+  than 500, and anybody can send that many tiny coins to a published lock
+  address. A reader that is refused works the coins out from the address's
+  history instead: every output paying it that nothing has spent.
 - Each lock address is counted once. An address appearing twice in the register
   is counted once.
 - **Only a real lock is counted.** A register is a file, and a file can say

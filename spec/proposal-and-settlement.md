@@ -315,6 +315,28 @@ Submission order is used because it is already recorded, timestamped and public
 in the repository, so anybody can verify that the rule was followed. Unsettled
 commitments are harmless: those coins never moved.
 
+### What the co-signer adds up before signing
+
+Before completing anything the co-signer checks every commitment again and
+adds the total up again, from those that still pass **and that the key in
+hand can complete**. A lock names one co-signer key, and a Crowdlock may list
+more than one (an older key stays listed so its locks keep counting). A
+commitment whose lock names another key cannot be completed with this one. It
+is left out of the sum, and if what is left falls short of the target, nothing
+is completed. Completing the ones that can be and skipping the rest would send
+members' money to a purchase that stays short.
+
+### The target is outside the hash, so it is watched
+
+`target` is restated as the price moves and is deliberately not in a
+proposal's hash. That leaves it a number whoever can write the proposals file
+can change, and it decides whether a reader says "the target is met". A reader
+therefore remembers the highest target it has seen for each proposal, and
+pauses committing and co-signing, with a warning, when a target falls to less
+than half of it. This catches a target cut to a fraction; it does not replace
+looking at the price. Who may restate a target, and by how much, is not yet a
+rule of the method.
+
 ## Fees
 
 The fee is fixed by the owner's signature and cannot be changed afterwards

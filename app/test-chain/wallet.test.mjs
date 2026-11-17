@@ -777,6 +777,32 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");
+  {
+    // The co-signer's screen (security loop, round 3). It added up every
+    // commitment that passed its check, then completed those the typed words
+    // could and skipped the rest: with two co-signer keys listed, the ones
+    // under the other key counted toward the target and were never paid, so
+    // honest members' money went to a purchase that stayed short. What the
+    // words cannot complete is now left out of the sum before anything is signed.
+    const { commitmentsToComplete, commitmentCoin, worthSpending } = await import("../src/wallet/core.mjs");
+    const ask = (words, target) => commitmentsToComplete({ words, records: [good], crowdlock: cl, proposal: { ...appProposal, target: { sats: target } }, destinations: destFile, chain, network: net });
+    const right = await ask(coWords5, 100_000);
+    check("With the words of the key the lock names, the commitment counts and may be completed", right.ok && right.still.length === 1 && right.total === 100_000, right.problems.join(" "));
+    const wrong = await ask(newWords(), 100_000);
+    check("With another key's words it is not counted, so nothing is completed short of the target",
+      !wrong.ok && wrong.still.length === 0 && wrong.total === 0 && /co-signer key these words don't make/.test(wrong.problems.join(" ")), wrong.problems.join(" ").slice(0, 70));
+    const short = await ask(coWords5, 100_001);
+    check("…and a total short of the target is not ok either", !short.ok && short.total === 100_000);
+    const spent = bitcoinjs.Transaction.fromHex(good.tx).ins[0];
+    check("The coin a commitment spends is read from it", commitmentCoin(good) === `${Buffer.from(spent.hash).reverse().toString("hex")}:${spent.index}` && commitmentCoin({ tx: "zz" }) === null);
+    // Tiny coins anybody can send to a published address (round 3): each cost
+    // more to spend than it held, and the app spent every coin or none.
+    const tiny = Array.from({ length: 300 }, (_, i) => ({ txid: `t${i}`, vout: 0, value: 330 }));
+    const picked = worthSpending([...tiny, { txid: "big", vout: 0, value: 250_863 }, { txid: "mid", vout: 1, value: 5_000 }], 320, 10);
+    check("Coins that cost more to spend than they hold are left where they are", picked.length === 2 && picked[0].txid === "big" && picked[1].txid === "mid", `${picked.length} coins picked`);
+    check("…at a lower fee rate they are worth taking, largest first, and never more than a payment can carry",
+      worthSpending(tiny, 320, 1).length === 200 && worthSpending([...tiny, { txid: "big", vout: 0, value: 9_000 }], 320, 1)[0].txid === "big");
+  }
   const finished = await completeCommitmentWith({ words: coWords5, record: good, chain });
   {
     // The fee is sized for the payment as it is finally sent: two signatures,

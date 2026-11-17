@@ -245,6 +245,26 @@ check("The link points at the counting rule's section on the minimum", COUNTING_
   check("The waiting period shortened is", rulesChanges(seen, rulesOf({ ...base, crowdlock: { ...base.crowdlock, destination_wait_days: 0 } })).changed);
   check("A revocation cut off the end of the list is", /shorter/.test(rulesChanges(seen, rulesOf({ ...base, destinations: { entries: [e1] } })).notes.join(" ")));
   check("An earlier entry rewritten is", /rewritten/.test(rulesChanges(seen, rulesOf({ ...base, destinations: { entries: [{ ...e1, address: "tb1qmine" }, e2] } })).notes.join(" ")));
+  {
+    // Security loop, round 3. Two numbers a file's writer could change unseen:
+    // the largest fee a commitment may leave (which also decides what the
+    // early-release record lets pass), and a proposal's target, which is
+    // outside its hash and decides "the target is met" and the co-signer's button.
+    const { rulesKept } = await import("../src/crowdlocks.mjs");
+    const withFee = { ...base, crowdlock: { ...base.crowdlock, max_commitment_fee: 0.01 }, proposals: [{ hash: "aa".repeat(32), title: "A stake", target: { sats: 1515152 } }] };
+    const seen3 = rulesOf(withFee);
+    check("The same fee limit and targets: no warning", !rulesChanges(seen3, rulesOf(structuredClone(withFee))).changed);
+    check("The largest fee a commitment may leave being changed is a change",
+      /fee/.test(rulesChanges(seen3, rulesOf({ ...withFee, crowdlock: { ...withFee.crowdlock, max_commitment_fee: 0.999 } })).notes.join(" ")));
+    const cut = (sats) => rulesOf({ ...withFee, proposals: [{ ...withFee.proposals[0], target: { sats } }] });
+    check("A target restated a little, as the price moves, is not a change", !rulesChanges(seen3, cut(1400000)).changed && !rulesChanges(seen3, cut(1700000)).changed);
+    check("A target cut to under half of what this phone has seen is", /target/.test(rulesChanges(seen3, cut(40000)).notes.join(" ")), rulesChanges(seen3, cut(40000)).notes.join(" ").slice(0, 80));
+    const stepped = rulesKept(rulesKept(seen3, cut(1000000)), cut(700000));
+    check("…and so is one walked down in small steps: the highest seen is what is remembered",
+      stepped.targets["aa".repeat(32)] === 1515152 && rulesChanges(stepped, cut(600000)).changed);
+    const { fee: _fee, targets: _targets, titles: _titles, ...older } = seen;   // as a phone kept them before round 3
+    check("Rules remembered before these were kept say nothing about them", !rulesChanges(older, rulesOf(withFee)).changed);
+  }
 }
 let lockPosted = null;
 const lockOk = await submitLock({ lock_endpoint: "https://example.com/lock/submit?c=x" },
@@ -403,7 +423,7 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
     const { locksToWatch, locksSeen } = await import("../src/crowdlocks.mjs");
     const remembered = locksSeen(reg);
     check("The phone remembers the terms of every lock it has seen on the register",
-      remembered.length === 3 && remembered.every((l) => l.owner_pubkey && l.cosigner_pubkey && Number.isInteger(l.locktime) && !("address" in l)));
+      remembered.locks.length === 3 && remembered.locks.every((l) => l.owner_pubkey && l.cosigner_pubkey && Number.isInteger(l.locktime) && !("address" in l)));
     const without = { ...reg, register: { ...reg.register, locks: [recent, open] } };
     askAfresh(recFetch);
     const hidden = await coSignerRecord(without, recFetch, now);
@@ -414,8 +434,16 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
     const kept2 = await coSignerRecord(bent, recFetch, now, { remembered });
     check("…and so is one whose date was changed by a digit, so that it no longer reads as a lock",
       kept2.releases.length === 1 && kept2.gone === 1);
-    check("With nothing gone, nothing is reported gone", (await coSignerRecord(reg, recFetch, now, { remembered })).gone === 0);
-    check("What is remembered next keeps the lock that has gone", locksSeen(without, remembered).length === 3 && locksToWatch(without, locksSeen(without, remembered)).gone.length === 1);
+    const same = await coSignerRecord(reg, recFetch, now, { remembered });
+    check("With nothing gone, nothing is reported gone or rewritten", same.gone === 0 && same.rewritten === false);
+    check("What is remembered next keeps the lock that has gone", locksSeen(without, remembered).locks.length === 3 && locksToWatch(without, locksSeen(without, remembered)).gone.length === 1);
+    // Round 3: a register rewritten further back than the phone remembers by
+    // name still shows, and the record is not called clean.
+    check("A lock gone from the register makes the record say the register was rewritten", kept.rewritten === true && kept2.rewritten === true);
+    const forgotten = { ...remembered, locks: remembered.locks.filter((l) => l.locktime !== old.locktime) };
+    const blind = await coSignerRecord(without, recFetch, now, { remembered: forgotten });
+    check("…even when the phone no longer holds that lock's terms and so cannot check it by name",
+      blind.gone === 0 && blind.releases.length === 0 && blind.rewritten === true);
     check("Junk in the phone's memory is not a lock", locksToWatch(reg, [{ owner_pubkey: "zz", cosigner_pubkey: "02aa", locktime: 5 }, null, 7]).gone.length === 0);
   }
 
@@ -466,6 +494,31 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
     const ranked = rankFound(m);
     check("A copy no longer ranks level with the real one", ranked[0].url === real.url && ranked.findIndex((x) => x.url === copy.url) > ranked.findIndex((x) => x.url === honest.url));
   }
+}
+
+{
+  // An address holding more than 500 coins (security loop, round 3). Both
+  // public explorers refuse to list them. The app took that as the explorer
+  // failing, so 501 tiny coins sent to a lock's published address made the
+  // lock unreadable to its owner and the Crowdlock's total unreadable to all.
+  const A = "tb1qcrowded";
+  const history = [
+    { txid: "dd", status: { confirmed: true }, vin: [{ txid: "00", vout: 0, prevout: { scriptpubkey_address: "tb1qx" } }], vout: Array.from({ length: 501 }, () => ({ scriptpubkey_address: A, value: 330 })) },
+    { txid: "ff", status: { confirmed: true }, vin: [{ txid: "01", vout: 0, prevout: { scriptpubkey_address: "tb1qx" } }], vout: [{ scriptpubkey_address: A, value: 250863 }] },
+  ];
+  const tooMany = async (url) => {
+    const u = String(url);
+    if (u.endsWith(`/address/${A}/utxo`)) return new Response("Too many unspent transaction outputs (>500). Contact support to raise limits.", { status: 400 });
+    if (u.endsWith(`/address/${A}/txs`)) return Response.json(history);
+    return new Response("not found", { status: 404 });
+  };
+  let coins = null, said = "";
+  try { coins = await esploraChain("https://crowded", tooMany, 50).utxos(A); } catch (e) { said = String(e.message ?? e); }
+  check("An address with more coins than the explorer will list is read from its history instead",
+    coins?.length === 502 && coins.some((c) => c.txid === "ff" && c.value === 250863 && c.confirmed), said || `${coins?.length} coins`);
+  let bad = "";
+  try { await esploraChain("https://crowded2", async () => new Response("Invalid Bitcoin address", { status: 400 }), 50).utxos("nonsense"); } catch (e) { bad = String(e.message ?? e); }
+  check("…and an address the explorer simply refuses is still an error", /400/.test(bad), bad);
 }
 
 // A slow connection. The first try is never cut short: the second runs
