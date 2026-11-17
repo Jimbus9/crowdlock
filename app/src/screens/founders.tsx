@@ -470,6 +470,23 @@ function useGitHub(step: (text: string) => void = () => {}) {
   return { withSignIn, codeView };
 }
 
+// After signing in to GitHub the founder comes back to the app, and a Ledger
+// needs unlocking (PIN) and its Bitcoin app opening before it can sign. The
+// app waits for them to say it's ready rather than reaching for it at once
+// (James, 17 November 2026: it failed within seconds of coming back).
+function useLedgerReady(account: any) {
+  const [go, setGo] = useState<null | (() => void)>(null);
+  const ready = () => account?.kind !== "ledger" ? Promise.resolve()
+    : new Promise<void>((resolve) => setGo(() => () => { setGo(null); resolve(); }));
+  const readyView = go && (
+    <View style={s.panel}>
+      <Text style={s.p}>Now your Ledger. Unlock it with its PIN and open {ledgerAppFor(NETWORK)} on it, then tap below.</Text>
+      <Btn label="My Ledger is ready" onPress={go} />
+    </View>
+  );
+  return { ready, readyView };
+}
+
 function MaintainerAdvice() {
   return <>
     <Text style={s.p}>A maintainer can keep this Crowdlock running if you can't. They can update it and change what's published at its address — the same as you. They can never touch anyone's money.</Text>
@@ -747,6 +764,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
   const isAttestor = rules.attestors.includes(account.address);
   const path = repoPathOf(c, c.crowdlock.register.destinations);
   const stamps = useStamps(d.entries ?? []);
+  const { ready, readyView } = useLedgerReady(account);
   const add = async () => {
     setBusy(true); setMsg(null);
     try {
@@ -758,6 +776,8 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
           token, owner, repo, path,
           makeEntry: (file: any) => nextDestination(file, { address, text }),
           attest: async (entry: any) => {
+            setStep("Signed in. Your Ledger is next.");
+            await ready();
             setStep(account.kind === "ledger" ? `Waiting for your Ledger — unlock it, open ${ledgerAppFor(NETWORK)}, and approve the message it shows.` : "Signing…");
             const signature = await signStatementWith(await signingAccount(account), attestationStatement(entry));
             return { address: account.address, signature };
@@ -793,6 +813,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
       <Input style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
       <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature. Then it stamps it on the chain: a small payment from this wallet back to itself, carrying the destination's fingerprint, so its date can't be faked. That needs a little bitcoin in this wallet for the network fee{account.kind === "ledger" ? ", and a second approval on your Ledger" : ""}.</Text>
       {codeView}
+      {readyView}
       {busy && !!step && <Text style={s.note}>{step}</Text>}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
       {!!address.trim() && !isAddressOn(address.trim(), c.crowdlock.network) && <Text style={s.error}>That isn't a {c.crowdlock.network === "mainnet" ? "bitcoin" : "test-network"} address. Paste the seller's whole address.</Text>}

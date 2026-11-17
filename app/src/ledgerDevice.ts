@@ -137,6 +137,7 @@ export function plain(e: any, network = "testnet4"): string {
   if (/Open the .* app|0x6e01|0x6d02|0x6511|0x6e00|CLA_NOT_SUPPORTED|app.*not open/i.test(m)) return `Open the ${app} app on your Ledger and try again.`;
   if (/upgrade/i.test(m)) return `Update the ${app} app on your Ledger (in Ledger Live), then try again.`;
   if (/locked|0x5515|0x6b0c|DeviceLocked/i.test(m)) return "Unlock your Ledger with its PIN and try again.";
+  if (/PeerRemovedPairing|pairing.*removed|bond/i.test(m)) return "Your phone and Ledger have lost their Bluetooth pairing (this can happen after the Ledger restarts). In the phone's Settings → Bluetooth, forget the Ledger, then try again and accept the pairing code on both. Or plug the Ledger in with a USB cable.";
   if (/Permissions not granted|BlePermissionsNotGranted|Unauthorized/i.test(m)) return "Allow Crowdlock's Nearby devices permission in your phone's settings (Apps → Crowdlock → Permissions), then try again — or plug the Ledger in with a USB cable.";
   if (/BluetoothRequired|PoweredOff|bluetooth.*off|BleNotSupported/i.test(m)) return "Turn on Bluetooth and try again — or plug the Ledger in with a USB cable.";
   if (/Couldn't find your Ledger/i.test(m)) return m;
