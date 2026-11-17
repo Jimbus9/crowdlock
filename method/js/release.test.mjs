@@ -6,7 +6,7 @@
 // Run:  node method/js/release.test.mjs      (from the repo root, after npm ci in method/lock)
 
 import { ECPair, lockAddress, buildSpend, networkFor } from "../lock/lock.mjs";
-import { isCoSigned, isListedDestination, earlyReleases, staysLocked, readHistory, PAGE, MOST_PAGES } from "./release.mjs";
+import { isCoSigned, isListedDestination, earlyReleases, staysLocked, readHistory, clocksFor, CLOCK_WINDOW, PAGE, MOST_PAGES } from "./release.mjs";
 import { lockAddress as recordAddress } from "./lockrecord.mjs";
 import { destinationHash, attestationStatement, stampScript, ZERO_PREV } from "./proposals.mjs";
 import { messageHash, memberAddressForOwnerKey } from "./verify.mjs";
@@ -31,7 +31,7 @@ const shop = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";
 // The same coin opened both ways, as an explorer would report each.
 const asExplorer = (built, blockTime) => ({
   txid: built.txid,
-  status: blockTime ? { confirmed: true, block_time: blockTime } : { confirmed: false },
+  status: blockTime ? { confirmed: true, block_time: blockTime, block_hash: `b${blockTime}` } : { confirmed: false },
   vin: [{ prevout: { scriptpubkey_address: lock.address, value }, witness: built.tx.ins[0].witness.map((b) => Buffer.from(b).toString("hex")) }],
   vout: built.tx.outs.map((o) => ({ value: o.value, scriptpubkey_address: o === built.tx.outs[0] ? built.dest : null })),
 });
@@ -55,10 +55,32 @@ check("Co-signed before its date, not to a destination: an early release",
   early.length === 1 && early[0].sats === value && early[0].paidTo === elsewhere && early[0].cosigner === L.cosigner_pubkey);
 check("…and one still waiting for a block counts too",
   earlyReleases(L, [asExplorer(coSignedAway, null)], null, before).length === 1);
+// The network's clock (the median time of the blocks before) for a block stamped just after the date.
+const pastClock = { [`b${locktime + 60}`]: locktime + 1 };
 check("Co-signed after its date isn't one — the owner could have done that alone",
-  earlyReleases(L, [asExplorer(coSignedAway, locktime + 60)]).length === 0);
+  earlyReleases(L, [asExplorer(coSignedAway, locktime + 60)], { clocks: pastClock }).length === 0);
 check("Opened by its owner on its date isn't one",
-  earlyReleases(L, [asExplorer(home, locktime + 60)]).length === 0);
+  earlyReleases(L, [asExplorer(home, locktime + 60)], { clocks: pastClock }).length === 0);
+check("Long after its date, no clock is needed: not one",
+  earlyReleases(L, [asExplorer(coSignedAway, locktime + CLOCK_WINDOW + 1)]).length === 0);
+
+// The block's own timestamp is the miner's choice; the network's clock decides
+// (OpenAI review C-02, 17 November 2026).
+const early2 = earlyReleases(L, [asExplorer(coSignedAway, locktime + 300)], { clocks: { [`b${locktime + 300}`]: locktime - 100 } });
+check("A block stamped after the date, while the network's clock was still before it: an early release",
+  early2.length === 1 && !early2[0].undecided);
+check("…and the network's clock exactly on the date is still before it: an early release",
+  earlyReleases(L, [asExplorer(coSignedAway, locktime + 300)], { clocks: { [`b${locktime + 300}`]: locktime } }).length === 1);
+const unsure = earlyReleases(L, [asExplorer(coSignedAway, locktime + 300)]);
+check("With the clock unread, it is reported as undecided, never as clean", unsure.length === 1 && unsure[0].undecided === true);
+{
+  const blocks = { [`b${locktime + 300}`]: { previousblockhash: "p1" }, p1: { mediantime: locktime - 100 } };
+  const asked = [];
+  const clocks = await clocksFor(L, [asExplorer(coSignedAway, locktime + 300), asExplorer(coSignedAway, before), asExplorer(coSignedAway, locktime + CLOCK_WINDOW + 5)],
+    async (h) => { asked.push(h); return blocks[h]; });
+  check("clocksFor reads the block before's median time, and only for spends that need it",
+    clocks[`b${locktime + 300}`] === locktime - 100 && asked.length === 2, asked.join(","));
+}
 
 // A destinations list the way a real one is made: each entry attested by the
 // attestor the Crowdlock's own file names, and stamped on the chain.

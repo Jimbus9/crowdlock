@@ -118,7 +118,10 @@ because each one costs real money and a real transaction. Publish every
 signature in full regardless, so anyone who wants to count them can.
 
 **Committed members** — distinct members holding at least one lock in state
-"locked" at or above the minimum. This is the figure to quote alongside the
+"locked" at or above the minimum. A member here is an address on the register
+whose signature verifies against the version of the declaration it joined
+with; an address listed with a signature that does not verify is not one,
+however the register file lists it. This is the figure to quote alongside the
 committed total, because the two describe the same group of people.
 
 Derived with no extra data, because the key that signs the declaration is the

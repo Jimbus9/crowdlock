@@ -402,7 +402,8 @@ repository first received it, which is the order oversubscription settles in.
 The repository's relay inbox keeps this file. It records what arrived and when;
 it refuses a commitment whose lock is not on the register, one whose lock
 opens before the proposal's settling ends, one posted outside the gathering
-window, a malformed one, a copy, a second for the same coin, more than five per
+window, one it first sees more than an hour after the proposal closed (whatever
+time the record gives itself, which its poster chooses), a malformed one, a copy, a second for the same coin, more than five per
 lock, one whose co-signer's place is not empty, one spending a coin that has
 not confirmed, and one the lock's owner has not signed. A copy is the same
 payment, however it is written: the same transaction id. It records a
@@ -422,8 +423,12 @@ Two more keys appear as the co-signer acts:
   leaves out the signatures, so a completion and its commitment share it) and
   it carries the owner's signature and the co-signer's. `sent` is when the
   repository broadcast it, or first found it already on the network.
-- `notice`: the co-signer's failure notice (below), once, if genuine. After it,
-  no completion is recorded.
+- `notice`: the co-signer's failure notice (below), once, if genuine, and only
+  once the proposal has closed: while it is gathering it cannot have failed. A
+  completion signed by both after a notice is still recorded, marked
+  `after_notice`, because it is evidence the co-signer went back on its word.
+  A reader shows a notice against a pile that reaches its target as
+  contradicted, not as a failure.
 
 Not on a server we run. A collection held by us could have an individual
 commitment quietly dropped from it with no way for anyone to prove it happened.

@@ -186,6 +186,13 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
     r5.pile.commitments.length === 1 && r5.pile.commitments[0].record.tx === "ee" && r5.outcome.filter((o) => !o.added).every((o) => /has not signed/.test(o.reason)));
   const r6 = await run(emptyPile(hash), [ev("cc", inWindow, { ...lock, address: "tb1qnotregistered" }), ev("dd", Math.floor(Date.parse(p.opens) / 1000) - 10)], onlyReal);
   check("The signature is only asked about for records that passed every other check", !asked.includes("cc") && !asked.includes("dd") && r6.pile.commitments.length === 0);
+  // Dated inside the window but first seen hours after it closed (OpenAI review H-02).
+  const closesAt = Math.floor(Date.parse(prop.closes) / 1000);
+  const late = await applyCommitments(emptyPile(hash), [ev("ab", closesAt - 1)], { crowdlock, proposal: prop, register, nowIso: new Date((closesAt + 6 * 3600) * 1000).toISOString().replace(".000Z", "Z"), signed: allSigned });
+  check("A commitment dated before the close but first seen six hours after it is refused",
+    late.pile.commitments.length === 0 && /more than an hour after the proposal closed/.test(late.outcome[0]?.reason ?? ""), late.outcome[0]?.reason);
+  const onTime = await applyCommitments(emptyPile(hash), [ev("ac", closesAt - 1)], { crowdlock, proposal: prop, register, nowIso: new Date((closesAt + 600) * 1000).toISOString().replace(".000Z", "Z"), signed: allSigned });
+  check("…but one first seen ten minutes after (an inbox briefly down) is taken", onTime.pile.commitments.length === 1);
   let threw = false;
   try { await applyCommitments(emptyPile(hash), [ev("aa")], { crowdlock, proposal: prop, register, nowIso: "x" }); } catch { threw = true; }
   check("A caller that leaves the signature check out is refused, not trusted", threw);
@@ -223,8 +230,16 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   const onlyFake = await applySettlement(pile, [{ type: "completed", tx: fake(1), at: 1 }], { ...args, completedBy: realOnly });
   check("…and with only the fake posted, the commitment stays open for the real one", !onlyFake.pile.completed && dueToSend(onlyFake.pile, 5, txidOf).length === 0);
 
-  const dead = await applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }, { type: "completed", tx: full(1), at: 2 }], args);
-  check("Once declared dead, no completion is recorded after it", !!dead.pile.notice && !dead.pile.completed && dead.outcome.some((o) => /declared this proposal dead/.test(o.reason ?? "")));
+  // A notice counts only once the proposal has closed (OpenAI review H-04), and
+  // never hides a completion: one after it is recorded, marked as a breach.
+  const closed = { ...args, closes: "2026-11-12T09:00:00Z" };
+  const early = await applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }], { ...args, closes: "2026-11-25T00:00:00Z" });
+  check("A genuine notice while the proposal is still gathering is not taken", !early.pile.notice && /not closed yet/.test(early.outcome[0]?.reason ?? ""));
+  const noClose = await applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }], args);
+  check("…nor one checked without knowing when the proposal closes", !noClose.pile.notice);
+  const dead = await applySettlement(pile, [{ type: "notice", notice: signNotice(cosignerKey), at: 1 }, { type: "completed", tx: full(1), at: 2 }], closed);
+  check("After closing, a genuine notice is taken, and a completion after it is still recorded, marked as going back on it",
+    !!dead.pile.notice && dead.pile.completed?.length === 1 && dead.pile.completed[0].after_notice === true && dead.outcome.some((o) => /AFTER the co-signer declared/.test(o.reason ?? "")));
 }
 
 console.log(failures === 0 ? "Proposals behave as spec/proposal-and-settlement.md describes." : `${failures} check(s) failed.`);

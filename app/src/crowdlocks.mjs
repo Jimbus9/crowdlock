@@ -23,7 +23,7 @@ import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, cu
 import { proposalVersion, stampsFor, destinationHash } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
-import { earlyReleases, readHistory } from "../../method/js/release.mjs";
+import { earlyReleases, readHistory, clocksFor } from "../../method/js/release.mjs";
 import { checkCosignerXpubs, NETWORKS } from "./wallet/core.mjs";
 import { lockIsGenuine, hrpFor } from "../../method/js/lockrecord.mjs";
 
@@ -360,9 +360,14 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
         if (!h.complete) unreadable++;
         else if (closed) closedRecords.set(key, txs);
       }
-      for (const r of earlyReleases(lock, txs, { destinations: destinations ?? null, crowdlock, register, stamps, hrp: lockHrp(crowdlock) }, now)) {
+      // The network's clock for spends in blocks stamped just after the date.
+      const clocks = await clocksFor(lock, txs, (h) => chain.block(h));
+      let undecided = false;
+      for (const r of earlyReleases(lock, txs, { destinations: destinations ?? null, crowdlock, register, stamps, clocks, hrp: lockHrp(crowdlock) }, now)) {
+        if (r.undecided) { undecided = true; continue; }
         releases.push({ address: lock.address, member: lock.member ?? null, ...r });
       }
+      if (undecided) unreadable++;
     } catch { unreadable++; }
   }
   return { releases, unreadable };

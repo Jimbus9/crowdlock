@@ -8,7 +8,7 @@ import {
   wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, signNoticeWith,
 } from "../wallet/core.mjs";
 import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
-import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion } from "../../../method/js/proposals.mjs";
+import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments } from "../../../method/js/proposals.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
   loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges,
@@ -43,7 +43,7 @@ const PHASE_TEXT: Record<string, string> = {
   over: "Over",
 };
 
-type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number; notice: any | null };
+type Pile = { count: number; sats: number; mine: { sats: number; record: any; paid?: boolean }[]; good: { record: any; at: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number; notice: any | null; noticeContradicted?: boolean };
 
 async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
   // The repository's pile first — the lasting record, in the order the
@@ -63,8 +63,11 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
       }
     }
   } catch {}
+  // Commitments only on the relays count until an hour after closing. After
+  // that only the repository's record does: a late one could carry any date.
+  const relaysCount = stillTakingCommitments(p, Date.now() / 1000);
   for (const it of await fetchCommitments(c.crowdlock, p.hash)) {
-    if (it.type === "commitment" && inPile.has(it.record.tx)) continue;
+    if (it.type === "commitment" && (inPile.has(it.record.tx) || !relaysCount)) continue;
     // Not yet in the repository: ordered after everything that is.
     items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
   }
@@ -97,6 +100,11 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
     pile.good.push({ record: it.record, at: it.at, sats: v.committedSats });
     if (v.ownerPubkey === account.publicKey) pile.mine.push({ sats: v.committedSats, record: it.record });
   }
+  // A notice says the proposal failed. While it is still gathering it can't
+  // have, so a notice then is ignored (OpenAI review H-04). One against a
+  // pile that reaches its target is shown for what it is: contradicted.
+  if (pile.notice && (phaseOf(p) === "soon" || phaseOf(p) === "gathering")) pile.notice = null;
+  if (pile.notice && pile.sats + pile.paid >= p.target.sats) pile.noticeContradicted = true;
   return pile;
 }
 
@@ -179,7 +187,9 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
       <Text style={s.label}>Committed so far</Text>
       {err ? <Text style={s.error}>{err}</Text> : !pile ? <ActivityIndicator /> : <>
         {dead ? <>
-          <Text style={s.error}>Declared dead by the co-signer{pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}: it didn't reach its target, and none of its commitments will be completed. Your money stays locked and comes home on its date as usual.</Text>
+          <Text style={s.error}>{pile.noticeContradicted
+            ? `Declared dead by the co-signer${pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}, although the commitments checked on this phone add up to its target. The co-signer has said it will complete none of them. Your money stays locked and comes home on its date as usual.`
+            : `Declared dead by the co-signer${pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}: it didn't reach its target, and none of its commitments will be completed. Your money stays locked and comes home on its date as usual.`}</Text>
           <Text style={s.note}>The notice is signed by the co-signer's key and checked on this phone.</Text>
         </> : funded ? <>
           <Text style={s.good}>Funded and paid. {btc(BigInt(pile.paid))} went to the seller in {pile.paidCount} payment{pile.paidCount === 1 ? "" : "s"}, completed by the co-signer and sent. This proposal is closed.</Text>

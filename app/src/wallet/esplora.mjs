@@ -196,6 +196,8 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
     txs: (address) => get(`/address/${address}/txs`),
     /** The next page of the address's confirmed history, after this transaction. */
     txsAfter: (address, txid) => get(`/address/${address}/txs/chain/${txid}`),
+    /** One block, as the explorer describes it (its previous block, its median time). Never changes once asked. */
+    block: (hash) => get(`/block/${hash}`, "json", true),
     /** One transaction, as the explorer describes it: its outputs, and its block if it is in one. */
     tx: (txid) => get(`/tx/${txid}`),
     /** Has anything ever been sent to this address, confirmed or not? */

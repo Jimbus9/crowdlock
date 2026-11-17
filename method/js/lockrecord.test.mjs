@@ -18,7 +18,9 @@
 
 import * as proven from "../lock/lock.mjs";
 import { lockScript, lockAddress, hrpFor, prepareLock, addLock, lockIsGenuine } from "./lockrecord.mjs";
-import { memberAddressForOwnerKey } from "./verify.mjs";
+import { memberAddressForOwnerKey, messageHash } from "./verify.mjs";
+import { membershipStatement } from "./crowdlock.mjs";
+import { signAsync } from "./vendor/noble-secp256k1.js";
 import { readFileSync } from "node:fs";
 
 let failures = 0;
@@ -79,9 +81,12 @@ rule();
 const kop = JSON.parse(readFileSync(new URL("../fixtures/the-kop-fund/crowdlocks/kop-fund.json", import.meta.url), "utf8"));
 const crowdlock = { ...kop, cosigner_keys: [COSIGNER] };
 const member = memberAddressForOwnerKey(OWNER, "bc");
+// The owner's real signature over the declaration, as member 1.
+const signed = await signAsync(messageHash(membershipStatement(crowdlock)), Buffer.alloc(32, 1));
+const SIGNATURE = Buffer.concat([Buffer.from([31 + signed.recovery]), Buffer.from(signed.toCompactRawBytes())]).toString("base64");
 const register = {
   declaration: { sha256: kop.declaration.sha256 },
-  members: [{ n: 1, address: member, signature: "x", signed: "2026-10-27" }],
+  members: [{ n: 1, address: member, signature: SIGNATURE, signed: "2026-10-27" }],
   locks: [],
 };
 const frozen = JSON.stringify(register);
@@ -180,6 +185,11 @@ rule();
   const relabelled = lockIsGenuine({ ...record, member: "bc1qsomebodyelse" }, read);
   check("A real lock credited to somebody else is still a lock, and its owner is still the key's own address",
     relabelled.ok && relabelled.owner === member && relabelled.member === true);
+  // A member whose signature doesn't verify is not counted as one (OpenAI review H-03).
+  const forged = lockIsGenuine(record, { crowdlock, register: { ...onRegister, members: [{ ...onRegister.members[0], signature: "INVALID" }] } });
+  check("A real lock whose owner is listed with a signature that doesn't verify: a lock, but not a committed member", forged.ok && forged.member === false);
+  const other = lockIsGenuine(record, { crowdlock, register: { ...onRegister, members: [{ ...onRegister.members[0], signature: SIGNATURE.replace(/^./, (c) => (c === "H" ? "I" : "H")) }] } });
+  check("…nor one with another key's signature", other.ok && other.member === false);
   const stranger = lockIsGenuine(record, { crowdlock, register: { ...onRegister, members: [] } });
   check("A real lock whose owner never joined is a lock, and its owner is not counted as a member", stranger.ok && stranger.member === false);
   not("a record with no keys", { address: record.address, member: record.member, locktime: record.locktime }, read, "not public keys");

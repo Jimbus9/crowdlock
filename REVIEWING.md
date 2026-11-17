@@ -115,6 +115,16 @@ Each was reproduced first, and each fix has a test that fails on the old code.
 - **The real-bitcoin build could be signed from any branch,** in the same job as every npm and Gradle library. Signing is now a separate job running only Android's own tools, in a protected environment, and the certificate must match the one committed in `app/signing-certificate.sha256`.
 - **A large enough flood on the relays hid older records for good.** Each pass now carries on from where the last stopped.
 
+## What OpenAI's second review found, and what changed (17 November 2026, evening)
+
+Read against the same commits as the review above; four of its findings were already fixed by it. The other five, each reproduced and each with a test that fails on the old code:
+
+- **The record judged "early" by the spending block's own timestamp,** which its miner chooses, not by the network's clock (the median time of the blocks before). A co-signed early exit in a block stamped just after the date was hidden. It now reads the network's clock for those blocks, and a lock whose clock can't be read is "not checked", never clean.
+- **More than one relay page of records in the same second** hid the rest of that second, and the read said it had finished. It now says it hasn't, and the inbox's log says why.
+- **A commitment could be backdated into a closed proposal** by its poster. One the repository first sees more than an hour after closing is refused, and readers stop counting commitments that are only on the relays.
+- **The committed-member count believed the register's member list.** A member counts only if their signature verifies.
+- **A genuine "declared dead" notice was taken while a proposal was still gathering,** and then stopped completions being recorded. It is taken only after closing; a completion after it is recorded as a breach; and one against a pile that met its target is shown as contradicted.
+
 ## Limits we already know about
 
 - **One block explorer is believed at a time.** The register adds a lock when the explorer its Crowdlock's file names (`chain_api`) reports confirmed coins at the lock's address, so a lying explorer could make a lock count without the money being there. The app is in a better place than it was: it reads the chain for every Crowdlock from its own explorer for the network, never the one the Crowdlock names, and before signing anything it checks each coin's amount against the transaction the coin came from. Its backup explorer is only asked when the first is silent or broken. Nothing anywhere compares two explorers, or asks a node.
@@ -128,7 +138,9 @@ Each was reproduced first, and each fix has a test that fails on the old code.
 - **The real-bitcoin app is built from whatever the libraries produce.** Signing is kept apart from them, but a compromised npm or Gradle library could still change the app before it is signed.
 - **The relay inbox remembers how far back it has read only for one run** (about 48 minutes, 24 passes). A flood larger than one run can read still delays records until it ends.
 - **A payment the inbox sent is not checked again.** One dropped from the network's waiting list is not sent a second time.
-- **A commitment is judged by the time its poster wrote on it,** not when it arrived, so one posted while a proposal settles can be dated into its gathering window.
+- **A commitment posted within an hour after its proposal closes can still be dated into the window.** Nostr carries no time but the poster's; the inbox allows an hour for itself being briefly down.
+- **Records beyond a relay's batch size in one second can't be read from that relay.** The read says so rather than claiming it finished; posting by pull request still works.
+- **Reorganisations are not followed** when the record reads the network's clock.
 - **A destination's age can be up to about an hour short,** because a block's time can be set behind the real time.
 
 ## Things we would most like checked

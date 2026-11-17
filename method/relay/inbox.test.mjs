@@ -223,7 +223,17 @@ const ev = (id, created_at) => ({ id, created_at });
   const sameSecond = Array.from({ length: 250 }, (_, i) => ev("s" + i, now - 50));
   const split = await readBack(pretendRelay([...sameSecond, ev("older", now - 60)], 100), now - 86400);
   check("A second holding more than a batch does not stop it reaching older records",
-    split.complete && split.events.some((e) => e.id === "older"));
+    split.events.some((e) => e.id === "older"));
+  // …but some of that second can't be read, so the read is NOT complete
+  // (OpenAI review H-01, 17 November 2026: this test used to expect complete).
+  check("…and the read says it is not complete, and why", !split.complete && split.saturated === true, `${split.events.length} of 251 read`);
+  const flood1 = [...Array.from({ length: 1200 }, (_, i) => ev("j" + i, now - 50)), ev("genuine", now - 50)];
+  const one = await readBack(pretendRelay(flood1, 1000), now - 86400);
+  check("1,200 junk records and a genuine one in the same second: never reported complete", !one.complete && one.saturated);
+  const r1 = await readRelay(pretendRelay(flood1, 1000), now - 86400, undefined);
+  check("…and a whole pass says so too", !r1.complete && r1.saturated);
+  const exact = await readBack(pretendRelay([ev("a", now - 10), ev("b", now - 20)], 300), now - 86400);
+  check("A short read that only re-reads its last second is still complete", exact.complete && !exact.saturated);
 
   const old = await readBack(pretendRelay([ev("in", now - 100), ev("out", now - 200)], 300), now - 150);
   check("Nothing older than the window is read", old.complete && old.events.length === 1 && old.events[0].id === "in");

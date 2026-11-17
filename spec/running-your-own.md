@@ -200,7 +200,10 @@ could let members take counted money back early.
 
 What Bitcoin does record is when each lock was opened. Before its date the
 owner alone cannot open it, so every spend before the date had the co-signer's
-signature, whatever its witness looks like. So the register page and the app
+signature, whatever its witness looks like. "Before its date" is by the
+network's own clock, the median time of the eleven blocks before the spending
+block, not that block's timestamp, which its miner chooses; a lock whose
+clock can't be read is reported as not checked, never as clean. So the register page and the app
 list every lock opened before its date that sent any of its money somewhere
 other than a destination the co-signer could pay at that moment (attested,
 stamped and past its waiting period), back into the same lock or a lock of the
