@@ -19,7 +19,11 @@
 # let someone copy it and they can make an "update" phones will accept.
 
 set -euo pipefail
-export MSYS_NO_PATHCONV=1   # Git Bash on Windows: don't turn "/CN=..." into a file path
+trap 'echo; echo "Something went wrong on the line above. Nothing has been sent anywhere. Send a screenshot of this window."' ERR
+# Git Bash on Windows: don't turn "/CN=..." into a file path. Every file below
+# is named without a leading slash, relative to the key's folder, so openssl
+# (a Windows program there) gets paths it understands.
+export MSYS_NO_PATHCONV=1
 
 command -v openssl >/dev/null || { echo "openssl is missing. Run this in Git Bash (it comes with Git for Windows)."; exit 1; }
 
@@ -31,13 +35,15 @@ fi
 mkdir -p "$dir"
 cd "$dir"
 
+echo "Making the key in $dir (this takes a few seconds)…"
 password="$(openssl rand -hex 24)"
-work="$(mktemp -d)"
+work="working-files"
+rm -rf "$work"; mkdir "$work"
 trap 'rm -rf "$work"' EXIT
 
 openssl req -x509 -newkey rsa:4096 -sha256 -days 18250 -nodes \
   -subj "/CN=Crowdlock/O=Crowdlock" \
-  -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
+  -keyout "$work/key.pem" -out "$work/cert.pem"
 openssl pkcs12 -export -name crowdlock \
   -inkey "$work/key.pem" -in "$work/cert.pem" \
   -out crowdlock-release.p12 -passout "pass:$password"
