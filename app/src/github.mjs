@@ -251,26 +251,34 @@ async function readJson(gh, owner, repo, path) {
 
 /**
  * Add a destination to a Crowdlock's destinations list, attested by the
- * signed-in founder's wallet. `makeEntry(file)` returns { entry, firstSeen }
- * (method/js/proposals.mjs nextDestination); `attest(entry)` returns the
- * attestation { address, signature } signed by an attestor key; `check(file)`
- * must pass on the result.
+ * signed-in founder's wallet and stamped on the chain. `makeEntry(file)`
+ * returns { entry, at } (method/js/proposals.mjs nextDestination);
+ * `attest(entry)` returns the attestation { address, signature } signed by an
+ * attestor key; `stamp(entry)` sends the stamp payment for the attested entry
+ * and returns its txid; `check(file)` must pass on the result.
+ *
+ * The stamp is sent before the list is changed. If saving the list then
+ * fails, the stamp is wasted (its fee spent) and nothing else happens: an
+ * entry is never published without its stamp.
  */
-export async function addDestination({ token, owner, repo, path, makeEntry, attest, check }, fetchImpl = globalThis.fetch) {
+export async function addDestination({ token, owner, repo, path, makeEntry, attest, stamp, check }, fetchImpl = globalThis.fetch) {
   const gh = client(token, fetchImpl);
   const file = await readJson(gh, owner, repo, path);
   if (!file) throw new Error("This Crowdlock's destinations list isn't in its repository.");
-  const { entry, firstSeen } = makeEntry(file);
+  const { entry, at } = makeEntry(file);
   const attestation = await attest(entry);
   if (!(file.attestors ?? []).includes(attestation.address)) {
     throw new Error("This wallet isn't one of this Crowdlock's attestors, so it can't approve a destination. Its attestors are listed in its Crowdlock file.");
   }
-  const next = { ...file, updated: firstSeen.slice(0, 10), entries: [...(file.entries ?? []), { ...entry, attestations: [attestation], firstSeen }] };
-  const r = check ? check(next) : { ok: true };
-  if (!r.ok) throw new Error(`That would break the destinations list: ${r.problems.join("; ")}`);
+  const attested = { ...entry, attestations: [attestation] };
+  const next0 = { ...file, updated: at.slice(0, 10), entries: [...(file.entries ?? []), attested] };
+  const r0 = check ? check(next0) : { ok: true };
+  if (!r0.ok) throw new Error(`That would break the destinations list: ${r0.problems.join("; ")}`);
+  const txid = await stamp(attested);
+  const next = { ...next0, entries: [...(file.entries ?? []), { ...attested, stamp: txid }] };
   const sha = await commitFiles(gh, owner, repo, { [path]: JSON.stringify(next, null, 2) + "\n" },
-    `Add destination ${entry.index}: ${entry.text}\n\nAdded and attested from the Crowdlock app. Address ${entry.address}. A proposal may name it once it has been public for this Crowdlock's waiting period.`);
-  return { sha, entry: next.entries.at(-1) };
+    `Add destination ${entry.index}: ${entry.text}\n\nAdded, attested and stamped from the Crowdlock app. Address ${entry.address}. Stamp ${txid}. A proposal may name it once its stamp has been in a block for this Crowdlock's waiting period.`);
+  return { sha, entry: next.entries.at(-1), stamp: txid };
 }
 
 /**

@@ -148,6 +148,15 @@ const chain = {
     return (await node.getMetaByAddress([bcoin.Address.fromString(address, "regtest")])).length > 0;
   },
   async medianTime() { return (await rpc("getblockchaininfo")).mediantime; },
+  // One transaction as an Esplora explorer describes it: its outputs, and its block if it is in one.
+  async tx(txid) {
+    const m = await node.getMeta(bcoin.util.revHex(txid));
+    if (!m) throw new Error("the block explorer answered 404");
+    return {
+      txid, status: m.height >= 0 ? { confirmed: true, block_time: m.time } : { confirmed: false },
+      vout: m.tx.outputs.map((o) => ({ scriptpubkey: o.script.toRaw().toString("hex"), value: o.value })),
+    };
+  },
 };
 
 const minerWords = newWords();
@@ -493,14 +502,42 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   const INSTANCE = "29f943a5bf2c110200cb33d0299b00960b19f10f1942d14699aec154b39316df";
   const destination = accountFromWords(newWords(), net).address;
   const attestor = accountFromWords(newWords(), net);
-  const entry0 = { instance: INSTANCE, index: 1, op: "add", address: destination, text: "Test seller", added: "2026-10-01T00:00:00Z", prev: C.ZERO_PREV, firstSeen: "2026-10-01T00:00:00Z" };
-  const entry = { ...entry0, attestations: [{ address: attestor.address, signature: signStatement(attestor, C.attestationStatement(entry0)) }] };
-  const proposal = { instance: INSTANCE, destination, requiresMinor: 100000, currency: "GBP", document: "d".repeat(64), opens: "2026-10-20T00:00:00Z", closes: "2026-11-17T00:00:00Z", settlesBy: "2026-12-01T00:00:00Z" };
+  const entry0 = { instance: INSTANCE, index: 1, op: "add", address: destination, text: "Test seller", added: "2026-10-01T00:00:00Z", prev: C.ZERO_PREV };
+  const attested = { ...entry0, attestations: [{ address: attestor.address, signature: signStatement(attestor, C.attestationStatement(entry0)) }] };
+
+  // The attestor stamps the entry on the chain: a payment back to itself carrying it.
+  const { buildStamp } = await import("../src/wallet/core.mjs");
+  const P0 = await import("../../method/js/proposals.mjs");
+  await chain.broadcast((await buildSend({ account: miner, chain, to: attestor.address, amount: 50_000n, feeRate: 2 })).hex);
+  await rpc("generatetoaddress", [1, miner.address]);
+  await refuses("A stamp of something that isn't a stamp", () => buildStamp({ account: attestor, chain, script: "6a0100", feeRate: 2 }), "not a destination's stamp");
+  const stampTx = await buildStamp({ account: attestor, chain, script: P0.stampScript(attested), feeRate: 2 });
+  await chain.broadcast(stampTx.hex);
+  const entry = { ...attested, stamp: stampTx.txid };
+  const STAMPS = {};
+  STAMPS[stampTx.txid] = await chain.tx(stampTx.txid);
+  check("A stamp waiting for a block doesn't date the entry yet", !P0.stampedAt(entry, STAMPS[stampTx.txid]).ok && /not in a block/.test(P0.stampedAt(entry, STAMPS[stampTx.txid]).reason));
+  await rpc("generatetoaddress", [1, miner.address]);
+  STAMPS[stampTx.txid] = await chain.tx(stampTx.txid);
+  const stampedAt = P0.stampedAt(entry, STAMPS[stampTx.txid]);
+  {
+    const t = bitcoinjs.Transaction.fromHex(stampTx.hex);
+    const rate = Number(stampTx.fee) / t.virtualSize();
+    check("The stamp: one OP_RETURN carrying the entry and nothing else, and the rest back to the attestor",
+      t.outs.length === 2 && Buffer.from(t.outs[0].script).toString("hex") === P0.stampScript(attested) && Number(t.outs[0].value) === 0
+        && bitcoinjs.address.fromOutputScript(t.outs[1].script, net.network) === attestor.address && rate >= 2 && rate < 2.2,
+      `${stampTx.fee} sats for ${t.virtualSize()} vbytes`);
+    check("…and once it is in a block, the block's time dates the entry, for the app and the reference alike",
+      stampedAt.ok && stampedAt.at === C.stampedAt(entry, STAMPS[stampTx.txid]).at, stampedAt.reason);
+  }
+  // The proposal opens eight days after the stamp: old enough for a seven-day wait.
+  const iso = (t) => new Date(t * 1000).toISOString().replace(".000Z", "Z");
+  const proposal = { instance: INSTANCE, destination, requiresMinor: 100000, currency: "GBP", document: "d".repeat(64), opens: iso(stampedAt.at + 8 * 86400), closes: iso(stampedAt.at + 30 * 86400), settlesBy: iso(stampedAt.at + 40 * 86400) };
   const pHash = C.proposalHash(proposal);
   const verifyArgs = (record, utxoValue) => ({
     record, utxoValue, network: net.network,
     proposal: { hash: pHash, destination, opensAt: proposal.opens },
-    destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE },
+    destinationStamps: STAMPS, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE },
   });
 
   // A fan locks, then commits part of the lock.
@@ -661,7 +698,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   for (const [name, rec] of Object.entries(variants)) {
     const app = await checkCommitment({ record: rec, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
     const refv = C.verifyCommitment({ record: rec, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
-      proposal: { hash: pHash, destination, opensAt: proposal.opens }, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE } });
+      proposal: { hash: pHash, destination, opensAt: proposal.opens }, destinationStamps: STAMPS, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE } });
     if (app.valid !== refv.valid || (!app.valid && app.reason !== refv.reason)) { agreeAll = false; disagree.push(`${name}: app "${app.reason}" vs ref "${refv.reason}"`); }
   }
   check("The app's commitment checker gives the reference checker's verdict and reason, good and tampered", agreeAll, disagree.join(" | "));
@@ -674,7 +711,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     const relabelled = { ...good, proposal: other };
     const app = await checkCommitment({ record: relabelled, crowdlock: cl, proposal: { ...appProposal, hash: other }, destinations: destFile, chain, network: net });
     const refv = C.verifyCommitment({ record: relabelled, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
-      proposal: { hash: other, destination, opensAt: proposal.opens }, destinationEntries: [entry] });
+      proposal: { hash: other, destination, opensAt: proposal.opens }, destinationStamps: STAMPS, destinationEntries: [entry] });
     check("A commitment relabelled for another proposal paying the same address is refused, by the app and the reference alike",
       !app.valid && !refv.valid && app.reason === refv.reason && /does not name this proposal inside it/.test(app.reason), `${app.reason} | ${refv.reason}`);
     // A list that names its own attestors: only the Crowdlock's file counts.
@@ -686,6 +723,12 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     const elsewhere = { ...elsewhere0, attestations: [{ address: attestor.address, signature: signStatement(attestor, C.attestationStatement(elsewhere0)) }] };
     const crossed = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: { entries: [elsewhere] }, chain, network: net });
     check("A destination the same attestor signed for another Crowdlock is refused", !crossed.valid && /different instance/.test(crossed.reason), crossed.reason);
+    // Dated by its stamp, not by anything written in the file.
+    const typed = { ...entry, stamp: undefined, firstSeen: "2026-01-01T00:00:00Z" };
+    const unstamped = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: { entries: [typed] }, chain, network: net });
+    check("A destination with a date typed into the file and no stamp is refused", !unstamped.valid && /no stamp on the chain/.test(unstamped.reason), unstamped.reason);
+    const tooSoon = await checkCommitment({ record: good, crowdlock: { ...cl, destination_wait_days: 9 }, proposal: appProposal, destinations: destFile, chain, network: net });
+    check("A proposal opening before the stamp is old enough is refused", !tooSoon.valid && /days old at the proposal's opening, needs 9/.test(tooSoon.reason), tooSoon.reason);
   }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");

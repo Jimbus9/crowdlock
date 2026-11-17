@@ -23,7 +23,7 @@ import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, cu
 import { proposalVersion } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
-import { earlyReleases } from "../../method/js/release.mjs";
+import { earlyReleases, readHistory } from "../../method/js/release.mjs";
 import { checkCosignerXpubs, NETWORKS } from "./wallet/core.mjs";
 import { lockIsGenuine, hrpFor } from "../../method/js/lockrecord.mjs";
 
@@ -322,7 +322,8 @@ const closedRecords = new Map();
 
 /**
  * The co-signer's record: every lock on the register that the co-signer helped
- * open before its date, other than to pay a listed destination. Read from the
+ * open before its date, other than for a purchase (method/js/release.mjs: every
+ * output a listed destination, money staying locked, or a marker). Read from the
  * chain alone, so nobody — the co-signer included — can keep one off it.
  * Returns { releases: [{ address, member, txid, at, sats, paidTo, confirmed, cosigner }], unreadable }.
  */
@@ -347,10 +348,14 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
       const closed = lock.locktime + CLOSED_AFTER < now;
       let txs = closed ? closedRecords.get(key) : undefined;
       if (!txs) {
-        txs = await chain.txs(lock.address);
-        if (closed) closedRecords.set(key, txs);
+        // The whole history: a release can't be pushed out of sight by
+        // small payments to the lock's address after it.
+        const h = await readHistory(() => chain.txs(lock.address), (last) => chain.txsAfter(lock.address, last));
+        txs = h.txs;
+        if (!h.complete) unreadable++;
+        else if (closed) closedRecords.set(key, txs);
       }
-      for (const r of earlyReleases(lock, txs, destinations ?? null, now)) {
+      for (const r of earlyReleases(lock, txs, { destinations: destinations ?? null, crowdlock, register }, now)) {
         releases.push({ address: lock.address, member: lock.member ?? null, ...r });
       }
     } catch { unreadable++; }

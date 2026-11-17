@@ -194,6 +194,10 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
     forget,
     /** The address's transactions, newest first, with each input's witness. */
     txs: (address) => get(`/address/${address}/txs`),
+    /** The next page of the address's confirmed history, after this transaction. */
+    txsAfter: (address, txid) => get(`/address/${address}/txs/chain/${txid}`),
+    /** One transaction, as the explorer describes it: its outputs, and its block if it is in one. */
+    tx: (txid) => get(`/tx/${txid}`),
     /** Has anything ever been sent to this address, confirmed or not? */
     async everFunded(address) {
       const a = await get(`/address/${address}`);

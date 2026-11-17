@@ -1,10 +1,11 @@
 // The proposals file, and the browser-safe proposal hash held to the
 // reference code's bytes. Run: node method/js/proposals.test.mjs
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
   PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
-  chainIsIntact, destinationIsPermitted, attestorsOf, nextDestination, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
+  chainIsIntact, destinationIsPermitted, attestorsOf, nextDestination, stampLine, stampHash, stampScript, stampedAt, stampsFor, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
   applyCommitments, emptyPile, PER_LOCK_LIMIT, applySettlement, dueToSend, noticeStatement, noticeIsGenuine,
 } from "./proposals.mjs";
 import { memberAddressForOwnerKey } from "./verify.mjs";
@@ -72,13 +73,35 @@ const key = ECPair.makeRandom({ network: NET }), outsider = ECPair.makeRandom({ 
 const addrOf = (k) => bitcoin.payments.p2wpkh({ pubkey: Buffer.from(k.publicKey), network: NET }).address;
 const sign = (entry, k) => ({ address: addrOf(k), signature: bitcoinMessage.sign(attestationStatement(entry), Buffer.from(k.privateKey), true, { segwitType: "p2wpkh" }).toString("base64") });
 const dfile = { instance, entries: [] };
-const { entry: d1, firstSeen: s1 } = nextDestination(dfile, { address: addrOf(outsider), text: "Test seller", now: new Date("2026-11-01T12:00:00.123Z") });
-const e1 = { ...d1, attestations: [sign(d1, key)], firstSeen: s1 };
+// Each entry is dated by its stamp on the chain: a payment carrying the
+// entry and its attestations, as an explorer describes it (/tx/<txid>).
+const STAMPS = {};
+const stampOf = (entry, when) => {
+  const txid = createHash("sha256").update(`${stampScript(entry)}|${when}`).digest("hex");
+  STAMPS[txid] = { txid, status: { confirmed: true, block_time: Date.parse(when) / 1000 }, vout: [{ scriptpubkey: stampScript(entry), value: 0 }] };
+  return txid;
+};
+const signedAt = (d, k, when) => { const e = { ...d, attestations: [sign(d, k)] }; return { ...e, stamp: stampOf(e, when) }; };
+const { entry: d1, at: s1 } = nextDestination(dfile, { address: addrOf(outsider), text: "Test seller", now: new Date("2026-11-01T12:00:00.123Z") });
+const e1 = signedAt(d1, key, s1);
 const { entry: d2 } = nextDestination({ instance, entries: [e1] }, { address: addrOf(key), text: "Second", now: new Date("2026-11-20T00:00:00Z") });
-const e2 = { ...d2, attestations: [sign(d2, outsider)], firstSeen: "2026-11-20T00:00:00Z" };
+const e2 = signedAt(d2, outsider, "2026-11-20T00:00:00Z");
 const list = [e1, e2];
-const rules = { attestors: [addrOf(key)], threshold: 1, hrp: "tb", instance };
+const rules = { attestors: [addrOf(key)], threshold: 1, hrp: "tb", instance, stamps: STAMPS };
 check("A new entry chains to the one before it, with whole-second times", d1.prev === ZERO_PREV && d2.prev === ref.destinationHash(e1) && s1 === "2026-11-01T12:00:00Z");
+check("A stamp is the reference code's: the same line, hash and script",
+  list.every((e) => stampLine(e) === ref.stampLine(e) && stampHash(e) === ref.stampHash(e) && stampScript(e) === ref.stampScript(e) && /^6a20[0-9a-f]{64}$/.test(stampScript(e))));
+check("…and the same date, or the same refusal",
+  stampedAt(e1, STAMPS[e1.stamp]).at === ref.stampedAt(e1, STAMPS[e1.stamp]).at
+    && stampedAt(e1, STAMPS[e2.stamp]).reason === ref.stampedAt(e1, STAMPS[e2.stamp]).reason && !stampedAt(e1, STAMPS[e2.stamp]).ok
+    && stampedAt({ ...e1, stamp: undefined }, null).reason === ref.stampedAt({ ...e1, stamp: undefined }, null).reason);
+{
+  const asked = [];
+  const got = await stampsFor(list, [addrOf(outsider), "tb1qnotonthelist"], async (txid) => { asked.push(txid); return STAMPS[txid]; });
+  const failed = await stampsFor(list, [addrOf(key)], async () => { throw new Error("explorer down"); });
+  check("stampsFor reads only the stamps a check needs, and an unreadable one as nothing",
+    asked.length === 1 && got[e1.stamp] === STAMPS[e1.stamp] && failed[e2.stamp] === null);
+}
 check("Destination lines, hashes and statements are the reference code's",
   list.every((e) => destinationLine(e) === ref.destinationLine(e) && destinationHash(e) === ref.destinationHash(e) && attestationStatement(e) === ref.attestationStatement(e)));
 check("Attestations: the same verdicts as the reference code (a real one, an outsider's)",
@@ -98,8 +121,8 @@ check("Permitted or not: the same answer and reason as the reference code, in ev
 // and its attestors the ones the Crowdlock's file names.
 {
   const other = "9".repeat(64);
-  const { entry: x1, firstSeen } = nextDestination({ instance: other, entries: [] }, { address: addrOf(outsider), text: "Test seller", now: new Date("2026-11-01T12:00:00Z") });
-  const elsewhere = [{ ...x1, attestations: [sign(x1, key)], firstSeen }];
+  const { entry: x1, at } = nextDestination({ instance: other, entries: [] }, { address: addrOf(outsider), text: "Test seller", now: new Date("2026-11-01T12:00:00Z") });
+  const elsewhere = [signedAt(x1, key, at)];
   const here = (extra = {}) => [destinationIsPermitted, ref.destinationIsPermitted].map((f) => f({ address: addrOf(outsider), entries: elsewhere, opensAt: "2026-11-10T00:00:00Z", minimumAgeDays: 7, ...rules, ...extra }));
   check("An entry the same attestor signed for another Crowdlock is refused here (and so says the reference code)",
     here().every((r) => !r.permitted && /different instance/.test(r.reason)) && here({ instance: other }).every((r) => r.permitted));

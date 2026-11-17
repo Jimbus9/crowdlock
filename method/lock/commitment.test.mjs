@@ -13,6 +13,7 @@ import {
   destinationLine, destinationHash, attestationStatement, attestationsAreValid,
   proposalLine, proposalHash,
   chainIsIntact, destinationIsPermitted, ZERO_PREV, MAX_FEE_FRACTION,
+  stampScript, stampedAt,
 } from "./commitment.mjs";
 
 const NETWORK = networkFor("testnet");
@@ -75,26 +76,43 @@ const attest = (entry, key) => ({
     .toString("base64"),
 });
 
-/** An entry plus a valid attestation from A, which is the normal case. */
-const attested = (entry) => ({ ...entry, attestations: [attest(entry, attestorKeyA)] });
+/**
+ * Destinations are dated by a stamp on the chain: a payment whose OP_RETURN
+ * carries the entry and its attestations. STAMPS holds the stamp payments as
+ * an explorer would describe them (/tx/<txid>).
+ */
+const STAMPS = {};
+const stampOf = (entry, when, { confirmed = true, script = stampScript(entry), value = 0 } = {}) => {
+  const txid = createHash("sha256").update(`${script}|${when}|${confirmed}|${value}`).digest("hex");
+  STAMPS[txid] = {
+    txid,
+    status: confirmed ? { confirmed: true, block_time: Date.parse(when) / 1000 } : { confirmed: false },
+    vout: [{ scriptpubkey: "0014" + "11".repeat(20), value: 5000 }, { scriptpubkey: script, value }],
+  };
+  return txid;
+};
+
+/** An entry plus a valid attestation from A, stamped when it was added: the normal case. */
+const attested = (entry, when = entry.added) => {
+  const signed = { ...entry, attestations: [attest(entry, attestorKeyA)] };
+  return { ...signed, stamp: stampOf(signed, when) };
+};
 
 const e1 = attested({
   instance: INSTANCE, index: 1, op: "add", address: DEST,
   text: "Society receiving address for the stake purchase",
   added: "2026-11-01T12:00:00Z", prev: ZERO_PREV,
-  firstSeen: "2026-11-01T12:00:00Z",
 });
 const e2 = attested({
   instance: INSTANCE, index: 2, op: "add", address: OTHER,
   text: "A second address, added only recently",
   added: "2026-11-20T12:00:00Z", prev: destinationHash(e1),
-  firstSeen: "2026-11-20T12:00:00Z",
 });
 const LIST = [e1, e2];
 // hrp: these fixtures are testnet, and an attestor's address carries its
 // network's prefix. Checking a tb1q attestation under mainnet rules derives a
 // different address and blames the signer.
-const RULES = { attestors: ATTESTORS, threshold: 1, hrp: NETWORK.bech32, instance: INSTANCE };
+const RULES = { attestors: ATTESTORS, threshold: 1, hrp: NETWORK.bech32, instance: INSTANCE, stamps: STAMPS };
 
 const PROPOSAL_OPENS = "2026-11-21T00:00:00Z"; // 20 days after e1, 1 day after e2
 
@@ -129,7 +147,6 @@ check("An address not on the list at all is refused", unknown.permitted, false, 
 const revokedList = [...LIST, attested({
   instance: INSTANCE, index: 3, op: "revoke", address: DEST, text: "Compromised",
   added: "2026-11-21T00:00:00Z", prev: destinationHash(e2),
-  firstSeen: "2026-11-21T00:00:00Z",
 })];
 const revoked = destinationIsPermitted({ address: DEST, entries: revokedList, opensAt: "2026-12-01T00:00:00Z", ...RULES });
 check("A revoked destination is refused", revoked.permitted, false, revoked.reason);
@@ -144,18 +161,33 @@ check("A line with no instance is refused",
   (() => { try { destinationLine({ ...e1, instance: undefined }); return false; } catch { return true; } })(),
   true, "every entry is bound to its declaration");
 
-// A backdated `added` must not buy age. firstSeen is what counts.
-const backdated = [{ ...e2, index: 1, prev: ZERO_PREV, added: "2026-01-01T00:00:00Z" }];
+// A backdated `added` must not buy age: the stamp's block is what counts.
+const backdated = [attested({ ...e2, index: 1, prev: ZERO_PREV, added: "2026-01-01T00:00:00Z" }, "2026-11-20T12:00:00Z")];
 const bd = destinationIsPermitted({ address: OTHER, entries: backdated, opensAt: PROPOSAL_OPENS, ...RULES });
 check("Backdating `added` does not buy age", bd.permitted, false,
-  "age comes from first public appearance, not the attestor's claim");
+  "age comes from the stamp's block, not the attestor's claim");
 
-// The same attack, in the form it actually took: omit firstSeen entirely and
-// let the code fall back to the field the attestor writes. It used to.
-const noFirstSeen = [(() => { const e = { ...e2, index: 1, prev: ZERO_PREV, added: "2026-01-01T00:00:00Z" }; delete e.firstSeen; return e; })()];
-const nfs = destinationIsPermitted({ address: OTHER, entries: noFirstSeen, opensAt: PROPOSAL_OPENS, ...RULES });
-check("An entry with no first public appearance is refused outright", nfs.permitted, false,
-  "no fallback to `added`: an undatable entry is not spendable against");
+// The attack as it stood until 17 November 2026: a date typed into the file.
+const typed = [{ ...backdated[0], stamp: undefined, firstSeen: "2026-01-01T00:00:00Z" }];
+const ty = destinationIsPermitted({ address: OTHER, entries: typed, opensAt: PROPOSAL_OPENS, ...RULES });
+check("An entry with a date typed into the file and no stamp is refused outright", ty.permitted, false, ty.reason);
+const notYet = [{ ...e1, stamp: stampOf(e1, "2026-11-01T12:00:00Z", { confirmed: false }) }];
+check("An entry whose stamp is not in a block yet is refused",
+  destinationIsPermitted({ address: DEST, entries: notYet, opensAt: PROPOSAL_OPENS, ...RULES }).reason.includes("not in a block"), true);
+const someoneElses = [{ ...e1, stamp: e2.stamp }];
+check("A stamp that carries a different entry is refused",
+  destinationIsPermitted({ address: DEST, entries: someoneElses, opensAt: PROPOSAL_OPENS, ...RULES }).reason.includes("does not carry"), true);
+const unsigned = { ...e1, attestations: [] };
+const early = [{ ...e1, stamp: stampOf(unsigned, "2026-10-01T00:00:00Z") }];
+check("A stamp made before the entry was attested does not count (it covers the attestations)",
+  destinationIsPermitted({ address: DEST, entries: early, opensAt: PROPOSAL_OPENS, ...RULES }).permitted, false);
+const paid = [{ ...e1, stamp: stampOf(e1, "2026-11-01T12:00:00Z", { value: 1000 }) }];
+check("A stamp output that carries money is not a stamp",
+  destinationIsPermitted({ address: DEST, entries: paid, opensAt: PROPOSAL_OPENS, ...RULES }).permitted, false);
+check("A stamp the explorer couldn't give us is refused",
+  destinationIsPermitted({ address: DEST, entries: LIST, opensAt: PROPOSAL_OPENS, ...RULES, stamps: {} }).reason.includes("could not be read"), true);
+check("stampedAt gives the stamp's block time",
+  stampedAt(e1, STAMPS[e1.stamp]).at === Date.parse("2026-11-01T12:00:00Z") / 1000, true);
 
 // --- Attestations ----------------------------------------------------------
 //
@@ -289,7 +321,7 @@ const record = {
 };
 
 const verifyWith = (r, extra = {}) => verifyCommitment({
-  record: r, proposal: PROPOSAL, destinationEntries: LIST, destinationRules: RULES,
+  record: r, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: LIST, destinationRules: RULES,
   utxoValue: utxo.value, network: NETWORK, ...extra,
 });
 
@@ -335,7 +367,7 @@ rejects("Pays somewhere other than the proposal's destination",
 // a destination that is real but too new
 rejects("Pays a destination that has not waited out its period",
   verifyCommitment({
-    record: { ...record, tx: toOther.hex }, destinationEntries: LIST, destinationRules: RULES,
+    record: { ...record, tx: toOther.hex }, destinationStamps: STAMPS, destinationEntries: LIST, destinationRules: RULES,
     proposal: { ...PROPOSAL, destination: OTHER },
     utxoValue: utxo.value, network: NETWORK,
   }), "needs 7");
@@ -351,7 +383,7 @@ const toUnlisted = buildCommitment({
 });
 rejects("Pays a destination nobody attested",
   verifyCommitment({
-    record: { ...record, tx: toUnlisted.hex }, destinationEntries: LIST, destinationRules: RULES,
+    record: { ...record, tx: toUnlisted.hex }, destinationStamps: STAMPS, destinationEntries: LIST, destinationRules: RULES,
     proposal: { ...PROPOSAL, destination: UNLISTED },
     utxoValue: utxo.value, network: NETWORK,
   }), "not on the published destinations list");
@@ -359,14 +391,14 @@ rejects("Pays a destination nobody attested",
 // a revoked destination
 rejects("Pays a revoked destination",
   verifyCommitment({
-    record, proposal: PROPOSAL, destinationEntries: revokedList, destinationRules: RULES,
+    record, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: revokedList, destinationRules: RULES,
     utxoValue: utxo.value, network: NETWORK,
   }), "revoked by entry");
 
 // a list nobody vouched for: the finding, in the place a commitment meets it
 rejects("A commitment whose destinations list comes with no attestor set",
   verifyCommitment({
-    record, proposal: PROPOSAL, destinationEntries: LIST,
+    record, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: LIST,
     utxoValue: utxo.value, network: NETWORK,
   }), "no attestor set");
 
@@ -374,7 +406,7 @@ rejects("A commitment whose destinations list comes with no attestor set",
 rejects("A commitment against a list attested by an outsider",
   verifyCommitment({
     record, proposal: PROPOSAL,
-    destinationEntries: [{ ...e1, attestations: [attest(e1, outsiderKey)] }, e2],
+    destinationStamps: STAMPS, destinationEntries: [{ ...e1, attestations: [attest(e1, outsiderKey)] }, e2],
     destinationRules: RULES, utxoValue: utxo.value, network: NETWORK,
   }), "not a listed attestor");
 
@@ -549,7 +581,7 @@ check("The same commitment, signed again unchanged, still verifies", verifyWith(
 // Relabelling: the proposal is inside what the owner signed.
 const OTHER_PROPOSAL = { ...PROPOSAL, hash: createHash("sha256").update("another proposal paying the same address").digest("hex") };
 rejects("A commitment relabelled for another proposal paying the same address",
-  verifyCommitment({ record: { ...record, proposal: OTHER_PROPOSAL.hash }, proposal: OTHER_PROPOSAL, destinationEntries: LIST, destinationRules: RULES, utxoValue: utxo.value, network: NETWORK }),
+  verifyCommitment({ record: { ...record, proposal: OTHER_PROPOSAL.hash }, proposal: OTHER_PROPOSAL, destinationStamps: STAMPS, destinationEntries: LIST, destinationRules: RULES, utxoValue: utxo.value, network: NETWORK }),
   "does not name this proposal inside it");
 rejects("A payment with no proposal in it at all (the old format)",
   verifyWith(remade((tx) => { tx.outs.pop(); })), "does not name this proposal inside it");
@@ -586,7 +618,7 @@ check("A check given no attestors is refused, not checked for age only",
   destinationIsPermitted({ address: DEST, entries: LIST, opensAt: PROPOSAL_OPENS, hrp: NETWORK.bech32, instance: INSTANCE }).permitted, false);
 const outsiderList = [{ ...e1, attestations: [attest(e1, outsiderKey)] }];
 rejects("A list attested by somebody the Crowdlock's file does not name, even when the list names them itself",
-  verifyCommitment({ record, proposal: PROPOSAL, destinationEntries: outsiderList, destinationRules: { attestors: [OUTSIDER], threshold: 1, instance: INSTANCE },
+  verifyCommitment({ record, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: outsiderList, destinationRules: { attestors: [OUTSIDER], threshold: 1, instance: INSTANCE },
     utxoValue: utxo.value, network: NETWORK, crowdlock: ours }), "not a listed attestor");
 
 line();

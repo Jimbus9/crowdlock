@@ -41,7 +41,7 @@ import { messageHash, verifyMembership, memberAddressForOwnerKey } from "../../.
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
-import { destinationIsPermitted, attestorsOf } from "../../../method/js/proposals.mjs";
+import { destinationIsPermitted, attestorsOf, stampsFor } from "../../../method/js/proposals.mjs";
 import { isCosignerOf } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
@@ -369,6 +369,46 @@ export async function buildSend({ account, chain, to, amount, feeRate, policies 
 
   const tx = psbt.extractTransaction();
   return { hex: tx.toHex(), txid: tx.getId(), fee, sent, change };
+}
+
+/**
+ * A destination's stamp (spec/destinations-format.md, "The waiting period"):
+ * a payment from this wallet back to itself whose other output is OP_RETURN
+ * and the stamp hash, carrying nothing. The block it lands in dates the
+ * destination, and nobody can backdate a block.
+ *
+ *   script   the stamp's output script, as hex (stampScript in method/js/proposals.mjs)
+ *   feeRate  sats per vbyte
+ *
+ * Pays from the wallet's largest confirmed coin if that covers it, otherwise
+ * from all of them. Returns { hex, txid, fee }; nothing is broadcast.
+ */
+export async function buildStamp({ account, chain, script, feeRate }) {
+  const net = account.network;
+  if (!Number.isFinite(feeRate) || feeRate < 1 || feeRate > 1000) throw new Error("fee rate must be between 1 and 1000 sats per vbyte");
+  if (!/^6a20[0-9a-f]{64}$/.test(String(script))) throw new Error("that is not a destination's stamp");
+  const all = (await chain.utxos(account.address)).filter((c) => c.confirmed).sort((a, b) => b.value - a.value);
+  if (all.length === 0) throw new Error("this wallet has no confirmed bitcoin to pay the stamp's network fee");
+  const inWeight = account.output.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES");
+  const feeFor = (n) => BigInt(Math.ceil(((44 + n * inWeight + (8 + 1 + 34) * 4 + account.output.outputWeight()) / 4) * feeRate));
+  const coins = BigInt(all[0].value) - feeFor(1) >= DUST_SATS ? [all[0]] : all;
+  const fee = feeFor(coins.length);
+  const change = coins.reduce((n, c) => n + BigInt(c.value), 0n) - fee;
+  if (change < DUST_SATS) throw new Error("there isn't enough bitcoin in this wallet to pay the stamp's network fee");
+  if (fee > 100000n) throw new Error("the stamp's network fee would be over 100,000 sats — refusing");
+
+  const psbt = new Psbt({ network: net });
+  const finalizers = [];
+  for (const c of coins) {
+    const txHex = await coinSource(chain, c);
+    finalizers.push(account.output.updatePsbtAsInput({ psbt, txHex, vout: c.vout }));
+  }
+  psbt.addOutput({ script: fromHex(script), value: 0n });
+  account.output.updatePsbtAsOutput({ psbt, value: change });
+  await signWith(account, psbt);
+  for (const finalize of finalizers) finalize({ psbt });
+  const tx = psbt.extractTransaction();
+  return { hex: tx.toHex(), txid: tx.getId(), fee };
 }
 
 // ---------------------------------------------------------------------------
@@ -852,10 +892,13 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (out0 !== proposal.destination) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
   // The attestors are the ones the Crowdlock's own file names, and the list
   // must be this Crowdlock's: never what a destinations file says of itself.
+  // Its age is counted from its stamp's block, read from the chain.
   const rules = attestorsOf(crowdlock, hrp);
+  const entries = destinations?.entries ?? [];
+  const stamps = await stampsFor(entries, [out0], (id) => chain.tx(id));
   const permitted = destinationIsPermitted({
-    address: out0, entries: destinations?.entries ?? [], opensAt: proposal.opens,
-    minimumAgeDays: crowdlock.destination_wait_days, attestors: rules.attestors, threshold: rules.threshold, instance: rules.instance, hrp,
+    address: out0, entries, opensAt: proposal.opens,
+    minimumAgeDays: crowdlock.destination_wait_days, attestors: rules.attestors, threshold: rules.threshold, instance: rules.instance, hrp, stamps,
   });
   if (!permitted.permitted) return fail(`destination not permitted: ${permitted.reason}`);
 

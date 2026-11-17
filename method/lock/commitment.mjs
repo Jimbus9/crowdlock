@@ -87,6 +87,44 @@ export function attestationStatement(entry) {
  * Returns { ok, reason, signers } — `signers` being the distinct attestors
  * whose signatures verified.
  */
+/**
+ * A destination's stamp on the chain (spec/destinations-format.md, "The
+ * waiting period"): a payment whose OP_RETURN output carries the hash of the
+ * entry and its attestations. The block it is in dates the entry, and nobody
+ * can backdate a block. Covering the attestations means nobody without an
+ * attestor's key can stamp an entry ahead of time.
+ */
+export function stampLine(entry) {
+  return [destinationHash(entry), ...(entry.attestations ?? []).map((a) => `${a.address}:${a.signature}`)].join("|");
+}
+
+export function stampHash(entry) {
+  return sha256(Buffer.from(stampLine(entry), "utf8")).toString("hex");
+}
+
+export function stampScript(entry) {
+  return `6a20${stampHash(entry)}`;
+}
+
+/**
+ * When an entry was stamped: the block time of its stamp payment, `tx` being
+ * an Esplora explorer's /tx/<txid> answer. Returns { ok, at, reason }.
+ */
+export function stampedAt(entry, tx) {
+  if (!/^[0-9a-f]{64}$/.test(String(entry?.stamp ?? ""))) {
+    return { ok: false, at: null, reason: `entry ${entry?.index} has no stamp on the chain, so when it was published cannot be established` };
+  }
+  if (!tx || tx.txid !== entry.stamp) return { ok: false, at: null, reason: `entry ${entry.index}'s stamp could not be read from the chain` };
+  const want = stampScript(entry);
+  if (!(tx.vout ?? []).some((o) => o?.scriptpubkey === want && Number(o?.value) === 0)) {
+    return { ok: false, at: null, reason: `entry ${entry.index}'s stamp is a payment that does not carry this entry and its attestations` };
+  }
+  if (!tx.status?.confirmed || !Number.isInteger(tx.status.block_time)) {
+    return { ok: false, at: null, reason: `entry ${entry.index}'s stamp is not in a block yet` };
+  }
+  return { ok: true, at: tx.status.block_time, reason: "" };
+}
+
 export function attestationsAreValid(entry, { attestors = [], threshold = 1, hrp = "bc" } = {}) {
   if (!Number.isInteger(threshold) || threshold < 1) {
     return { ok: false, reason: "the threshold must be a positive whole number", signers: [] };
@@ -149,16 +187,15 @@ export function chainIsIntact(entries, instance = null) {
  * inserted. Breaking the lock is hard; getting a line into this file is the
  * easy attack, so this function is where the effort belongs.
  *
- * `firstSeen` is the entry's first PUBLIC appearance — the moment the outside
- * world could have noticed it, taken from the repository's own history or
- * another record the attestor does not control. It is deliberately NOT the
- * `added` field, which the attestor writes and could set to any date they
- * liked. This code used to fall back to `added` when `firstSeen` was absent,
- * which handed an attestor exactly the backdating the waiting period exists
+ * An entry's age is counted from its stamp on the chain (stampedAt): the
+ * block time of a payment carrying the entry and its attestations. `stamps`
+ * holds those payments as the explorer describes them, { txid: tx }. It is
+ * deliberately NOT the `added` field, which the attestor writes and could set
+ * to any date they liked. Until 17 November 2026 it was `firstSeen`, which was
+ * no better: also a date written into the file by whoever added the entry.
+ * Either handed an attestor exactly the backdating the waiting period exists
  * to prevent: add an address today, write last month's date, propose it this
- * afternoon. A missing `firstSeen` is now a refusal, because an entry whose
- * publication date nobody can establish is one nobody should be spending
- * against.
+ * afternoon. An entry with no stamp, or one not in a block yet, is refused.
  */
 export function destinationIsPermitted({
   address,
@@ -169,6 +206,7 @@ export function destinationIsPermitted({
   threshold = null,
   hrp = "bc",
   instance = null,
+  stamps = {},
 }) {
   // The list must be this Crowdlock's own. Each entry carries the fingerprint
   // of the Crowdlock it was attested for, and until 17 November 2026 nothing
@@ -199,20 +237,13 @@ export function destinationIsPermitted({
   const att = attestationsAreValid(added, { attestors, threshold, hrp });
   if (!att.ok) return { permitted: false, reason: att.reason };
 
-  if (!added.firstSeen) {
-    return {
-      permitted: false,
-      reason: `entry ${added.index} has no recorded first public appearance, so its age cannot be established`,
-    };
-  }
+  const stamped = stampedAt(added, stamps?.[added.stamp] ?? null);
+  if (!stamped.ok) return { permitted: false, reason: stamped.reason };
 
-  const seen = Date.parse(added.firstSeen);
   const opens = Date.parse(opensAt);
-  if (Number.isNaN(seen) || Number.isNaN(opens)) {
-    return { permitted: false, reason: "the entry's first appearance or the proposal's opening is not a readable date" };
-  }
+  if (Number.isNaN(opens)) return { permitted: false, reason: "the proposal's opening is not a readable date" };
 
-  const ageDays = (opens - seen) / 86_400_000;
+  const ageDays = (opens - stamped.at * 1000) / 86_400_000;
   if (!(ageDays >= minimumAgeDays)) {
     return { permitted: false, reason: `only ${ageDays.toFixed(1)} days old at the proposal's opening, needs ${minimumAgeDays}` };
   }
@@ -418,6 +449,7 @@ export function verifyCommitment({
   proposal,               // { hash, destination, opensAt }
   destinationEntries = [],
   destinationRules = null, // { attestors, threshold, instance } — used only when no Crowdlock is given
+  destinationStamps = {},  // { txid: tx } — the stamp payments, as an explorer describes them
   utxoValue,              // the lock's value, needed to check the signature and the fee
   coinIsUnspent = null,
   network,
@@ -533,9 +565,10 @@ export function verifyCommitment({
     // rules derives a different address and reports, misleadingly, that the
     // signature belongs to somebody else.
     hrp: hrpHere,
+    stamps: destinationStamps,
   });
   if (!permitted.permitted) return fail(`destination not permitted: ${permitted.reason}`);
-  note("destination is attested and on the published list", true);
+  note("destination is attested, on the published list, and stamped long enough ago", true);
 
   // 7. the remainder, if any, goes back into a lock the owner still cannot escape
   const committedSats = tx.outs[0].value;

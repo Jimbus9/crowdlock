@@ -100,6 +100,8 @@ Every one of these was reproduced before it was fixed, and each fix has a test t
 - **The app's Take it home needed the Crowdlock's website.** A lock's terms are now kept on the phone, and a lock can be taken home from them when the Crowdlock cannot be loaded.
 - **The anchor checker called any proof that named a block finished.** It now checks the block.
 - **A commitment's fee was sized for a smaller payment** than the one sent, and came out about a tenth under the rate asked for.
+- **An early release could be hidden from the co-signer's record.** The record looked only at a spend's first output, so 330 sats to a listed destination and the rest to the member's own wallet read as a purchase; and it read only the newest page of a lock's history, so 25 small payments to the lock's address pushed an older release out of sight. Now every output must be a listed destination, money staying in a lock of the same owner, or an `OP_RETURN` holding nothing, and the whole history is read (or the record says it couldn't be).
+- **A destination's waiting period counted from a date written in the file** (`firstSeen`), which whoever could write the file could backdate. It now counts from the block of a stamp payment carrying the entry and its attestations (`spec/destinations-format.md`, "The waiting period").
 
 ## Limits we already know about
 

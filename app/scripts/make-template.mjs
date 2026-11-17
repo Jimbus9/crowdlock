@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-17b";
+export const TEMPLATE_VERSION = "2026-11-17c";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -42,6 +42,7 @@ export const CHANGES = [
   { version: "2026-11-16", change: "Reads each relay further back, a batch at a time, so nobody can push real registrations and locks out of sight by posting junk under your Crowdlock's fingerprint. No change to what is accepted" },
   { version: "2026-11-17", change: "Three fixes to how proposals are handled. Completed payments are now really sent by your repository (it used to mark them sent without sending). A commitment is only taken if its lock's owner signed it, so nobody can use up a member's five places with junk. A completed payment is only recorded if owner and co-signer both signed it, so a fake cannot block the real one" },
   { version: "2026-11-17b", change: "Commitments now name their proposal inside the payment itself, so one can never be counted for a proposal its owner did not choose; your inbox turns away any that do not. Your destinations list is checked against your Crowdlock file: its attestors must be the ones that file names (attestor_keys), and every entry must carry your Crowdlock's fingerprint. Update the app too: commitments made by an older app are no longer accepted" },
+  { version: "2026-11-17c", change: "A destination's waiting period now counts from a stamp on the bitcoin chain, made by the app when the destination is added, not from a date written in your destinations list. A destination added before this has no stamp and can't be paid: add it again from the app. No change to how your inbox runs" },
 ];
 
 const FROM_REPO = [

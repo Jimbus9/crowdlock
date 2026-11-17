@@ -9,12 +9,12 @@ import * as Clipboard from "expo-clipboard";
 import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  tidyWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH, isPublicKey, keyFromXpub, xpubForKey, signStatementWith, NETWORKS,
+  tidyWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH, isPublicKey, keyFromXpub, xpubForKey, signStatementWith, NETWORKS, buildStamp,
 } from "../wallet/core.mjs";
 import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
   proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
-  attestorsOf,
+  attestorsOf, stampScript, stampsFor, stampedAt,
 } from "../../../method/js/proposals.mjs";
 import { ledgerAppFor } from "../ledgerDevice";
 // @ts-ignore — plain modules shared with the tests
@@ -35,7 +35,7 @@ import {
 // @ts-ignore — plain module
 import { announce } from "../relays.mjs";
 import { loadAddedCrowdlocks, saveAddedCrowdlocks, loadExpectedKeys, saveExpectedKeys } from "../storage";
-import { NETWORK, IS_TEST_MONEY } from "../config";
+import { NETWORK, IS_TEST_MONEY, chain } from "../config";
 // The look (one theme file) and the shared parts every screen is built from.
 import { Btn, NavRow, NoScreenshots, Warning } from "../ui/parts";
 import { whileOpen, allLinks, useBack, Input, walletAccount, minorDigits, money, parseBtc, SumRow, Confirm, Changes, s, signingAccount } from "./shared";
@@ -707,6 +707,31 @@ function repoPathOf(c: Extract<Loaded, { ok: true }>, path: string) {
   return pathInRepo(resolvePath(path, baseFor(c.url)));
 }
 
+// A destination is dated by its stamp on the chain (spec/destinations-format.md),
+// so the screens read each entry's stamp payment from the explorer.
+function useStamps(entries: any[]) {
+  const [stamps, setStamps] = useState<Record<string, any> | null>(null);
+  const key = entries.map((e: any) => e.stamp ?? "").join(",");
+  useEffect(() => {
+    let live = true;
+    const adds = entries.filter((e: any) => e.op === "add");
+    // Every add entry's own stamp, not only the newest for each address.
+    Promise.all(adds.map((e: any) => stampsFor([e], [e.address], (id: string) => chain.tx(id))))
+      .then((all) => { if (live) setStamps(Object.assign({}, ...all)); })
+      .catch(() => { if (live) setStamps({}); });
+    return () => { live = false; };
+  }, [key]);
+  return stamps;
+}
+
+function stampNote(e: any, stamps: Record<string, any> | null) {
+  if (e.op !== "add") return "";
+  if (!e.stamp) return "not stamped, so no proposal can use it";
+  if (!stamps) return "checking its stamp…";
+  const st = stampedAt(e, stamps[e.stamp] ?? null);
+  return st.ok ? `stamped ${new Date(st.at * 1000).toISOString().slice(0, 10)}` : st.reason.replace(/^entry \d+'s /, "");
+}
+
 function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; account: any; owner: string; repo: string; onChange: () => void }) {
   const [step, setStep] = useState("");
   const { withSignIn, codeView } = useGitHub(setStep);
@@ -721,6 +746,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
   const rules = attestorsOf(c.crowdlock, hrp);
   const isAttestor = rules.attestors.includes(account.address);
   const path = repoPathOf(c, c.crowdlock.register.destinations);
+  const stamps = useStamps(d.entries ?? []);
   const add = async () => {
     setBusy(true); setMsg(null);
     try {
@@ -734,8 +760,15 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
           attest: async (entry: any) => {
             setStep(account.kind === "ledger" ? `Waiting for your Ledger — unlock it, open ${ledgerAppFor(NETWORK)}, and approve the message it shows.` : "Signing…");
             const signature = await signStatementWith(await signingAccount(account), attestationStatement(entry));
-            setStep("Saving it to the Crowdlock on GitHub…");
             return { address: account.address, signature };
+          },
+          stamp: async (entry: any) => {
+            setStep(account.kind === "ledger" ? `Stamping it on the chain — approve the payment on your Ledger. It pays a small network fee and sends the rest back to this wallet.` : "Stamping it on the chain…");
+            const feeRate = await chain.feeRate(whileOpen.feeSpeed);
+            const tx = await buildStamp({ account: await signingAccount(account), chain, script: stampScript(entry), feeRate });
+            await chain.broadcast(tx.hex);
+            setStep("Saving it to the Crowdlock on GitHub…");
+            return tx.txid;
           },
           check: (file: any) => {
             const ch = chainIsIntact(file.entries, rules.instance);
@@ -745,7 +778,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
           },
         });
         setAddress(""); setText("");
-        setMsg({ ok: true, text: `Added and attested. ${c.crowdlock.destination_wait_days ? `A proposal can use it after ${c.crowdlock.destination_wait_days} days.` : "A proposal can use it straight away (this Crowdlock has no waiting period)."} Its website updates in a minute or two.` });
+        setMsg({ ok: true, text: `Added, attested and stamped. ${c.crowdlock.destination_wait_days ? `A proposal can use it ${c.crowdlock.destination_wait_days} days after the stamp is in a block.` : "A proposal can use it as soon as the stamp is in a block, usually within half an hour (this Crowdlock has no waiting period)."} Its website updates in a minute or two.` });
         setTimeout(onChange, 90000);
       });
     } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
@@ -754,11 +787,11 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
   return <>
     <Text style={s.label}>Destinations</Text>
     {(d.entries ?? []).length === 0 ? <Text style={s.note}>None yet. A proposal can only pay an address on this list, attested by this Crowdlock's attestors.</Text>
-      : d.entries.map((e: any) => <Text key={e.index} style={s.note}>{e.index}. {e.op === "revoke" ? "Revoked: " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}, public since {String(e.firstSeen ?? "?").slice(0, 10)}</Text>)}
+      : d.entries.map((e: any) => <Text key={e.index} style={s.note}>{e.index}. {e.op === "revoke" ? "Revoked: " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}, {e.op === "add" ? `, ${stampNote(e, stamps)}` : ""}</Text>)}
     {!isAttestor ? <Text style={s.note}>This wallet isn't one of its attestors, so it can't approve a destination.</Text> : <>
       <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={address} onChangeText={(t) => { setAddress(t); setMsg(null); }} placeholder="The address a purchase would pay" />
       <Input style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
-      <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature.</Text>
+      <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature. Then it stamps it on the chain: a small payment from this wallet back to itself, carrying the destination's fingerprint, so its date can't be faked. That needs a little bitcoin in this wallet for the network fee{account.kind === "ledger" ? ", and a second approval on your Ledger" : ""}.</Text>
       {codeView}
       {busy && !!step && <Text style={s.note}>{step}</Text>}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
@@ -783,9 +816,10 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   const d = c.destinations ?? { entries: [] };
   const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
   const nowIso = () => new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
+  const stamps = useStamps(d.entries ?? []);
   const usable = (d.entries ?? []).filter((e: any) => e.op === "add").filter((e: any) => destinationIsPermitted({
     address: e.address, entries: d.entries, opensAt: nowIso(), minimumAgeDays: c.crowdlock.destination_wait_days,
-    ...attestorsOf(c.crowdlock, hrp),
+    ...attestorsOf(c.crowdlock, hrp), stamps: stamps ?? {},
   }).permitted);
   const draft = (): { p?: any; problem?: string } => {
     const cur = currency.trim();
@@ -842,7 +876,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   };
   return <>
     <Text style={s.label}>Write a proposal</Text>
-    {usable.length === 0 ? <Text style={s.note}>No destination is ready yet. Add and attest one above{c.crowdlock.destination_wait_days ? `, then wait ${c.crowdlock.destination_wait_days} days` : ""}.</Text> : <>
+    {stamps === null ? <Text style={s.note}>Checking the destinations' stamps on the chain…</Text> : usable.length === 0 ? <Text style={s.note}>No destination is ready yet. Add and attest one above, then wait for its stamp to reach a block{c.crowdlock.destination_wait_days ? ` and ${c.crowdlock.destination_wait_days} days more` : ""}.</Text> : <>
       <Input style={s.input} value={title} onChangeText={setTitle} placeholder="Title" />
       <Input style={[s.input, { minHeight: 120, textAlignVertical: "top" }]} multiline value={text} onChangeText={setText} placeholder="What is being bought, from whom, and why" />
       <Text style={s.label}>Pays (tap one)</Text>
