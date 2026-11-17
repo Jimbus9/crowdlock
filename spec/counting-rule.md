@@ -68,8 +68,9 @@ committed = Σ (confirmed balance of every lock address in state "locked"
   is counted once.
 - **Only a real lock is counted.** A register is a file, and a file can say
   anything. A record counts only if its address is the lock its own stated
-  terms make (lock format, "Verifying a lock") and its co-signer is one of
-  this Crowdlock's keys. Anything else is not a lock of this Crowdlock, however
+  terms make (lock format, "Verifying a lock"), its co-signer is one of
+  this Crowdlock's keys, and it is dated by a date: a record dated by a block
+  height is not a lock on any real network (lock format, "Locktime"). Anything else is not a lock of this Crowdlock, however
   much money sits at the address it names, and the blockchain is not asked
   about it.
 

@@ -20,14 +20,28 @@ on:
     paths: ["app/**", ".github/workflows/app.yml", "method/js/*.mjs", "method/js/vendor/**", "method/relay/*.mjs", "method/relay/package*.json"]
   workflow_dispatch:
 
+# Two jobs, as in the real-bitcoin build, so that code from npm and Gradle
+# never runs holding a token that can write to this repository:
+#
+#   build    installs the libraries, tests, builds the APK. Its token can
+#            only read, and is not left on disk for the libraries to find.
+#   publish  runs no code from the repository or from any library. It takes
+#            the APK the build handed on and publishes it as "app-test".
+#
+# Until 17 November 2026 this was one job with a token that could write. Any
+# library it installed could have used that token to replace the REAL-bitcoin
+# release ("app-mainnet") with an app of its own, or to change this
+# repository's code (security loop, round 1).
 permissions:
-  contents: write   # to publish the release with the APK
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -69,13 +83,33 @@ jobs:
           done
           exit 1
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-apk
+          path: app/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to publish the release with the APK
+    steps:
+      # No checkout, no libraries: nothing here but the file the build made.
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-apk
+
       - name: Publish it as the app-test release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          cp app/android/app/build/outputs/apk/release/app-release.apk crowdlock-test.apk
+          cp app-release.apk crowdlock-test.apk
           gh release delete app-test --yes --cleanup-tag || true
           gh release create app-test crowdlock-test.apk \
+            --target "$GITHUB_SHA" \
             --title "Crowdlock app — test build" \
             --notes "Test money only (testnet4). Built from ${GITHUB_SHA::7}. Install on Android by opening this file on the phone." \
             --prerelease

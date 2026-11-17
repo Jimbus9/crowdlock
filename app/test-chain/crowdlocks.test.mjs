@@ -395,6 +395,77 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   check("A lock well past its date has its record read once; it still shows what was found",
     times(old.address) === 1 && r1.releases.length === 1 && r2.releases.length === 1 && r2.releases[0].txid === "e9", seenUrls.join(" "));
   check("…one just past its date, or still ahead of it, is read every time", times(recent.address) === 2 && times(open.address) === 2);
+
+  // Security loop, round 1. The record must not depend on the register
+  // staying as it was: a lock taken off it, or with its date bent so it no
+  // longer reads as a lock, is still checked by a phone that saw it before.
+  {
+    const { locksToWatch, locksSeen } = await import("../src/crowdlocks.mjs");
+    const remembered = locksSeen(reg);
+    check("The phone remembers the terms of every lock it has seen on the register",
+      remembered.length === 3 && remembered.every((l) => l.owner_pubkey && l.cosigner_pubkey && Number.isInteger(l.locktime) && !("address" in l)));
+    const without = { ...reg, register: { ...reg.register, locks: [recent, open] } };
+    askAfresh(recFetch);
+    const hidden = await coSignerRecord(without, recFetch, now);
+    const kept = await coSignerRecord(without, recFetch, now, { remembered });
+    check("An early release whose lock was taken off the register is still on the record of a phone that saw the lock",
+      hidden.releases.length === 0 && kept.releases.length === 1 && kept.releases[0].txid === "e9" && kept.gone === 1, `${kept.releases.length} release(s), ${kept.gone} gone`);
+    const bent = { ...reg, register: { ...reg.register, locks: [{ ...old, locktime: old.locktime + 1 }, recent, open] } };
+    const kept2 = await coSignerRecord(bent, recFetch, now, { remembered });
+    check("…and so is one whose date was changed by a digit, so that it no longer reads as a lock",
+      kept2.releases.length === 1 && kept2.gone === 1);
+    check("With nothing gone, nothing is reported gone", (await coSignerRecord(reg, recFetch, now, { remembered })).gone === 0);
+    check("What is remembered next keeps the lock that has gone", locksSeen(without, remembered).length === 3 && locksToWatch(without, locksSeen(without, remembered)).gone.length === 1);
+    check("Junk in the phone's memory is not a lock", locksToWatch(reg, [{ owner_pubkey: "zz", cosigner_pubkey: "02aa", locktime: 5 }, null, 7]).gone.length === 0);
+  }
+
+  // Commitments only on the relays: a reader looks at those the repository's
+  // inbox could take, and no others.
+  {
+    const { relayOnlyCommitments, RELAY_ONLY_PER_LOCK } = await import("../src/crowdlocks.mjs");
+    const rec = (lock, tx, extra = {}) => ({ type: "commitment", at: 5, record: { proposal: "p", lock: { address: lock.address, owner_pubkey: lock.owner_pubkey, cosigner_pubkey: lock.cosigner_pubkey, locktime: lock.locktime }, tx, ...extra } });
+    const stranger = realLock("tb", 7, now + 7200);
+    const found = [
+      rec(stranger, "aa"),                                   // a real lock shape, but not on this register
+      rec({ ...open, locktime: open.locktime + 1 }, "bb"),   // a register lock with its terms changed
+      rec(open, "cc", { junk: "x" }),                        // good, with something added
+      rec(open, "cc", { junk: "y" }),                        // the same again
+      rec(open, "dd"),                                       // already in the repository's pile
+      { type: "completed", tx: "ee", at: 6 },
+      { type: "commitment", at: 7, record: { tx: "ff" } },   // not a record at all
+    ];
+    const kept = relayOnlyCommitments(found, { crowdlock: reg.crowdlock, register: reg.register, inPile: new Set(["dd"]) });
+    check("A commitment on the relays is looked at only if its lock is a real lock on the register",
+      kept.filter((x) => x.type === "commitment").length === 1 && kept.find((x) => x.type === "commitment").record.tx === "cc", kept.map((x) => x.record?.tx ?? x.type).join(","));
+    check("…only the parts a commitment has are kept, and completions pass through",
+      !("junk" in kept.find((x) => x.type === "commitment").record) && kept.some((x) => x.type === "completed"));
+    const flood = Array.from({ length: 300 }, (_, i) => rec(open, `c${i}`));
+    check("A flood of copies for one lock is cut to a handful, so it costs the explorer little",
+      relayOnlyCommitments(flood, { crowdlock: reg.crowdlock, register: reg.register }).length === RELAY_ONLY_PER_LOCK);
+  }
+
+  // A Crowdlock that names another's co-signer key or declaration shows that
+  // Crowdlock's locks as its own.
+  {
+    const { markCopies } = await import("../src/crowdlocks.mjs");
+    const K1 = "02" + "11".repeat(32), K2 = "03" + "22".repeat(32), K3 = "02" + "33".repeat(32);
+    const real = { url: "https://real/kop.json", name: "The Kop Fund", sats: 250863n, members: 1, declaration: "d1", cosigners: [K1] };
+    const copy = { url: "https://evil/kop.json", name: "The Kop Fund - official", sats: 250863n, members: 1, declaration: "d9", cosigners: ["03" + K1.slice(2), K3] };
+    const sameWords = { url: "https://evil/words.json", name: "Same words", sats: 0n, members: 0, declaration: "d1", cosigners: [K3] };
+    const honest = { url: "https://small/x.json", name: "A small honest Crowdlock", sats: 100000n, members: 1, declaration: "d2", cosigners: [K2] };
+    const m = markCopies([real, copy, sameWords, honest], [real.url]);
+    const by = (u) => m.find((x) => x.url === u);
+    check("A Crowdlock naming a trusted one's co-signer key is marked as its copy and shows none of its money",
+      by(copy.url).copyOf === "The Kop Fund" && by(copy.url).sats === 0n && by(copy.url).members === 0);
+    check("…the same for one sharing its declaration", by(sameWords.url).copyOf === "The Kop Fund");
+    check("…and the real one and an unrelated one are left as they are",
+      by(real.url).sats === 250863n && !by(real.url).copyOf && by(honest.url).sats === 100000n && !by(honest.url).copyOf && !by(honest.url).sharesWith);
+    const m2 = markCopies([copy, { ...real, name: "Somebody's fund" }], []);
+    check("Where neither is one the app or the person already has, both carry a warning and keep their figures",
+      m2.every((x) => x.sharesWith && !x.copyOf && x.sats === 250863n), m2.map((x) => x.sharesWith).join(" / "));
+    const ranked = rankFound(m);
+    check("A copy no longer ranks level with the real one", ranked[0].url === real.url && ranked.findIndex((x) => x.url === copy.url) > ranked.findIndex((x) => x.url === honest.url));
+  }
 }
 
 // A slow connection. The first try is never cut short: the second runs

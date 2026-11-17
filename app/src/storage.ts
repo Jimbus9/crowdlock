@@ -229,6 +229,24 @@ export async function saveSeenRules(url: string, rules: any): Promise<void> {
   await SecureStore.setItemAsync(SEEN_RULES, JSON.stringify(all));
 }
 
+// The locks this phone has seen on a Crowdlock's register: their terms only
+// (owner key, co-signer key, date), which are public. The co-signer's record
+// goes on checking them after the register stops listing them, so an early
+// release can't be hidden by taking its lock off the register (locksSeen in
+// src/crowdlocks.mjs).
+const SEEN_LOCKS = "crowdlock.seenlocks.v1";
+
+export async function loadSeenLocks(url: string): Promise<any[]> {
+  try { const v = JSON.parse((await SecureStore.getItemAsync(SEEN_LOCKS)) ?? "{}")[url]; return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+export async function saveSeenLocks(url: string, locks: any[]): Promise<void> {
+  let all: Record<string, any[]> = {};
+  try { all = JSON.parse((await SecureStore.getItemAsync(SEEN_LOCKS)) ?? "{}"); } catch {}
+  all[url] = locks;
+  await SecureStore.setItemAsync(SEEN_LOCKS, JSON.stringify(all));
+}
+
 // Keys this phone added itself, waiting for the website to show them. Kept
 // apart from what it has seen, because the website lags a minute or more
 // behind GitHub: treating an added key as already seen made the stale page

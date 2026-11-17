@@ -12,13 +12,13 @@ import { DEFAULT_RELAYS } from "../start.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
   STARTING_LIST, loadCrowdlock, membershipOf, committedTotal, COUNTING_RULE_URL, poundsPerBtc, shortBtc, locksOnRegister, submitLock, newestCosigner, keyChanges,
-  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges,
+  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges, locksSeen, markCopies,
 } from "../crowdlocks.mjs";
 // @ts-ignore — plain module
 import { TEST_APP_URL } from "../build.mjs";
 // @ts-ignore — plain module
 import { postToRelays, announce, fetchAnnouncements } from "../relays.mjs";
-import { loadAddedCrowdlocks, saveAddedCrowdlocks, loadSavedLocks, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadSeenRules, saveSeenRules } from "../storage";
+import { loadAddedCrowdlocks, saveAddedCrowdlocks, loadSavedLocks, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadSeenRules, saveSeenRules, loadSeenLocks, saveSeenLocks } from "../storage";
 import { NETWORK, IS_TEST_MONEY, chain } from "../config";
 // The look (one theme file) and the shared parts every screen is built from.
 import { Btn, NavRow, Warning } from "../ui/parts";
@@ -86,7 +86,7 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
   const [showText, setShowText] = useState(false);
   const [gbp, setGbp] = useState<number | null>(null);
   const [keyChange, setKeyChange] = useState<{ added: string[]; removed: string[] } | null>(null);
-  const [record, setRecord] = useState<{ releases: any[]; unreadable: number } | null>(null);
+  const [record, setRecord] = useState<{ releases: any[]; unreadable: number; gone?: number } | null>(null);
   const [ruleChange, setRuleChange] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
@@ -115,8 +115,12 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
       setRuleChange(rch.changed ? rch.notes : null);
       // One after the other, not both at once: each asks the explorer about every
       // lock on the register, and a phone only keeps a few questions open at a time.
+      // The record covers every lock this phone has seen on the register,
+      // not only those listed today: one taken off it is still checked.
+      const remembered = await loadSeenLocks(url);
+      await saveSeenLocks(url, locksSeen(loaded, remembered)).catch(() => {});
       committedTotal(loaded).then(setTotal).catch(() => setTotal(null))
-        .then(() => coSignerRecord(loaded)).then(setRecord).catch(() => setRecord(null));
+        .then(() => coSignerRecord(loaded, globalThis.fetch, Math.floor(Date.now() / 1000), { remembered })).then(setRecord).catch(() => setRecord(null));
       poundsPerBtc(loaded.crowdlock).then(setGbp);
     }
   }, [url]);
@@ -228,7 +232,8 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
       {me && (showText
         ? <><Text style={s.label}>The declaration you signed{c.versions.length > 1 && mine ? ` (version ${mine.version})` : ""}</Text><Text style={s.declaration}>{mine?.text ?? c.declarationText}</Text></>
         : <NavRow title="The declaration" sub={c.versions.length > 1 && mine ? `The words you signed: version ${mine.version}` : "The words you signed"} onPress={() => setShowText(true)} />)}
-      {record && record.releases.length === 0 && (c.register.locks ?? []).length > 0 && <Text style={s.note}>{record.unreadable
+      {record && (record.gone ?? 0) > 0 && <Text style={s.error}>{record.gone === 1 ? "A lock this phone saw on the register is" : `${record.gone} locks this phone saw on the register are`} no longer on it as {record.gone === 1 ? "it was" : "they were"}. Nothing is ever meant to be taken off a register or changed. This phone still checks {record.gone === 1 ? "it" : "them"} for early releases. Ask the founder why.</Text>}
+      {record && record.releases.length === 0 && ((c.register.locks ?? []).length > 0 || (record.gone ?? 0) > 0) && <Text style={s.note}>{record.unreadable
         ? `Co-signer's record: couldn't check every lock. ${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be read in full, so this phone can't say there were no early releases.`
         : "Co-signer's record: no early releases."}</Text>}
       <NavRow title="Share it" sub="A link or a code that opens it in someone's app" onPress={() => go({ name: "share", words, url })} />
@@ -473,7 +478,7 @@ export function AddCrowdlock({ words, go, link: given }: { words: string; go: Go
 // fake by announcing.
 // ---------------------------------------------------------------------------
 
-type Found = { url: string; name: string; about: string; sats: bigint; members: number };
+type Found = { url: string; name: string; about: string; sats: bigint; members: number; declaration: string; cosigners: string[]; copyOf?: string; sharesWith?: string };
 
 export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
   const [found, setFound] = useState<Found[] | null>(null);
@@ -496,9 +501,14 @@ export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
         if (!c.ok || c.crowdlock.network !== NETWORK) return;   // fails its checks: never shown
         let t = { sats: 0n, members: 0 };
         try { t = await committedTotal(c); } catch {}
-        results.push({ url: c.url, name: c.crowdlock.name, about: c.crowdlock.about ?? "", sats: t.sats, members: t.members });
+        results.push({ url: c.url, name: c.crowdlock.name, about: c.crowdlock.about ?? "", sats: t.sats, members: t.members, declaration: c.crowdlock.declaration.sha256, cosigners: c.crowdlock.cosigner_keys ?? [] });
       }));
-      if (live) { setFound(rankFound(results)); setStatus(""); }
+      // A lock counts for whichever file names its co-signer key, so a copy
+      // of a Crowdlock's file would show that Crowdlock's money as its own.
+      // One the app ships with, or the person already has, is believed over
+      // one that is merely announced.
+      const trusted = [...STARTING_LIST, ...(await allLinks())];
+      if (live) { setFound(rankFound(markCopies(results, trusted))); setStatus(""); }
     })().catch(() => { if (live) { setFound([]); setStatus("Couldn't reach the relays — check your connection, or turn off any VPN."); } });
     return () => { live = false; };
   }, [tick]);
@@ -513,7 +523,7 @@ export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
   return (
     <View>
       <Text style={s.h1}>Find Crowdlocks</Text>
-      <Text style={s.p}>Crowdlocks that have announced themselves, ranked by the bitcoin actually locked in them. Anyone can announce one; nobody can fake the money, and anything that fails its checks isn't shown.</Text>
+      <Text style={s.p}>Crowdlocks that have announced themselves, ranked by the bitcoin actually locked in them. Anyone can announce one. Locked bitcoin can't be made up, and anything that fails its checks isn't shown. A Crowdlock that names another's co-signer key or declaration is marked: the locks would be the other's.</Text>
       <Input style={s.input} placeholder="Search by name or purpose" value={query} onChangeText={setQuery} autoCorrect={false} />
       {status ? <Text style={s.note}>{status}</Text> : null}
       {found === null && <ActivityIndicator style={{ marginVertical: 16 }} />}
@@ -522,7 +532,10 @@ export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
         <Pressable key={f.url} style={s.card} onPress={() => open(f.url)}>
           <Text style={s.cardTitle}>{f.name}</Text>
           {f.about ? <Text style={s.p}>{f.about}</Text> : null}
-          <Text style={s.note}>{btc(f.sats)} locked · {f.members} member{f.members === 1 ? "" : "s"} with a lock that counts</Text>
+          {f.copyOf
+            ? <Text style={s.error}>This names the same co-signer key or declaration as {f.copyOf}, which is already in your list. Its locks are that Crowdlock's, so none are counted here. It may be a copy made to mislead.</Text>
+            : <Text style={s.note}>{btc(f.sats)} locked · {f.members} member{f.members === 1 ? "" : "s"} with a lock that counts</Text>}
+          {f.sharesWith && <Text style={s.error}>This and {f.sharesWith} name the same co-signer key or declaration, so the same locks count for both. Only one can be the real one: check its web address with someone you trust before you open it.</Text>}
           <Text style={mine.includes(f.url) ? s.good : s.link}>{mine.includes(f.url) ? "In your list" : "Have a look →"}</Text>
         </Pressable>
       ))}

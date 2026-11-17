@@ -7,7 +7,7 @@
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 import { Relay } from "nostr-tools/relay";
 import { recordEventTemplate, announcementTemplate, announcementFromEvent, ANNOUNCE_KIND, ANNOUNCE_TAG, RECORD_KIND } from "../../method/js/inbox.mjs";
-import { commitmentEventTemplate, commitmentFromEvent, PROPOSAL_TAG } from "../../method/js/proposals.mjs";
+import { commitmentEventTemplate, commitmentFromEvent, cleanRecord, PROPOSAL_TAG } from "../../method/js/proposals.mjs";
 
 const TIMEOUT = 12000;
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("no answer")), ms))]);
@@ -106,7 +106,10 @@ export async function fetchCommitments(crowdlock, proposalHash, since = 0) {
           onevent(e) {
             const item = commitmentFromEvent(e, fingerprint, proposalHash);
             if (!item) return;
-            const key = item.type === "commitment" ? item.record.tx : item.tx;
+            // The whole record, not its payment alone: a copy with another
+            // lock or remainder beside the same payment, dated earlier, must
+            // not take the real one's place (security loop, 17 November 2026).
+            const key = item.type === "commitment" ? JSON.stringify(cleanRecord(item.record) ?? item.record) : item.tx;
             if (!seen.has(key) || seen.get(key).at > item.at) seen.set(key, item);
           },
           oneose() { sub.close(); resolve(); },

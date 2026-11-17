@@ -80,6 +80,8 @@ export function lockScript({ fanPubkey, cosignerPubkey, locktime }) {
   if (fanPubkey.length !== 33) throw new Error("fan pubkey must be 33 bytes (compressed)");
   if (cosignerPubkey.length !== 33) throw new Error("co-signer pubkey must be 33 bytes (compressed)");
   if (!Number.isInteger(locktime) || locktime <= 0) throw new Error("locktime must be a positive integer");
+  // A transaction's own locktime field holds 32 bits: a lock dated beyond it could never go home.
+  if (locktime > 0xffffffff) throw new Error("locktime must fit in 32 bits (at most 4294967295)");
   assertDistinctKeys(fanPubkey, cosignerPubkey);
 
   return script.compile([

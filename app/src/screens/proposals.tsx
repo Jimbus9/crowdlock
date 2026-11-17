@@ -11,7 +11,7 @@ import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments } from "../../../method/js/proposals.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges,
+  loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges, relayOnlyCommitments,
 } from "../crowdlocks.mjs";
 import { loadSeenRules, saveSeenRules } from "../storage";
 // @ts-ignore — plain module
@@ -66,8 +66,11 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
   // Commitments only on the relays count until an hour after closing. After
   // that only the repository's record does: a late one could carry any date.
   const relaysCount = stillTakingCommitments(p, Date.now() / 1000);
-  for (const it of await fetchCommitments(c.crowdlock, p.hash)) {
-    if (it.type === "commitment" && (inPile.has(it.record.tx) || !relaysCount)) continue;
+  // And only from a real lock on the register, a few per lock: what the
+  // repository's inbox could take. Anything else is a stranger's, and is not
+  // worth a question to the block explorer (security loop, 17 November 2026).
+  for (const it of relayOnlyCommitments(await fetchCommitments(c.crowdlock, p.hash), { crowdlock: c.crowdlock, register: c.register, inPile })) {
+    if (it.type === "commitment" && !relaysCount) continue;
     // Not yet in the repository: ordered after everything that is.
     items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
   }
@@ -84,7 +87,14 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
   for (const it of items) {
     if (it.type === "completed") { pile.completed++; continue; }
     if (it.type === "notice") { if (!pile.notice && genuine(it.notice)) pile.notice = { ...it.notice, published: new Date(it.at * 1000).toISOString() }; continue; }
-    const v = await checkCommitment({ record: it.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
+    let v: any;
+    try { v = await checkCommitment({ record: it.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK }); }
+    catch (e) {
+      // The repository's own pile must be read in full or not at all. One
+      // that is only on the relays is left out if it can't be checked now.
+      if (!it.relayOnly) throw e;
+      pile.refused.push("a commitment that is only on the relays couldn't be checked just now"); continue;
+    }
     if (!v.valid) {
       // A commitment whose coin is gone may be one the co-signer completed:
       // then it was paid, not refused.

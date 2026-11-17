@@ -6,6 +6,8 @@
 
 **17 November 2026:** the relay inbox now checks the owner's signature before it takes a commitment into the pile, and both signatures before it records a completed payment. Nothing about a commitment or a proposal changes.
 
+**17 November 2026, security loop:** a stranger's altered or misdated copy of a member's commitment can no longer keep the member's own out of the pile; the inbox checks the remainder lock and keeps only the parts a commitment has; and a reader looks at a commitment that is only on the relays only if its lock is a real lock on the register. See "Where the pile lives".
+
 How money committed to this fund is actually spent.
 
 **There is no vote.** A proposal is funded or it is not. Nobody counts anything,
@@ -400,8 +402,11 @@ Each `record` is a commitment in the commitment format. `submitted` is when the
 repository first received it, which is the order oversubscription settles in.
 
 The repository's relay inbox keeps this file. It records what arrived and when;
-it refuses a commitment whose lock is not on the register, one whose lock
-opens before the proposal's settling ends, one posted outside the gathering
+it refuses a commitment whose lock is not on the register, one whose lock is
+dated by block height (on any real network), one whose lock
+opens before the proposal's settling ends, one that returns a remainder to
+anything but the remainder lock its record names (which must be the same
+owner's, co-signed by this Crowdlock, and open no earlier), one posted outside the gathering
 window, one it first sees more than an hour after the proposal closed (whatever
 time the record gives itself, which its poster chooses), a malformed one, a copy, a second for the same coin, more than five per
 lock, one whose co-signer's place is not empty, one spending a coin that has
@@ -414,6 +419,25 @@ copies of their own commitment, or post a copy of a completion, written so the
 network will not take it, ahead of the real one.) It judges nothing else
 about a commitment: **every reader checks every commitment in full** before
 counting or completing it (`method/js/proposals.mjs`).
+
+**A refusal is of the record that was posted, and of nothing else.** The
+owner's signature covers the payment, not the lock terms and remainder lock
+written beside it, and not the time on the post. So the same payment can be
+posted again by anybody with those changed. Each such post is judged as its
+own record: one refused for what stands beside the payment, or for the time
+its poster gave it, does not stop the member's own record being taken. (Until
+17 November 2026 a refusal was remembered by the payment alone, so a
+stranger's altered copy, dated a second earlier, was refused and the member's
+own was then passed over on every pass; and a copy naming another remainder
+lock was taken in the real one's place, where every reader refused it.) What
+is kept is only the parts a commitment has (commitment format, "The record").
+
+**A reader looks at a commitment that is only on the relays** (posted, not yet
+in the repository's pile) only if it could be taken into the pile: its lock is
+a real lock on the register with the terms the record gives, and no more than
+twenty are looked at for one lock. The rest are strangers' and are not worth a
+question to a block explorer, which is how a flood of them used to stop a
+phone reading the pile at all.
 
 Two more keys appear as the co-signer acts:
 

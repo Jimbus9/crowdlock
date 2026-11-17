@@ -752,6 +752,13 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
       proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry] });
     check("A commitment from a lock that opens before settling ends is refused, by the app and the reference alike",
       !vShort.valid && !rShort.valid && /opens before the proposal's settling ends/.test(vShort.reason) && vShort.reason === rShort.reason, vShort.reason);
+    // A lock dated by block height, on a real network: a height already
+    // passed is a lock its owner can take home alone today. It was never
+    // compared with the settling date, so it counted (security loop, round 1).
+    const byHeight = { owner_pubkey: fan.publicKey, cosigner_pubkey: coKey5, locktime: 800000 };
+    byHeight.address = lockAddress({ ownerPubkey: fan.publicKey, cosignerPubkey: coKey5, locktime: 800000 }, "tb");
+    const vHeight = await checkCommitment({ record: { ...onShort, lock: byHeight }, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: "testnet4" });
+    check("A commitment from a lock dated by block height is refused on a real network", !vHeight.valid && /dated by block height/.test(vHeight.reason), vHeight.reason);
   }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");

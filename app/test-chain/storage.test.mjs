@@ -111,4 +111,16 @@ reset();
   ok("…and one it did keep is reported as kept", (await S.rememberLocks([{ ...mine }])) === true);
 }
 
+// The locks a phone has seen on a Crowdlock's register, kept so the
+// co-signer's record still covers one that is later taken off it.
+reset();
+{
+  const url = "https://a.example/crowdlocks/x.json";
+  ok("Nothing seen yet reads as nothing", (await S.loadSeenLocks(url)).length === 0);
+  const seen = [{ owner_pubkey: "02" + "aa".repeat(32), cosigner_pubkey: "03" + "bb".repeat(32), locktime: 1900000000 }];
+  await S.saveSeenLocks(url, seen);
+  await S.saveSeenLocks("https://b.example/crowdlocks/y.json", []);
+  ok("The locks seen on a register are kept, each Crowdlock's apart", JSON.stringify(await S.loadSeenLocks(url)) === JSON.stringify(seen) && (await S.loadSeenLocks("https://b.example/crowdlocks/y.json")).length === 0);
+}
+
 console.log(process.exitCode ? "\nThe wallet's storage has a problem." : "\nThe wallet's storage keeps the words apart, locked where it can.");

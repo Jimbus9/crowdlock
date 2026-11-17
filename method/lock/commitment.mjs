@@ -493,8 +493,13 @@ export function verifyCommitment({
   // The lock must still be shut when the proposal's settling ends. A lock that
   // opens sooner can be taken home by its owner alone, at any moment up to
   // and after the co-signer completes it, so its money is not committed.
-  // (Block heights are for private test chains only, and are not compared.)
-  if (record.lock.locktime >= 500_000_000) {
+  // A lock dated by block height is for a private test chain only. On any
+  // other network it is refused: until the security loop of 17 November 2026
+  // it was simply not compared, so a lock dated by a height already passed,
+  // which its owner can take home alone today, counted as committed money.
+  if (record.lock.locktime < 500_000_000) {
+    if (network?.bech32 !== "bcrt") return fail("the lock is dated by block height, which only a private test chain uses — on a real network it may already be open, so its money isn't committed");
+  } else {
     const settles = Date.parse(proposal.settlesBy ?? "");
     if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
     if (!(record.lock.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");

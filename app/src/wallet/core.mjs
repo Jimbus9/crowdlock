@@ -855,7 +855,11 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (!isCosignerOf(crowdlock, L.cosigner_pubkey)) return fail(`the lock's co-signer is not ${crowdlock.name}'s — this commitment belongs to a different Crowdlock, or to none`);
   // The lock must still be shut when the proposal's settling ends, or its
   // owner could take the money home first (method/lock/commitment.mjs).
-  if (L.locktime >= 500000000) {
+  // A lock dated by block height is for a private test chain only: anywhere
+  // else it may already be open (security loop, 17 November 2026).
+  if (L.locktime < 500000000) {
+    if (hrp !== "bcrt") return fail("the lock is dated by block height, which only a private test chain uses — on a real network it may already be open, so its money isn't committed");
+  } else {
     const settles = Date.parse(proposal.settles_by ?? proposal.settlesBy ?? "");
     if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
     if (!(L.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");

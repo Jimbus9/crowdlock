@@ -15,6 +15,8 @@ No real commitment had been made under version 1. A version-1 commitment does no
 
 **17 November 2026, later.** A second review found that a pile counted money that was not committed. Two checks are added, in every checker: **the coin must have confirmed**, and **the lock must stay shut until the proposal's settling ends** (`settles_by`). An unconfirmed coin can be replaced by its sender and vanish; a lock that opens sooner can be taken home by its owner alone, even after the co-signer has completed the commitment. The format itself is unchanged.
 
+**17 November 2026, security loop.** Three things. **A lock dated by block height is refused** on every network but a private test chain: it used to be left uncompared with the settling date, so a lock dated by a height already passed, which its owner can take home alone, counted as committed money and could be completed. **The record's `remainder` is written down here**; the code always had it. And **only the parts of a record listed here are judged or kept**: anything else a poster adds is dropped.
+
 A commitment is how a supporter backs one specific purchase with their own
 locked money. What a proposal is and how it settles is in the **proposal and
 settlement format**; this document is the record itself.
@@ -39,11 +41,21 @@ it.
     "address": "bc1q…",
     "owner_pubkey": "<33 bytes, hex>",
     "cosigner_pubkey": "<33 bytes, hex>",
-    "locktime": 2900000
+    "locktime": 1900000000
   },
-  "tx": "<raw transaction, hex, owner-signed, co-signer's slot empty>"
+  "tx": "<raw transaction, hex, owner-signed, co-signer's slot empty>",
+  "remainder": { "owner_pubkey": "…", "cosigner_pubkey": "…", "locktime": 1900000000 }
 }
 ```
+
+`remainder` is present only when the transaction has three outputs: it gives
+the terms of the lock that output 1 pays, so a verifier can rebuild that lock's
+address (step 7). **The owner's signature covers the transaction and nothing
+beside it.** The `lock` and `remainder` fields sit outside what is signed, so
+anybody can re-post a commitment with them changed. That is harmless only as
+long as a changed copy is never mistaken for the commitment: it must be judged
+as its own record, refused on its own, and never stand in the real one's way.
+A record has these parts and no others; anything else found in one is dropped.
 
 The transaction carries everything of substance: which coin, how much, to whom,
 and the signature. The `lock` fields are there so a verifier can re-derive the
@@ -145,8 +157,9 @@ rest needs no network.
 9. **The lock stays shut until the proposal's settling ends**: its locktime is
    after the proposal's `settles_by`. A lock that opens sooner can be taken
    home by its owner alone at any time from then on, so its money is not
-   committed. (Locks dated by block height exist only on private test chains
-   and are not compared.)
+   committed. **A lock dated by block height is refused outright** on every
+   network but a private test chain: a height already passed is a lock its
+   owner can open alone today.
 
 One more check needs the register rather than the transaction: **the lock's
 owner has signed the version of the declaration the proposal was published

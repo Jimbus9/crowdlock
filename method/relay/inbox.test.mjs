@@ -50,6 +50,14 @@ check("A posted record is a valid Nostr event, which relays require", verifyEven
 check("…and reads back as the same record", recordFromEvent(join, fp)?.address === alice.address);
 check("A record labelled for another Crowdlock is not read as this one's", recordFromEvent(post({ type: "join", address: alice.address, signature: alice.signature }, now, "f".repeat(64)), fp) === null);
 
+{
+  // A record's text reaches the job's log, and a log is read a line at a time.
+  const { oneLine } = await import("../js/inbox.mjs");
+  const nasty = "bc1qx\n::add-mask::ADDED\r\n::error::The register was rewritten\u2028::warning::x";
+  const printed = oneLine(`kop-fund.json: join ${nasty} — not added`);
+  check("Nothing posted can start a line of its own in the inbox's log", !/[\r\n\u2028]/.test(printed) && printed.startsWith("kop-fund.json: join bc1qx ::add-mask::"), JSON.stringify(printed).slice(0, 50));
+}
+
 const chain = (sats) => async () => sats;
 const nextN = Math.max(0, ...register.members.map((m) => m.n)) + 1;
 let r = await applyRecords(register, [join, post({ type: "join", address: alice.address, signature: alice.signature })],
@@ -420,6 +428,63 @@ const ev = (id, created_at) => ({ id, created_at });
     const r4 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: { ...real, lock: shortLock } }, t0 + 1)], { ...reg, locks: [{ ...shortLock, member }] });
     check("A commitment from a lock that opens before settling ends is not taken",
       r4.pile.commitments.length === 0 && /opens before this proposal's settling ends/.test(r4.outcome[0]?.reason ?? ""), r4.outcome[0]?.reason);
+
+    // A lock dated by block height, on a real network, may already be open:
+    // its owner alone could take the money home (security loop, round 1).
+    const heightLock = { ...lock, locktime: 800000 };
+    heightLock.address = lockAddress({ ownerPubkey: lock.owner_pubkey, cosignerPubkey: lock.cosigner_pubkey, locktime: 800000 }, "tb");
+    const r4b = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: { ...real, lock: heightLock } }, t0 + 1)], { ...reg, locks: [{ ...heightLock, member }] });
+    check("A commitment from a lock dated by block height is not taken on a real network",
+      r4b.pile.commitments.length === 0 && /dated by block height/.test(r4b.outcome[0]?.reason ?? ""), r4b.outcome[0]?.reason);
+
+    // Parts of a record the owner's signature does not cover (security loop,
+    // round 1). Anyone can re-post a member's commitment with those parts
+    // changed and an earlier time on it. Until 17 November 2026 the altered
+    // copy was either taken in the real one's place (a changed remainder
+    // lock, which every reader then refused) or refused in a way that hid
+    // the real one behind it (changed lock terms), and the member was shut
+    // out of the proposal with that coin.
+    const { createHash } = await import("node:crypto");
+    const part = async () => {
+      const tx = new Transaction(); tx.version = 2; tx.locktime = 0;
+      tx.addInput(Buffer.from(FUNDING, "hex").reverse(), 0, 0xfffffffd);
+      tx.addOutput(Buffer.from("0014" + "11".repeat(20), "hex"), 300000n);
+      tx.addOutput(Buffer.concat([Buffer.from("0020", "hex"), createHash("sha256").update(script).digest()]), 199000n); // the rest, back into the same lock
+      tx.addOutput(Buffer.from("6a20" + PROPOSAL, "hex"), 0n);
+      tx.setWitness(0, [Buffer.alloc(0), Buffer.alloc(0), await sigBy(ownerPriv, tx), script]);
+      return { proposal: PROPOSAL, lock, tx: tx.toHex(), remainder: { owner_pubkey: lock.owner_pubkey, cosigner_pubkey: lock.cosigner_pubkey, locktime: lock.locktime } };
+    };
+    const partReal = await part();
+    const only = (r) => r.pile.commitments.length === 1 ? r.pile.commitments[0].record : null;
+    const p0 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: partReal }, t0 + 500)]);
+    check("A commitment of part of a lock is taken, with the lock its remainder returns to",
+      only(p0)?.tx === partReal.tx && only(p0)?.remainder?.locktime === lock.locktime, p0.outcome[0]?.reason ?? "");
+    const p1 = await run(emptyPile(PROPOSAL), [
+      ev({ type: "commitment", record: { ...partReal, remainder: { ...partReal.remainder, locktime: lock.locktime + 1 } } }, t0 + 2),
+      ev({ type: "commitment", record: partReal }, t0 + 500)]);
+    check("A copy naming another remainder lock, posted first, is refused and the real one gets in",
+      only(p1)?.remainder?.locktime === lock.locktime && p1.outcome.some((o) => !o.added && /remainder/.test(o.reason)), p1.outcome.map((o) => o.reason ?? "added").join("; ").slice(0, 70));
+    const { remainder: _dropped, ...noRemainder } = partReal;
+    const p2 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: noRemainder }, t0 + 2), ev({ type: "commitment", record: partReal }, t0 + 500)]);
+    check("…and so is a copy with the remainder lock left out", only(p2)?.remainder?.locktime === lock.locktime);
+    const p3 = await run(emptyPile(PROPOSAL), [
+      ev({ type: "commitment", record: { ...real, lock: { ...lock, locktime: lock.locktime + 1 } } }, t0 + 2),
+      ev({ type: "commitment", record: real }, t0 + 500)]);
+    check("A copy with its lock's terms altered, posted first, does not hide the real one behind it",
+      only(p3)?.tx === real.tx && only(p3)?.lock.locktime === lock.locktime, p3.outcome.map((o) => o.reason ?? "added").join("; ").slice(0, 70));
+    const p4 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: { ...partReal, junk: "x".repeat(3000), lock: { ...lock, extra: "y" }, remainder: { ...partReal.remainder, more: 1 } } }, t0 + 2)]);
+    check("Anything a poster adds to a record is not kept: only the parts a commitment has",
+      JSON.stringify(only(p4)) === JSON.stringify({ proposal: PROPOSAL, lock: { address: lock.address, owner_pubkey: lock.owner_pubkey, cosigner_pubkey: lock.cosigner_pubkey, locktime: lock.locktime }, tx: partReal.tx, remainder: partReal.remainder }),
+      Object.keys(only(p4) ?? {}).join(","));
+    const p5 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: { ...real, remainder: { owner_pubkey: lock.owner_pubkey, cosigner_pubkey: lock.cosigner_pubkey, locktime: 1 } } }, t0 + 2)]);
+    check("A remainder lock named on a commitment of a whole lock is dropped: there is nothing for it to describe", only(p5) && !("remainder" in only(p5)));
+
+    // The time on a post is the poster's own. A stranger's exact copy of a
+    // member's commitment, dated before the proposal opened, was refused for
+    // its date and then hid the member's own post behind it.
+    const p6 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: real }, t0 - 10), ev({ type: "commitment", record: real }, t0 + 500)]);
+    check("An exact copy dated outside the window, posted by a stranger, does not hide the member's own post",
+      only(p6)?.tx === real.tx, p6.outcome.map((o) => o.reason ?? "added").join("; ").slice(0, 70));
 
     // A completion written another way, posted first, does not take the real one's place.
     const pile = { ...emptyPile(PROPOSAL), commitments: [{ submitted: "2027-01-02T00:00:00Z", record: real }] };

@@ -51,6 +51,10 @@ const locktimes = [
   ["the largest locktime there is", 4294967295],
   ["a small block height (regtest)", 150],
   ["a height with the high bit set (128)", 128],
+  // The smallest numbers have opcodes of their own (security loop, 17 November 2026).
+  ["block 1", 1],
+  ["block 16, the last with an opcode of its own", 16],
+  ["block 17, the first that is pushed as a byte", 17],
 ];
 for (const [label, t] of locktimes) {
   const ours = hex(lockScript({ ownerPubkey: OWNER, cosignerPubkey: COSIGNER, locktime: t }));
@@ -68,6 +72,14 @@ for (const net of ["mainnet", "testnet4"]) {
     locktime: t, network: proven.networkFor(net),
   }).address;
   check(`Address on ${net}`, ours === theirs, ours.slice(0, 18) + "…");
+}
+
+// Outside what a locktime can be, both refuse: nothing is quietly cut short.
+for (const [label, t] of [["nought", 0], ["a negative number", -5], ["more than a locktime can hold (2^32)", 4294967296], ["a fraction", 1.5]]) {
+  const throws = (f) => { try { f(); return false; } catch { return true; } };
+  check(`No script for ${label}, from either`,
+    throws(() => lockScript({ ownerPubkey: OWNER, cosignerPubkey: COSIGNER, locktime: t }))
+      && throws(() => proven.lockScript({ fanPubkey: Buffer.from(OWNER, "hex"), cosignerPubkey: Buffer.from(COSIGNER, "hex"), locktime: t })));
 }
 
 const typical = lockScript({ ownerPubkey: OWNER, cosignerPubkey: COSIGNER, locktime: NOW + 31557600 });
@@ -193,6 +205,12 @@ rule();
   const stranger = lockIsGenuine(record, { crowdlock, register: { ...onRegister, members: [] } });
   check("A real lock whose owner never joined is a lock, and its owner is not counted as a member", stranger.ok && stranger.member === false);
   not("a record with no keys", { address: record.address, member: record.member, locktime: record.locktime }, read, "not public keys");
+  // A "lock" dated by a block height long passed is money its owner can take
+  // home alone today (security loop, round 1).
+  const byHeight = (hrp) => ({ ...record, locktime: 800000, address: lockAddress({ ownerPubkey: OWNER, cosignerPubkey: record.cosigner_pubkey, locktime: 800000 }, hrp) });
+  not("a lock dated by a block height, on a real network", byHeight("bc"), read, "block height");
+  check("…though a private test chain may date a lock by height",
+    lockIsGenuine(byHeight("bcrt"), { crowdlock: { ...crowdlock, network: "regtest" }, register: onRegister }).ok);
   not("a lock whose owner and co-signer are one key", { ...record, cosigner_pubkey: "03" + OWNER.slice(2) }, read, "same key");
   not("anything at all, for a network the checker does not know", record, { crowdlock: { ...crowdlock, network: "nowhere" }, register: onRegister }, "network");
   // The real registers, as they stand: every lock on them is genuine.
