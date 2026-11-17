@@ -110,6 +110,7 @@ Every one of these was reproduced before it was fixed, and each fix has a test t
 - **The co-signer can let a member out early.** Owner and co-signer together can spend a lock at any time, to anywhere. Bitcoin does not stop it; the chain records it, and `method/js/release.mjs` reads that record.
 - **Today the co-signer is one key held by the founder.** Two of three is the direction once there is a second person.
 - **Every lock's public keys are published.** The register lists each lock's owner key and co-signer key so that anyone can rebuild its address. A lock therefore has none of the protection a hidden key gives: if quantum computers one day work a private key out from a public one, these locks are exposed sooner than most. Locks renew within five years, which is the route to a safer address type once Bitcoin has one. Nobody has planned that move.
+- **A destination's stamp proves it existed, not that anyone saw it.** The waiting period counts from the block of the destination's stamp, which nobody can backdate. But someone holding a stolen attestor key and write access to the repository could stamp an entry without publishing it, wait out the period, then publish the entry and a proposal together. They can no longer do it in an afternoon; they must hold the stolen keys unnoticed for the whole period. Two or more attestors would raise the bar further.
 - **A lock's date is worked out from the clock of the phone or computer that makes it.**
 - **No test checks a specification against the code it describes.**
 

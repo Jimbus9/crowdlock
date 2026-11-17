@@ -186,6 +186,18 @@ check("A stamp output that carries money is not a stamp",
   destinationIsPermitted({ address: DEST, entries: paid, opensAt: PROPOSAL_OPENS, ...RULES }).permitted, false);
 check("A stamp the explorer couldn't give us is refused",
   destinationIsPermitted({ address: DEST, entries: LIST, opensAt: PROPOSAL_OPENS, ...RULES, stamps: {} }).reason.includes("could not be read"), true);
+{
+  // A block's clock can run up to two hours fast. With no waiting period, a
+  // stamp in a block is enough even if its block time is after the opening.
+  const fast = [{ ...e1, stamp: stampOf(e1, "2026-11-21T01:30:00Z") }];
+  check("No waiting period: a stamp in a block counts even if its block's clock ran fast",
+    destinationIsPermitted({ address: DEST, entries: fast, opensAt: PROPOSAL_OPENS, ...RULES, minimumAgeDays: 0 }).permitted, true);
+  check("…but with a waiting period, a fast clock only makes it wait longer",
+    destinationIsPermitted({ address: DEST, entries: fast, opensAt: PROPOSAL_OPENS, ...RULES, minimumAgeDays: 1 }).permitted, false);
+  const unmined = [{ ...e1, stamp: stampOf(e1, "2026-11-01T12:00:00Z", { confirmed: false }) }];
+  check("No waiting period still needs the stamp in a block",
+    destinationIsPermitted({ address: DEST, entries: unmined, opensAt: PROPOSAL_OPENS, ...RULES, minimumAgeDays: 0 }).permitted, false);
+}
 check("stampedAt gives the stamp's block time",
   stampedAt(e1, STAMPS[e1.stamp]).at === Date.parse("2026-11-01T12:00:00Z") / 1000, true);
 

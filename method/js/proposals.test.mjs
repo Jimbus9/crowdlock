@@ -89,6 +89,13 @@ const e2 = signedAt(d2, outsider, "2026-11-20T00:00:00Z");
 const list = [e1, e2];
 const rules = { attestors: [addrOf(key)], threshold: 1, hrp: "tb", instance, stamps: STAMPS };
 check("A new entry chains to the one before it, with whole-second times", d1.prev === ZERO_PREV && d2.prev === ref.destinationHash(e1) && s1 === "2026-11-01T12:00:00Z");
+{
+  const fast = [{ ...e1, stamp: stampOf(e1, "2026-11-21T01:30:00Z") }];
+  const args = { address: addrOf(outsider), entries: fast, opensAt: "2026-11-21T00:00:00Z", ...rules };
+  check("No waiting period: a stamp in a block counts even if its block's clock ran fast, as in the reference",
+    destinationIsPermitted({ ...args, minimumAgeDays: 0 }).permitted && ref.destinationIsPermitted({ ...args, minimumAgeDays: 0 }).permitted
+      && !destinationIsPermitted({ ...args, minimumAgeDays: 1 }).permitted && !ref.destinationIsPermitted({ ...args, minimumAgeDays: 1 }).permitted);
+}
 check("A stamp is the reference code's: the same line, hash and script",
   list.every((e) => stampLine(e) === ref.stampLine(e) && stampHash(e) === ref.stampHash(e) && stampScript(e) === ref.stampScript(e) && /^6a20[0-9a-f]{64}$/.test(stampScript(e))));
 check("…and the same date, or the same refusal",

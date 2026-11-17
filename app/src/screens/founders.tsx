@@ -838,7 +838,11 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
   const nowIso = () => new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
   const stamps = useStamps(d.entries ?? []);
-  const usable = (d.entries ?? []).filter((e: any) => e.op === "add").filter((e: any) => destinationIsPermitted({
+  // Each address once, by its newest entry: a proposal pays an address, and
+  // an address is judged by its newest entry.
+  const newest = (d.entries ?? []).filter((e: any) => e.op === "add")
+    .filter((e: any, i: number, all: any[]) => !all.slice(i + 1).some((x: any) => x.address === e.address));
+  const usable = newest.filter((e: any) => destinationIsPermitted({
     address: e.address, entries: d.entries, opensAt: nowIso(), minimumAgeDays: c.crowdlock.destination_wait_days,
     ...attestorsOf(c.crowdlock, hrp), stamps: stamps ?? {},
   }).permitted);
