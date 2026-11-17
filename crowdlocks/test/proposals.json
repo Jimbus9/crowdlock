@@ -100,6 +100,23 @@
         "rate": "1 BTC = 10.00 GBP",
         "at": "2026-11-16T21:06:39Z"
       }
+    },
+    {
+      "title": "Testing update",
+      "text": "Testing the update",
+      "destination": "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz",
+      "requires": 1000,
+      "currency": "GBP",
+      "opens": "2026-11-17T14:27:56Z",
+      "closes": "2026-12-01T14:27:56Z",
+      "settles_by": "2026-12-08T14:27:56Z",
+      "declaration_version": 5,
+      "hash": "e3f8c262ff7f2e9580b5b2cf1abb25f6221b7d83e42808e90e0b076d9ff8b10e",
+      "target": {
+        "sats": 150000,
+        "rate": "1 BTC = 6666.67 GBP",
+        "at": "2026-11-17T14:27:56Z"
+      }
     }
   ]
 }
