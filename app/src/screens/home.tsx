@@ -77,8 +77,9 @@ function useOverview(account: any): Overview {
         for (const l of saved.filter((x) => x.crowdlock === c.url)) if (!terms.some((x) => x.address === l.address)) terms.push(l);
         // Keep every one of them on this phone, with what a Ledger needs, so
         // that taking a lock home never depends on this Crowdlock's site.
-        await rememberLocks(terms.map((l) => ({ crowdlock: c.url, address: l.address, locktime: l.locktime, cosignerPubkey: l.cosignerPubkey,
+        const keptAll = await rememberLocks(terms.map((l) => ({ crowdlock: c.url, address: l.address, locktime: l.locktime, cosignerPubkey: l.cosignerPubkey,
           cosignerXpub: xpubForKey(c.crowdlock, l.cosignerPubkey) ?? undefined, name: c.crowdlock.name })));
+        if (!keptAll) notes.push({ url: c.url, name: c.crowdlock.name, kind: "unsaved" });
         for (const l of terms) {
           if (!alive.current) return;   // Home has been left: stop asking
           try {
@@ -193,6 +194,10 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
       {o.alerts.map((a) => a.kind === "version" ? (
         <Warning key={a.url + a.kind} level="know" title={`${a.name}: its declaration has a new version`}>
           <Btn kind="link" label="Read what changed" onPress={() => go({ name: "sign", words, url: a.url })} />
+        </Warning>
+      ) : a.kind === "unsaved" ? (
+        <Warning key={a.url + a.kind} level="know" title={`${a.name}: this phone couldn't keep a copy of your locks' terms`}>
+          <Text style={s.p}>Your money is safe. But if {a.name}'s site were down, this phone couldn't take a lock home until it came back. Free some space on the phone, then pull down to try again.</Text>
         </Warning>
       ) : a.kind === "rules" ? (
         <Warning key={a.url + a.kind} level="know" title={`${a.name}: who approves where its money may go has changed`}>

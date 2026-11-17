@@ -20,7 +20,7 @@ import * as ecc from "tiny-secp256k1";
 import { createHash } from "node:crypto";
 import { lockScript, lockAddress } from "./lock.mjs";
 import { isCosignerOf } from "../js/crowdlock.mjs";
-import { verifyMembership, memberAddressForOwnerKey } from "../js/verify.mjs";
+import { verifyMembership, memberAddressForOwnerKey, canonicalAddress } from "../js/verify.mjs";
 
 const { Transaction, script: bscript } = bitcoin;
 
@@ -223,7 +223,7 @@ export function destinationIsPermitted({
   const chain = chainIsIntact(entries, instance);
   if (!chain.ok) return { permitted: false, reason: `the list itself is broken: ${chain.reason}` };
 
-  const mine = entries.filter((e) => e.address === address);
+  const mine = entries.filter((e) => canonicalAddress(e.address) === canonicalAddress(address));
   const added = mine.filter((e) => e.op === "add").pop();
   if (!added) return { permitted: false, reason: "not on the published destinations list" };
 
@@ -548,7 +548,7 @@ export function verifyCommitment({
   let out0;
   try { out0 = bitcoin.address.fromOutputScript(tx.outs[0].script, network); }
   catch { return fail("output 0 is not a recognisable address"); }
-  if (out0 !== proposal.destination) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
+  if (canonicalAddress(out0) !== canonicalAddress(proposal.destination)) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
   note("output 0 pays the proposal's destination", true, out0);
 
   // The attestors and threshold come from the destinations file itself when

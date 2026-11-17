@@ -66,7 +66,7 @@ export type LockRow = LockTerms & { state: string; confirmed: bigint; arriving: 
 // `offline`: its Crowdlock couldn't be loaded, and it is shown from the terms this phone kept.
 export type MyLock = { crowdlock: string; name: string; address: string; locktime: number; state: string; confirmed: bigint; arriving: bigint; offline?: boolean };
 
-export type HomeAlert = { url: string; name: string; kind: "keys" | "version" | "rules" };
+export type HomeAlert = { url: string; name: string; kind: "keys" | "version" | "rules" | "unsaved" };
 
 export type OverviewData = { balance: { confirmed: bigint; arriving: bigint } | null; locks: MyLock[] | null; step: any | null; alerts: HomeAlert[] };
 

@@ -102,6 +102,13 @@ reset();
   ok("A lock's own terms are never changed by what is read later", after[0].locktime === 1900000000 && after[0].cosignerPubkey === mine.cosignerPubkey && after.length === 2);
   await S.rememberLocks([]);
   ok("…and nothing is ever removed", (await S.loadSavedLocks()).length === 2);
+  // A save the keystore refuses is reported, not swallowed (OpenAI review M-03).
+  const real = mem.set.bind(mem);
+  mem.set = (k, v) => { if (k === "crowdlock.locks.v1") throw new Error("storage full"); return real(k, v); };
+  const said = await S.rememberLocks([{ crowdlock: mine.crowdlock, address: "bc1qlockthree", locktime: 1960000000, cosignerPubkey: mine.cosignerPubkey }]);
+  mem.set = real;
+  ok("A lock the phone couldn't keep is reported as not kept, and nothing is thrown", said === false && !(await S.loadSavedLocks()).some((l) => l.address === "bc1qlockthree"));
+  ok("…and one it did keep is reported as kept", (await S.rememberLocks([{ ...mine }])) === true);
 }
 
 console.log(process.exitCode ? "\nThe wallet's storage has a problem." : "\nThe wallet's storage keeps the words apart, locked where it can.");

@@ -186,6 +186,10 @@ check("Paid to a destination stamped only after the payment: an early release",
 const young = await makeList([{ op: "add", address: shop, stampedAt: before - 86400 }]);
 check("Paid to a destination still inside its waiting period: an early release",
   earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: young }).length === 1);
+// One address, two spellings (OpenAI review M-02): a destination listed in capitals is the same destination.
+const shouted = await makeList([{ op: "add", address: shop.toUpperCase(), stampedAt: longAgo }]);
+check("A destination listed in capital letters is the same destination as the payment's small-letter address",
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: shouted }).length === 0);
 const unstamped = await makeList([{ op: "add", address: shop }]);
 check("Paid to an attested destination with no stamp: an early release",
   earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: unstamped }).length === 1);

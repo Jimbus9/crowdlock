@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, signNoticeWith,
+  wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith,
 } from "../wallet/core.mjs";
 import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments } from "../../../method/js/proposals.mjs";
@@ -77,6 +77,10 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
   // "Counting the pile"). Only one of them could ever be paid, so counting
   // both showed a proposal nearer its target than it was.
   const counted = new Set<string>();
+  // One payment counts once, however many copies of its commitment were
+  // posted: a payment's id leaves out the signatures, so every copy shares it
+  // (OpenAI review, H-05).
+  const paidIds = new Set<string>();
   for (const it of items) {
     if (it.type === "completed") { pile.completed++; continue; }
     if (it.type === "notice") { if (!pile.notice && genuine(it.notice)) pile.notice = { ...it.notice, published: new Date(it.at * 1000).toISOString() }; continue; }
@@ -85,8 +89,11 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
       // A commitment whose coin is gone may be one the co-signer completed:
       // then it was paid, not refused.
       if (/already been spent/.test(v.reason)) {
+        const id = commitmentTxid(it.record);
+        if (id && paidIds.has(id)) continue;
         const paid = await commitmentPaid({ record: it.record, chain });
         if (paid > 0) {
+          if (id) paidIds.add(id);
           pile.paid += paid; pile.paidCount++;
           if (it.record.lock?.owner_pubkey === account.publicKey) pile.mine.push({ sats: paid, record: it.record, paid: true });
           continue;

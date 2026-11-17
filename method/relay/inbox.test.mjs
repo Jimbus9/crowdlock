@@ -377,6 +377,17 @@ const ev = (id, created_at) => ({ id, created_at });
     for (let i = 0; i < 40; i++) { const r = await ownersSigned([real, { ...real, lock: other }], { coinsFor: async () => coins, limit: 1, seed: String(i) }); first.add(r[0].ok === true); }
     check("…and which ones are asked about changes from pass to pass", first.size === 2);
   }
+  {
+    // One budget for both checks of one proposal (OpenAI review M-01).
+    const { explorerBudget } = await import("./signed.mjs");
+    let asked = 0;
+    const recs = Array.from({ length: 500 }, (_, i) => ({ ...real, lock: { ...lock, address: `tb1qlock${i}` } }));
+    const cands = Array.from({ length: 500 }, (_, i) => { const t = Transaction.fromHex(real.tx); t.ins[0].index = i; return { tx: t.toHex(), record: { ...real, tx: t.toHex() } }; });
+    const budget = explorerBudget();
+    await ownersSigned(recs, { coinsFor: async () => { asked++; return {}; }, budget });
+    await completedByBoth(cands, { valueFor: async () => { asked++; return null; }, budget });
+    check("500 commitments and 500 completions for one proposal cost at most 200 explorer questions in all, not 400", asked === 200, `${asked} asked`);
+  }
   // What the second review found (17 November 2026), through the real checks.
   {
     const junkSlot = (b) => { const t = Transaction.fromHex(real.tx); const w = t.ins[0].witness; t.setWitness(0, [Buffer.from([b]), w[1], w[2], w[3]]); return { ...real, tx: t.toHex() }; };

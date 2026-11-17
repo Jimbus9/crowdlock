@@ -242,5 +242,16 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
     !!dead.pile.notice && dead.pile.completed?.length === 1 && dead.pile.completed[0].after_notice === true && dead.outcome.some((o) => /AFTER the co-signer declared/.test(o.reason ?? "")));
 }
 
+{
+  // One address, one spelling (OpenAI review M-02).
+  const { canonicalAddress } = await import("./verify.mjs");
+  check("A bech32 address in capitals is the same address in small letters",
+    canonicalAddress("TB1Q63ZJU9HPVFQHU8MW4WR8FQQ800ZT9JYCX97LSZ") === "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz");
+  check("…mixed case is left alone (it is not an address), and so is an old-style address, whose case matters",
+    canonicalAddress("tb1Q63zju9") === "tb1Q63zju9" && canonicalAddress("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2") === "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2");
+  const next = nextDestination({ instance: "3a".repeat(32), entries: [] }, { address: " TB1Q63ZJU9HPVFQHU8MW4WR8FQQ800ZT9JYCX97LSZ ", text: "seller" });
+  check("A destination typed in capitals is added in its one spelling", next.entry.address === "tb1q63zju9hpvfqhu8mw4wr8fqq800zt9jycx97lsz");
+}
+
 console.log(failures === 0 ? "Proposals behave as spec/proposal-and-settlement.md describes." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -169,10 +169,14 @@ export async function saveLock(lock: SavedLock): Promise<void> {
  * Keep these locks' terms on the phone: any it doesn't hold yet (a lock made
  * on the website, or before the app was reinstalled, is found on the register
  * and kept from then on), and a co-signer xpub or a name it was missing.
- * Never removes or changes a lock's own terms. Best effort: reading a
- * Crowdlock must not fail because the phone's store is full.
+ * Never removes or changes a lock's own terms. Never throws: reading a
+ * Crowdlock must not fail because the phone's store is full. But it says
+ * whether every lock is now kept, read back to be sure, so the screen can say
+ * when one isn't. Until 17 November 2026 a failed save went unnoticed, and a
+ * website-made lock could not be taken home while the site was down
+ * (OpenAI review, M-03).
  */
-export async function rememberLocks(locks: SavedLock[]): Promise<void> {
+export async function rememberLocks(locks: SavedLock[]): Promise<boolean> {
   try {
     const all = await loadSavedLocks();
     let changed = false;
@@ -183,7 +187,9 @@ export async function rememberLocks(locks: SavedLock[]): Promise<void> {
       if (l.name && have.name !== l.name) { have.name = l.name; changed = true; }
     }
     if (changed) await SecureStore.setItemAsync(LOCKS, JSON.stringify(all));
-  } catch {}
+    const kept = await loadSavedLocks();
+    return locks.every((l) => kept.some((x) => x.address === l.address));
+  } catch { return false; }
 }
 
 export async function forgetSavedLocks(): Promise<void> {

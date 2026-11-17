@@ -76,7 +76,19 @@ const server = createServer((req, res) => {
   res.statusCode = 404; res.end("not found");
 });
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
-const HERE = `http://127.0.0.1:${server.address().port}`;
+// Two explorers that agree, as a proof needs; and one that lies.
+const twin = createServer((req, res) => server.emit("request", req, res));
+await new Promise((ok) => twin.listen(0, "127.0.0.1", ok));
+const liar = createServer((req, res) => {
+  if (req.url === `/block-height/${HEIGHT}`) return res.end("ab".repeat(32));
+  if (req.url === `/block/${"ab".repeat(32)}`) return res.end(JSON.stringify({ merkle_root: explorer.claimed ?? "22".repeat(32), timestamp: 1793800000 }));
+  res.statusCode = 404; res.end("not found");
+});
+await new Promise((ok) => liar.listen(0, "127.0.0.1", ok));
+const ONE = `http://127.0.0.1:${server.address().port}`;
+const TWIN = `http://127.0.0.1:${twin.address().port}`;
+const LIAR = `http://127.0.0.1:${liar.address().port}`;
+const HERE = `${ONE},${TWIN}`;
 
 /** Run verify.mjs on a small proof built here. `explorers` is where it may ask about blocks. */
 async function runVerify(branches, { honest = true, explorers = HERE } = {}) {
@@ -94,7 +106,8 @@ async function runVerify(branches, { honest = true, explorers = HERE } = {}) {
       const step = proof.timestamp.add(new OTS.Ops.OpAppend([i])).add(new OTS.Ops.OpSHA256());
       if (b === "block") {
         step.attestations.push(new OTS.Notary.BitcoinBlockHeaderAttestation(HEIGHT));
-        if (honest) explorer.root = Buffer.from([...step.msg]).reverse().toString("hex");
+        explorer.claimed = Buffer.from([...step.msg]).reverse().toString("hex");
+        if (honest) explorer.root = explorer.claimed;
       } else if (b === "nowhere") step.attestations.push(new OTS.Notary.BitcoinBlockHeaderAttestation(99999999));
       else step.attestations.push(new OTS.Notary.PendingAttestation(PENDING));
     });
@@ -137,8 +150,17 @@ async function runVerify(branches, { honest = true, explorers = HERE } = {}) {
   const cutOff = await runVerify(["block"], { explorers: "http://127.0.0.1:9" });
   check("verify.mjs: with no explorer to ask, a block claim is reported as not checked, never as finished",
     cutOff.out.includes("NOT CHECKED") && !cutOff.out.includes("FINISHED"));
+
+  // One explorer is not enough, and a lying one is caught (OpenAI review, fix 6).
+  const alone = await runVerify(["block"], { explorers: `${ONE},http://127.0.0.1:9` });
+  check("verify.mjs: with only one explorer answering, an honest block claim is not called finished",
+    alone.out.includes("NOT CHECKED") && alone.out.includes("Only one block explorer answered") && !alone.out.includes("FINISHED"));
+  const lied = await runVerify(["block"], { honest: false, explorers: `${LIAR},${ONE}` });
+  // The liar vouches for the made-up root this proof works out; the honest one does not.
+  check("verify.mjs: a lying first explorer and an honest second: not finished, and the disagreement is shown",
+    lied.out.includes("disagree") && !lied.out.includes("FINISHED"), lied.out.split("\n").find((l) => /Block/.test(l)));
 }
-server.close();
+server.close(); twin.close(); liar.close();
 
 const all = proofs();
 

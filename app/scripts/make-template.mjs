@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-17f";
+export const TEMPLATE_VERSION = "2026-11-17g";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },

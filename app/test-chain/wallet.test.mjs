@@ -775,6 +775,15 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   check("The co-signer's words complete it in the app, and the network accepts it", paid3 === 450_000n, `${paid3} sats to the destination in all`);
   const afterSpend = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
   check("…after which the same commitment checks as void", !afterSpend.valid && /already been spent/.test(afterSpend.reason), afterSpend.reason);
+  {
+    // Copies of a paid commitment with a junk owner signature share its id.
+    // They must not read as "paid" too (OpenAI review H-05, 17 November 2026).
+    const junked = (() => { const t = bitcoinjs.Transaction.fromHex(good.tx); const w = t.ins[0].witness;
+      t.setWitness(0, [w[0], w[1], Buffer.from("300602010102010101", "hex"), w[3]]); return { ...good, tx: t.toHex() }; })();
+    const vJunk = await checkCommitment({ record: junked, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    check("A copy of a paid commitment with a junk owner signature is refused for its signature, not read as paid",
+      !vJunk.valid && /owner's signature does not verify/.test(vJunk.reason), vJunk.reason);
+  }
   const { commitmentPaid, signNoticeWith } = await import("../src/wallet/core.mjs");
   const P = await import("../../method/js/proposals.mjs");
   const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");

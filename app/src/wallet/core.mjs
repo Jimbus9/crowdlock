@@ -37,7 +37,7 @@ import { Transaction, script as bscript, address as baddress } from "bitcoinjs-l
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
-import { messageHash, verifyMembership, memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
+import { messageHash, verifyMembership, memberAddressForOwnerKey, canonicalAddress } from "../../../method/js/verify.mjs";
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
@@ -873,12 +873,24 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   // The coin it spends: its value (the signature covers it) and whether it is still there.
   const txid = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
   const coin = (await chain.utxos(L.address)).find((u) => u.txid === txid && u.vout === tx.ins[0].index);
-
-  if (coin) {
+  // The owner's signature is checked whether or not the coin is still there.
+  // A spent coin's value is read from the payment that made it. Until
+  // 17 November 2026 the check was skipped for a spent coin, so copies of a
+  // paid commitment with any signature at all read as "paid" again, and the
+  // paid total could be inflated by anyone (OpenAI review, H-05).
+  let value = coin ? BigInt(coin.value) : null;
+  if (value === null) {
+    try {
+      const src = Transaction.fromHex(String(await chain.txHex(txid)).trim());
+      if (src.getId() === txid && src.outs[tx.ins[0].index]) value = BigInt(src.outs[tx.ins[0].index].value);
+    } catch { /* below */ }
+    if (value === null) return fail("the coin it spends can't be read from the chain just now, so its signature can't be checked");
+  }
+  {
     let sigOk = false;
     try {
       const decoded = bscript.signature.decode(w[2]);
-      const sighash = tx.hashForWitnessV0(0, script, BigInt(coin.value), Transaction.SIGHASH_ALL);
+      const sighash = tx.hashForWitnessV0(0, script, value, Transaction.SIGHASH_ALL);
       // Strict: a signature with a high S value is refused, as the network refuses to pass one on.
       sigOk = decoded.hashType === Transaction.SIGHASH_ALL && ecc.verify(sighash, fromHex(L.owner_pubkey), decoded.signature, true);
     } catch { sigOk = false; }
@@ -898,7 +910,7 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   }
   let out0;
   try { out0 = baddress.fromOutputScript(tx.outs[0].script, net); } catch { return fail("output 0 is not a recognisable address"); }
-  if (out0 !== proposal.destination) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
+  if (canonicalAddress(out0) !== canonicalAddress(proposal.destination)) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
   // The attestors are the ones the Crowdlock's own file names, and the list
   // must be this Crowdlock's: never what a destinations file says of itself.
   // Its age is counted from its stamp's block, read from the chain.
@@ -961,6 +973,11 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
   const sig = toBase64(out);
   if (!verifyMembership({ address, signature: sig, message: statement, hrp: net.bech32 }).valid) throw new Error("the notice did not verify — refusing");
   return { address, signature: sig };
+}
+
+/** The id of a commitment's payment, which a completed one shares (the id leaves out the signatures). Null if it won't read. */
+export function commitmentTxid(record) {
+  try { return Transaction.fromHex(record.tx).getId(); } catch { return null; }
 }
 
 /**

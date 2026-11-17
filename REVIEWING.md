@@ -125,6 +125,16 @@ Read against the same commits as the review above; four of its findings were alr
 - **The committed-member count believed the register's member list.** A member counts only if their signature verifies.
 - **A genuine "declared dead" notice was taken while a proposal was still gathering,** and then stopped completions being recorded. It is taken only after closing; a completion after it is recorded as a breach; and one against a pile that met its target is shown as contradicted.
 
+## What OpenAI's follow-up found, and what changed (17 November 2026, night)
+
+Each reproduced on the code then on `main`, each with a test that fails on the old code:
+
+- **A paid total could be inflated by anyone.** Once a commitment was paid, the app skipped the owner's signature on copies of it, and counted each copy as paid again: one 5,000-sat payment showed as 15,000. The signature is now checked whatever state the coin is in, and a payment counts once per transaction id, in the app and on the website.
+- **The anchor checker believed the first explorer to answer.** It now asks every explorer, and calls a proof finished only when at least two answer and all agree.
+- **The 200-question limit per proposal was 200 per check, so 400.** One budget is now shared by both checks.
+- **A destination address in capitals was a second destination** that no payment could match. Bech32 addresses are now kept and compared in their one spelling.
+- **The phone could fail to keep a website-made lock's terms without saying so.** It now reads them back and warns on Home when it couldn't.
+
 ## Limits we already know about
 
 - **One block explorer is believed at a time.** The register adds a lock when the explorer its Crowdlock's file names (`chain_api`) reports confirmed coins at the lock's address, so a lying explorer could make a lock count without the money being there. The app is in a better place than it was: it reads the chain for every Crowdlock from its own explorer for the network, never the one the Crowdlock names, and before signing anything it checks each coin's amount against the transaction the coin came from. Its backup explorer is only asked when the first is silent or broken. Nothing anywhere compares two explorers, or asks a node.

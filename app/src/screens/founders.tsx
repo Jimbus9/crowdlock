@@ -3,6 +3,7 @@
 // co-signer keys, destinations, proposals, maintainers, a new version of its
 // declaration). Everything a founder does is written to their own GitHub
 // repository through src/github.mjs.
+import { canonicalAddress } from "../../../method/js/verify.mjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
@@ -841,7 +842,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   // Each address once, by its newest entry: a proposal pays an address, and
   // an address is judged by its newest entry.
   const newest = (d.entries ?? []).filter((e: any) => e.op === "add")
-    .filter((e: any, i: number, all: any[]) => !all.slice(i + 1).some((x: any) => x.address === e.address));
+    .filter((e: any, i: number, all: any[]) => !all.slice(i + 1).some((x: any) => canonicalAddress(x.address) === canonicalAddress(e.address)));
   const usable = newest.filter((e: any) => destinationIsPermitted({
     address: e.address, entries: d.entries, opensAt: nowIso(), minimumAgeDays: c.crowdlock.destination_wait_days,
     ...attestorsOf(c.crowdlock, hrp), stamps: stamps ?? {},
