@@ -24,8 +24,8 @@
 // any ordinary wallet, and the key is the first one it shows you. That was
 // chosen deliberately over a clever path that only our own code understands.
 
-import { randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { HDKey } from "@scure/bip32";
@@ -58,7 +58,11 @@ export function xpubFromWords(words) {
   return HDKey.fromMasterSeed(bip39.mnemonicToSeedSync(mnemonic)).derive(ACCOUNT_PATH).publicExtendedKey;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Only when run directly, not when restore.mjs or the test imports it. The
+// comparison goes through pathToFileURL because a plain "file://" + path is
+// not this file's address on Windows, or in any folder with a space in its
+// name: there the script used to print nothing at all, no key and no error.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const line = (s = "") => console.log(s);
   // The label printed on the paper: name the Crowdlock the key is for, e.g.
   // node generate.mjs "The Kop Fund". Written by hand on the paper, so it must be true.
@@ -66,7 +70,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const rule = () => line("=".repeat(74));
 
   // 128 bits from the operating system's own source, which is what every
-  // wallet uses. Not Math.random, not anything of ours.
+  // wallet uses. Not Math.random, not anything of ours: the library
+  // (@scure/bip39) asks for them through crypto.getRandomValues.
   // Twelve words: 128 bits, as strong as the key they make, which cannot be
   // stronger than about 128 bits however many words protect it. Twenty-four
   // add copying mistakes, not security. (24 still restore, from anywhere.)

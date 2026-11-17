@@ -71,6 +71,28 @@ for (let i = 0; i < 50; i++) fresh.add(pubkeyFromWords(generateMnemonic(wordlist
 console.log();
 check("Fifty generated keys are fifty different keys", fresh.size === 50, `${fresh.size} distinct`);
 
+// Run the way a founder runs it, from a folder with a space in its name. On
+// Windows, and in any such folder, the script used to print nothing at all.
+{
+  const { mkdtempSync, mkdirSync, copyFileSync, symlinkSync, rmSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const { spawnSync } = await import("node:child_process");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const dir = join(mkdtempSync(join(tmpdir(), "cosigner-")), "a folder with spaces");
+  mkdirSync(dir);
+  for (const f of ["generate.mjs", "package.json"]) copyFileSync(join(here, f), join(dir, f));
+  symlinkSync(join(here, "node_modules"), join(dir, "node_modules"), "dir");
+  const run = spawnSync(process.execPath, ["generate.mjs", "Test"], { cwd: dir, encoding: "utf8" });
+  console.log();
+  check("Run from a folder with a space in its name, it prints the key (it used to print nothing)",
+    run.status === 0 && /THE CO-SIGNER KEY/.test(run.stdout) && /12\. [a-z]+/.test(run.stdout) && /Test co-signer key/.test(run.stdout),
+    `exit ${run.status}, ${run.stdout.length} characters printed`);
+  check("…and saves only the public half beside it", existsSync(join(dir, "cosigner-pubkey.txt")) && existsSync(join(dir, "cosigner-xpub.txt")));
+  rmSync(dirname(dir), { recursive: true, force: true });
+}
+
 console.log("\n" + "-".repeat(74));
 console.log(failures === 0
   ? "The words make the key, the same way every time, and bad words are refused."
