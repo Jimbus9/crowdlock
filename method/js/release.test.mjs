@@ -8,6 +8,9 @@
 import { ECPair, lockAddress, buildSpend, networkFor } from "../lock/lock.mjs";
 import { isCoSigned, isListedDestination, earlyReleases, staysLocked, readHistory, PAGE, MOST_PAGES } from "./release.mjs";
 import { lockAddress as recordAddress } from "./lockrecord.mjs";
+import { destinationHash, attestationStatement, stampScript, ZERO_PREV } from "./proposals.mjs";
+import { messageHash, memberAddressForOwnerKey } from "./verify.mjs";
+import { signAsync } from "./vendor/noble-secp256k1.js";
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -57,14 +60,46 @@ check("Co-signed after its date isn't one — the owner could have done that alo
 check("Opened by its owner on its date isn't one",
   earlyReleases(L, [asExplorer(home, locktime + 60)]).length === 0);
 
-const list = { entries: [{ index: 1, op: "add", address: shop }] };
+// A destinations list the way a real one is made: each entry attested by the
+// attestor the Crowdlock's own file names, and stamped on the chain.
+const INSTANCE = "3a".repeat(32);
+const attestor = ECPair.makeRandom({ network });
+const attHex = Buffer.from(attestor.publicKey).toString("hex");
+const attAddress = memberAddressForOwnerKey(attHex, "bc");
+const crowdlock = { network: "mainnet", cosigner_keys: [cosHex], attestor_keys: [attHex], attestor_threshold: 1,
+  declaration: { sha256: INSTANCE }, destination_wait_days: 7, max_commitment_fee: 0.01 };
+const sign = async (text) => {
+  const sig = await signAsync(messageHash(text), attestor.privateKey);
+  return Buffer.concat([Buffer.from([31 + sig.recovery]), Buffer.from(sig.toCompactRawBytes())]).toString("base64");
+};
+const stamps = {};
+/** specs: [{ op, address, stampedAt? (seconds), attest? (default true) }] */
+async function makeList(specs) {
+  const entries = [];
+  for (const [i, sp] of specs.entries()) {
+    const e = { instance: INSTANCE, index: i + 1, op: sp.op, address: sp.address, text: "t", added: "2029-01-01T00:00:00Z",
+      prev: entries.length ? destinationHash(entries[entries.length - 1]) : ZERO_PREV };
+    if (sp.op === "add" && sp.attest !== false) e.attestations = [{ address: attAddress, signature: await sign(attestationStatement(e)) }];
+    if (sp.op === "add" && sp.stampedAt) {
+      e.stamp = (i + 1).toString(16).padStart(2, "0").repeat(32);
+      stamps[e.stamp] = { txid: e.stamp, status: { confirmed: true, block_time: sp.stampedAt }, vout: [{ scriptpubkey: stampScript(e), value: 0 }] };
+    }
+    entries.push(e);
+  }
+  return { instance: INSTANCE, entries };
+}
+const longAgo = before - 30 * 86400;
+const list = await makeList([{ op: "add", address: shop, stampedAt: longAgo }]);
+const lctx = { destinations: list, crowdlock, stamps };
 check("Co-signed to a listed destination is a purchase, not a release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { destinations: list }).length === 0);
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], lctx).length === 0);
 check("With the list empty, as it is today, every co-signed early spend is a release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { destinations: { entries: [] } }).length === 1);
-const revoked = { entries: [{ index: 1, op: "add", address: shop }, { index: 2, op: "revoke", address: shop }] };
-check("A revoked destination doesn't count as listed", !isListedDestination(shop, revoked) && isListedDestination(shop, list));
-check("Re-added after a revocation, it does", isListedDestination(shop, { entries: [...revoked.entries, { index: 3, op: "add", address: shop }] }));
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...lctx, destinations: { entries: [] } }).length === 1);
+const revoked = await makeList([{ op: "add", address: shop, stampedAt: longAgo }, { op: "revoke", address: shop }]);
+const readded = await makeList([{ op: "add", address: shop, stampedAt: longAgo }, { op: "revoke", address: shop }, { op: "add", address: shop, stampedAt: longAgo }]);
+const listed = (l, at = before) => isListedDestination(shop, l, { crowdlock, stamps, at });
+check("A revoked destination doesn't count as listed", !listed(revoked) && listed(list));
+check("Re-added after a revocation, it does", listed(readded));
 check("Other addresses' spends in the same history are ignored",
   earlyReleases({ ...L, address: elsewhere }, [asExplorer(coSignedAway, before)]).length === 0);
 check("No history, or a broken one, finds nothing rather than failing",
@@ -73,8 +108,7 @@ check("No history, or a broken one, finds nothing rather than failing",
 // ---- Every output, not just the first (17 November 2026) ----------------
 // A co-signed early spend is a purchase only if every output is a listed
 // destination, money staying locked, or an OP_RETURN holding nothing.
-const crowdlock = { network: "mainnet", cosigner_keys: [cosHex] };
-const ctx = { destinations: list, crowdlock, register: { locks: [], members: [] } };
+const ctx = { destinations: list, crowdlock, stamps, register: { locks: [], members: [] } };
 const pay = (address, sats) => ({ value: sats, scriptpubkey: "0014" + "00".repeat(20), scriptpubkey_address: address });
 const marker = { value: 0, scriptpubkey: "6a20" + "ab".repeat(32), scriptpubkey_address: null };
 const withOuts = (outs, blockTime = before) => ({ ...asExplorer(coSignedToShop, blockTime), vout: outs });
@@ -108,6 +142,37 @@ check("Nothing listed at all: a co-signed early spend into the same lock alone i
   earlyReleases(L, [withOuts([pay(sameLock, 498000)])], { ...ctx, destinations: { entries: [] } }).length === 0);
 check("staysLocked refuses a lock under a co-signer key that isn't this Crowdlock's",
   !staysLocked(sameLock, L, { crowdlock: { cosigner_keys: [Buffer.from(stranger.publicKey).toString("hex")] }, register: null, hrp: "bc" }));
+
+// ---- Ways around the record found by the second review (17 November 2026) ----
+const odd = (selector) => { const t = asExplorer(coSignedAway, before); t.vin[0].witness = [...t.vin[0].witness]; t.vin[0].witness[1] = selector; return t; };
+check("A co-signed spend whose branch selector is 00 (valid in a block) is an early release",
+  earlyReleases(L, [odd("00")], ctx).length === 1 && earlyReleases(L, [odd("80")], ctx).length === 1);
+check("All of it paid as fee, with one empty OP_RETURN: an early release",
+  earlyReleases(L, [withOuts([{ value: 0, scriptpubkey: "6a", scriptpubkey_address: null }])], ctx).length === 1);
+check("All of it paid as fee, with only a proposal marker: an early release",
+  earlyReleases(L, [withOuts([marker])], ctx)[0]?.paidTo === null);
+check("A fee bigger than a commitment may leave: an early release",
+  earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 300000), marker])], ctx).length === 1);
+check("Two markers: an early release (a commitment carries one)",
+  earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 398000), marker, marker])], ctx).length === 1);
+const unattested = { instance: INSTANCE, entries: [{ instance: INSTANCE, index: 1, op: "add", address: elsewhere, text: "t", added: "x", prev: ZERO_PREV }] };
+check("Paid to an address the file lists but nobody attested: an early release",
+  earlyReleases(L, [withOuts([pay(elsewhere, 498000)])], { ...ctx, destinations: unattested }).length === 1);
+const lateStamp = await makeList([{ op: "add", address: shop, stampedAt: before + 86400 }]);
+check("Paid to a destination stamped only after the payment: an early release",
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: lateStamp }).length === 1);
+const young = await makeList([{ op: "add", address: shop, stampedAt: before - 86400 }]);
+check("Paid to a destination still inside its waiting period: an early release",
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: young }).length === 1);
+const unstamped = await makeList([{ op: "add", address: shop }]);
+check("Paid to an attested destination with no stamp: an early release",
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: unstamped }).length === 1);
+check("Without the Crowdlock's own file, nothing counts as listed",
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], { destinations: list, stamps }).length === 1);
+const cos2 = ECPair.makeRandom({ network });
+const hop = recordAddress({ ownerPubkey: ownerHex, cosignerPubkey: Buffer.from(cos2.publicKey).toString("hex"), locktime }, "bc");
+check("Moved to the same owner's lock under a second co-signer key, not on the register: an early release",
+  earlyReleases(L, [withOuts([pay(hop, 498000)])], { ...ctx, crowdlock: { ...crowdlock, cosigner_keys: [cosHex, Buffer.from(cos2.publicKey).toString("hex")] } })[0]?.paidTo === hop);
 
 // ---- The whole history (17 November 2026) --------------------------------
 // A release on the third page of a lock's history is still found.

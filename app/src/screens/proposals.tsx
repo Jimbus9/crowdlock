@@ -11,8 +11,9 @@ import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion } from "../../../method/js/proposals.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo,
+  loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges,
 } from "../crowdlocks.mjs";
+import { loadSeenRules, saveSeenRules } from "../storage";
 // @ts-ignore — plain module
 import { postCommitment, fetchCommitments } from "../relays.mjs";
 import { NETWORK, chain } from "../config";
@@ -156,7 +157,7 @@ function ProposalStatus({ c, p, account }: { c: Extract<Loaded, { ok: true }>; p
   return <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}{paid ? ` · ${btc(BigInt(paid))} paid so far` : ""}</Text>;
 }
 
-function ProposalDetail({ c, p, account, member, onCommit }: { c: Extract<Loaded, { ok: true }>; p: any; account: any; member: boolean; onCommit: () => void }) {
+function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c: Extract<Loaded, { ok: true }>; p: any; account: any; member: boolean; onCommit: () => void; paused?: boolean }) {
   const [pile, setPile] = useState<Pile | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const timePhase = phaseOf(p);
@@ -189,10 +190,10 @@ function ProposalDetail({ c, p, account, member, onCommit }: { c: Extract<Loaded
         {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
         {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
       </>}
-      {member && phase === "gathering" && <Btn label={pile && pile.mine.length > 0 ? "Commit more to this purchase" : "Commit to this purchase"} onPress={onCommit} />}
+      {member && phase === "gathering" && !paused && <Btn label={pile && pile.mine.length > 0 ? "Commit more to this purchase" : "Commit to this purchase"} onPress={onCommit} />}
       {!member && phase === "gathering" && <Text style={s.note}>Only members can commit. Join this Crowdlock and lock bitcoin first.</Text>}
       {member && phase === "soon" && <Text style={s.note}>You can commit once it opens.</Text>}
-      {pile && (phase === "gathering" || phase === "settling") && <CoSign c={c} p={p} pile={pile} onDone={() => setTimeout(refresh, 3000)} />}
+      {pile && !paused && (phase === "gathering" || phase === "settling") && <CoSign c={c} p={p} pile={pile} onDone={() => setTimeout(refresh, 3000)} />}
       {pile && (phase === "settling" || phase === "over") && !met && <DeclareDead c={c} p={p} onDone={() => setTimeout(refresh, 3000)} />}
     </View>
   );
@@ -211,15 +212,26 @@ function ProposalDetail({ c, p, account, member, onCommit }: { c: Extract<Loaded
 /** Load a Crowdlock and pick one proposal out of it by its fingerprint. */
 function useProposal(url: string, hash: string) {
   const [c, setC] = useState<Loaded | null>(null);
-  const load = useCallback(async () => { setC(await loadCrowdlock(url)); }, [url]);
+  // Whether the Crowdlock's destination rules have changed since this phone
+  // last looked (rulesChanges): committing and co-signing wait until it has.
+  const [rulesMoved, setRulesMoved] = useState(false);
+  const load = useCallback(async () => {
+    const loaded: Loaded = await loadCrowdlock(url);
+    if (loaded.ok) {
+      const seen = await loadSeenRules(url);
+      if (seen === null) await saveSeenRules(url, rulesOf(loaded)).catch(() => {});
+      setRulesMoved(rulesChanges(seen, rulesOf(loaded)).changed);
+    }
+    setC(loaded);
+  }, [url]);
   useEffect(() => { load(); }, [load]);
   const p = c && c.ok ? (c.proposals ?? []).find((x: any) => x.hash === hash) ?? null : null;
-  return { c, p, load };
+  return { c, p, load, rulesMoved };
 }
 
 export function ProposalScreen({ words, url, hash, go }: { words: string; url: string; hash: string; go: Go }) {
   const account = useMemo(() => walletAccount(words), [words]);
-  const { c, p, load } = useProposal(url, hash);
+  const { c, p, load, rulesMoved } = useProposal(url, hash);
   useRefresh(load);
   if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
   if (!c.ok) return (
@@ -240,7 +252,8 @@ export function ProposalScreen({ words, url, hash, go }: { words: string; url: s
       <Text style={s.kick}>A proposal in {c.crowdlock.name}</Text>
       <Text style={s.h1}>{p.title}</Text>
       <Text style={s.note}>A proposal is a purchase this Crowdlock's members are asked to pay for together. Committing to it is step 5 of 6, and it is optional.</Text>
-      <ProposalDetail c={c} p={p} account={account} member={member} onCommit={() => go({ name: "commit", words, url, hash })} />
+      {rulesMoved && <Text style={s.error}>Who approves where {c.crowdlock.name}'s money may go has changed since you last looked. Committing and co-signing are paused on this phone until you've checked it on {c.crowdlock.name}'s page.</Text>}
+      <ProposalDetail c={c} p={p} account={account} member={member} paused={rulesMoved} onCommit={() => go({ name: "commit", words, url, hash })} />
       <CheckedLine />
     </View>
   );
@@ -248,7 +261,7 @@ export function ProposalScreen({ words, url, hash, go }: { words: string; url: s
 
 export function CommitFlow({ words, url, hash, go }: { words: string; url: string; hash: string; go: Go }) {
   const account = useMemo(() => walletAccount(words), [words]);
-  const { c, p } = useProposal(url, hash);
+  const { c, p, rulesMoved } = useProposal(url, hash);
   const [coins, setCoins] = useState<{ lock: any; coin: any }[] | null>(null);
   // Which locks are ticked, by their place in the list. The biggest starts ticked.
   const [picks, setPicks] = useState<number[]>([0]);
@@ -262,12 +275,14 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
   const [done, setDone] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!c || !c.ok) return;
+    if (!c || !c.ok || !p) return;
     (async () => {
       const out: { lock: any; coin: any }[] = [];
       const now = Math.floor(Date.now() / 1000);
-      for (const l of locksOnRegister(c.register, account.address)) {
-        if (l.locktime <= now) continue; // its date has passed: it goes home instead
+      for (const l of locksOnRegister(c.register, account.address, c.crowdlock)) {
+        // A lock that opens before this proposal's settling ends can't back it:
+        // its owner could take the money home first.
+        if (l.locktime <= now || l.locktime <= Date.parse(p.settles_by) / 1000) continue;
         for (const coin of (await chain.utxos(l.address)).filter((u: any) => u.confirmed)) {
           out.push({ lock: { ...l, cosignerXpub: xpubForKey(c.crowdlock, l.cosignerPubkey) }, coin });
         }
@@ -275,7 +290,7 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
       out.sort((a, b) => b.coin.value - a.coin.value);
       setCoins(out);
     })().catch(() => setCoins([]));
-  }, [c, account.address]);
+  }, [c, p, account.address]);
 
   useBack(() => { if (page === 2) { if (!busy) { setPage(1); setError(null); } return true; } return false; });
 
@@ -302,9 +317,10 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
   const meNow = membershipOf(c.register, account.address);
   const stop =
     !meNow ? `You haven't joined ${c.crowdlock.name}, so you can't commit to its proposals.`
+    : rulesMoved ? `Who approves where ${c.crowdlock.name}'s money may go has changed since you last looked. Check it on ${c.crowdlock.name}'s page first.`
     : !mayCommitTo(c, meNow, p) ? `This proposal was published under version ${proposalVersion(p, c.crowdlock)} of the declaration, and you haven't signed that version. Sign it from ${c.crowdlock.name}'s page first; it can take a few minutes to reach the register.`
     : phaseOf(p) !== "gathering" ? "This proposal isn't gathering commitments just now."
-    : coins && coins.length === 0 ? "You have no locked bitcoin on this Crowdlock's register to commit. Lock some first."
+    : coins && coins.length === 0 ? `You have no locked bitcoin on this Crowdlock's register that stays locked until this proposal finishes settling (${atUtc(p.settles_by)}). Lock some for longer first.`
     : null;
   if (stop) return (
     <View>
@@ -468,12 +484,26 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         // (pacing: thousands at once would push up fees for everyone).
         const sendHere = take.length <= SEND_FROM_APP;
         let sent = 0; const failed: string[] = [];
+        // Every commitment is checked again now, and the total added up again
+        // from those that still pass. If they no longer reach the target,
+        // nothing is completed: one coin that has gone, or never confirmed,
+        // must not leave the others paying for a purchase that is short.
+        const still: typeof take = [];
+        let total = pile.paid;
         for (const g of take) {
           try {
-            // Checked when the page loaded, and checked again now: the co-signer's
-            // signature goes only on a commitment that passes at the moment of signing.
             const v = await checkCommitment({ record: g.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK });
-            if (!v.valid) throw new Error(`A commitment no longer passes its check, so it was not completed: ${v.reason}`);
+            if (v.valid) { still.push(g); total += v.committedSats; } else failed.push(`A commitment no longer passes its check: ${v.reason}`);
+          } catch (e: any) { failed.push(String(e.message ?? e)); }
+        }
+        if (total < p.target.sats) {
+          setWords(""); setBusy(false);
+          setMsg({ ok: false, text: `Nothing was completed. Checked again just now, the commitments add up to ${btc(BigInt(total))}, short of the ${btc(BigInt(p.target.sats))} target.${failed[0] ? ` ${failed[0]}` : ""}` });
+          onDone();
+          return;
+        }
+        for (const g of still) {
+          try {
             const hex = await completeCommitmentWith({ words, record: g.record, chain });
             await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
             if (sendHere) await chain.broadcast(hex);

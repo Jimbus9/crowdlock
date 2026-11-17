@@ -180,9 +180,55 @@ check("Test bitcoin gets none, because it has no value", (await poundsPerBtc({ n
 check("No price source means no pound figure, not a wrong one", (await poundsPerBtc({ network: "mainnet", chain_api: "https://down" }, async () => { throw new Error("offline"); })) === null);
 check("The link points at the counting rule's section on the minimum", COUNTING_RULE_URL.endsWith("counting-rule.md#the-minimum"));
 
-const reg = { locks: [{ address: "tb1qa", member: "TB1QME", locktime: 5, cosigner_pubkey: "02cc" }, { address: "tb1qb", member: "tb1qother", locktime: 6, cosigner_pubkey: "02cc" }] };
-const mine = locksOnRegister(reg, "tb1qme");
-check("A member's own locks are found on the register, whatever the case", mine.length === 1 && mine[0].address === "tb1qa" && mine[0].cosignerPubkey === "02cc");
+{
+  // Only genuine locks of the member's own key count as theirs (second review,
+  // 17 November 2026): the record's `member` label is never believed.
+  const { lockAddress } = await import("../../method/js/lockrecord.mjs");
+  const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");
+  const OWN = "02" + "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", CO = "03" + "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5".slice(0, 64);
+  const OTHER = "02" + "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
+  const cl = { network: "testnet4", cosigner_keys: [CO] };
+  const me = memberAddressForOwnerKey(OWN, "tb");
+  const T = 1900000000;
+  const real = { address: lockAddress({ ownerPubkey: OWN, cosignerPubkey: CO, locktime: T }, "tb"), member: me.toUpperCase(), owner_pubkey: OWN, cosigner_pubkey: CO, locktime: T };
+  const reg = { members: [{ n: 1, address: me }], locks: [
+    real,
+    { address: "tb1qq6hag67dl53wl99vzg42z8eyzfz2xlkvwk6f7m", member: me, owner_pubkey: OTHER, cosigner_pubkey: CO, locktime: T },  // someone's funded address, labelled as mine
+    { ...real, locktime: T + 5 * 31557600 },                                                                   // my real lock, with another date
+    { ...real, address: lockAddress({ ownerPubkey: OTHER, cosignerPubkey: CO, locktime: T }, "tb"), owner_pubkey: OTHER }, // somebody else's lock, labelled as mine
+  ] };
+  const mine = locksOnRegister(reg, me, cl);
+  check("A member's own locks are found on the register, whatever the case", mine.length === 1 && mine[0].address === real.address && mine[0].cosignerPubkey === CO && mine[0].locktime === T);
+  check("…and a record that only says it is theirs, or gives their lock another date, is not", mine.length === 1, `${mine.length} found`);
+}
+
+{
+  // A lock is ready to take home once the network's clock is past its date,
+  // not on it: the network refuses the owner's spend until then.
+  const { lockState } = await import("../src/wallet/core.mjs");
+  const one = { utxos: async () => [{ txid: "a".repeat(64), vout: 0, value: 1000, confirmed: true }] };
+  check("On its date exactly, a lock is still locked", (await lockState({ chain: one, lock: { address: "x", locktime: 1900000000 }, medianTime: 1900000000 })).state === "locked");
+  check("…and a second later it is ready to take home", (await lockState({ chain: one, lock: { address: "x", locktime: 1900000000 }, medianTime: 1900000001 })).state === "lapsed");
+}
+
+{
+  // A Crowdlock's destination rules, remembered (second review, 17 November 2026).
+  const { rulesOf, rulesChanges } = await import("../src/crowdlocks.mjs");
+  const ZERO = "0".repeat(64), I = "3a".repeat(32);
+  const e1 = { instance: I, index: 1, op: "add", address: "tb1qshop", text: "t", added: "x", prev: ZERO };
+  const P = await import("../../method/js/proposals.mjs");
+  const e2 = { instance: I, index: 2, op: "revoke", address: "tb1qshop", text: "t", added: "x", prev: P.destinationHash(e1) };
+  const base = { crowdlock: { attestor_keys: ["02aa"], attestor_threshold: 1, destination_wait_days: 7 }, destinations: { entries: [e1, e2] } };
+  const seen = rulesOf(base);
+  check("Nothing seen before: nothing to warn about", !rulesChanges(null, seen).changed);
+  check("The same rules: no warning", !rulesChanges(seen, rulesOf(structuredClone(base))).changed);
+  const grown = { ...base, destinations: { entries: [e1, e2, { ...e1, index: 3, prev: P.destinationHash(e2) }] } };
+  check("The list growing at its end is not a change", !rulesChanges(seen, rulesOf(grown)).changed);
+  check("An attestor added is", rulesChanges(seen, rulesOf({ ...base, crowdlock: { ...base.crowdlock, attestor_keys: ["02aa", "02bb"] } })).changed);
+  check("The waiting period shortened is", rulesChanges(seen, rulesOf({ ...base, crowdlock: { ...base.crowdlock, destination_wait_days: 0 } })).changed);
+  check("A revocation cut off the end of the list is", /shorter/.test(rulesChanges(seen, rulesOf({ ...base, destinations: { entries: [e1] } })).notes.join(" ")));
+  check("An earlier entry rewritten is", /rewritten/.test(rulesChanges(seen, rulesOf({ ...base, destinations: { entries: [{ ...e1, address: "tb1qmine" }, e2] } })).notes.join(" ")));
+}
 let lockPosted = null;
 const lockOk = await submitLock({ lock_endpoint: "https://example.com/lock/submit?c=x" },
   { ownerPubkey: "02aa", cosignerPubkey: "02cc", locktime: 9, address: "tb1qa" },

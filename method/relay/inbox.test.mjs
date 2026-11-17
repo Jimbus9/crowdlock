@@ -13,7 +13,7 @@ import { membershipStatement, checkCrowdlock } from "../js/crowdlock.mjs";
 import { lockAddress } from "../js/lockrecord.mjs";
 import { applyRecords, recordEventTemplate, recordFromEvent, RECORD_KIND, announcementTemplate, announcementFromEvent, announcementDue, ANNOUNCE_KIND } from "../js/inbox.mjs";
 import { recordPass, planSwaps } from "../js/relayhealth.mjs";
-import { readBack } from "./nostr.mjs";
+import { readBack, readRelay } from "./nostr.mjs";
 
 const ROOT = joinPath(dirname(fileURLToPath(import.meta.url)), "..", "..");
 let failures = 0;
@@ -232,6 +232,23 @@ const ev = (id, created_at) => ({ id, created_at });
   const stuck = await readBack(deaf, now - 86400);
   check("A relay that ignores the question is given up on, keeping what it gave", !stuck.complete && stuck.events.length === 2);
 
+  {
+    // A flood bigger than one pass reads (second review, 17 November 2026):
+    // each pass carries on from where the last stopped, so an older record is
+    // reached in the end, however much junk is newer than it.
+    const flood = Array.from({ length: 4000 }, (_, i) => ev(`f${i}`, now + 600 - Math.floor(i / 20)));
+    const buried = ev("buried", now - 7200);
+    const relay = pretendRelay([...flood, buried], 100);
+    let cursor, found = false, passes = 0;
+    for (; passes < 20 && !found; passes++) {
+      const r = await readRelay(relay, now - 86400, cursor, { maxPages: 8 });
+      found = r.events.some((e) => e.id === buried.id);
+      cursor = r.cursor;
+    }
+    check("A record under more junk than one pass reads is reached by carrying on from pass to pass", found, `after ${passes} passes`);
+    const once = await readRelay(relay, now - 86400, undefined, { maxPages: 8 });
+    check("…where one pass on its own never reaches it", !once.events.some((e) => e.id === buried.id) && once.cursor !== null);
+  }
   const capped = await readBack(pretendRelay(junk, 300), now - 86400, { maxPages: 3 });
   check("A pass stops at its limit and says it did not finish", !capped.complete && capped.events.length > 300 && capped.events.length < 2000);
 
@@ -249,7 +266,8 @@ const ev = (id, created_at) => ({ id, created_at });
 {
   const { Transaction, script: bscript } = await import("bitcoinjs-lib");
   const { lockScript } = await import("../js/lockrecord.mjs");
-  const { ownerSigned, completedBy, ownersSigned, completedByBoth, coinsAt, coinValue, coinOf, sendCompleted } = await import("./signed.mjs");
+  const { ownerSigned, completedBy, ownersSigned, completedByBoth, coinsAt, coinValue, coinOf, sendCompleted, readTx } = await import("./signed.mjs");
+  const { applyCommitments, applySettlement, emptyPile, commitmentEventTemplate, dueToSend } = await import("../js/proposals.mjs");
   const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 
   const ownerPriv = utils.randomPrivateKey(), coPriv = utils.randomPrivateKey();
@@ -324,7 +342,7 @@ const ev = (id, created_at) => ({ id, created_at });
     const fetchImpl = async (url, init = {}) => {
       asked.push(`${init.method ?? "GET"} ${url.replace("https://x", "")}`);
       if (over.down) throw new Error("no answer");
-      if (url.endsWith(`/address/${lock.address}/utxo`)) return answer(200, [{ txid: FUNDING, vout: 0, value: VALUE }]);
+      if (url.endsWith(`/address/${lock.address}/utxo`)) return answer(200, [{ txid: FUNDING, vout: 0, value: VALUE, status: { confirmed: !over.unconfirmed } }]);
       if (url.endsWith(`/tx/${FUNDING}`)) return answer(200, { vout: [{ value: VALUE }] });
       // The real explorers answer this for ANY payment, seen or not.
       if (/\/tx\/[0-9a-f]{64}\/status$/.test(url)) return answer(200, { confirmed: false });
@@ -348,6 +366,49 @@ const ev = (id, created_at) => ({ id, created_at });
     const first = new Set();
     for (let i = 0; i < 40; i++) { const r = await ownersSigned([real, { ...real, lock: other }], { coinsFor: async () => coins, limit: 1, seed: String(i) }); first.add(r[0].ok === true); }
     check("…and which ones are asked about changes from pass to pass", first.size === 2);
+  }
+  // What the second review found (17 November 2026), through the real checks.
+  {
+    const junkSlot = (b) => { const t = Transaction.fromHex(real.tx); const w = t.ins[0].witness; t.setWitness(0, [Buffer.from([b]), w[1], w[2], w[3]]); return { ...real, tx: t.toHex() }; };
+    check("A copy of a real commitment with junk in the co-signer's place is not taken",
+      ownerSigned(junkSlot(1), coins).ok === false && /co-signer's place is not empty/.test(ownerSigned(junkSlot(1), coins).reason));
+    const x = explorer({ unconfirmed: true });
+    const v = await ownersSigned([real], { coinsFor: coinsAt("https://x", x.fetchImpl) });
+    check("A commitment spending a coin that hasn't confirmed is not taken", v[0].ok === false, v[0].reason);
+
+    // The pile, with the inbox's own signature check and transaction reader.
+    const FP = "cd".repeat(32), member = memberAddressForOwnerKey(lock.owner_pubkey, "tb");
+    const cl = { declaration: { sha256: FP, version: 1 }, cosigner_keys: [lock.cosigner_pubkey], network: "testnet4" };
+    const reg = { members: [{ n: 1, address: member }], locks: [{ ...lock, member }] };
+    const prop = { hash: PROPOSAL, opens: "2027-01-01T00:00:00Z", closes: "2027-01-29T00:00:00Z", settles_by: "2027-02-12T00:00:00Z" };
+    const t0 = Date.parse(prop.opens) / 1000;
+    let n = 0;
+    const ev = (item, at) => ({ id: String(n++).padStart(64, "0"), ...commitmentEventTemplate({ proposal: PROPOSAL, ...item }, FP, at) });
+    const coinsFor = async () => coins;
+    const run = (pile, events, register = reg) => applyCommitments(pile, events, { crowdlock: cl, proposal: prop, register, nowIso: "2027-01-02T00:00:00Z", readTx, signed: (rs) => ownersSigned(rs, { coinsFor }) });
+    const flood = [1, 2, 3, 4, 5].map((b, i) => ev({ type: "commitment", record: junkSlot(b) }, t0 + 1 + i));
+    const r1 = await run(emptyPile(PROPOSAL), [...flood, ev({ type: "commitment", record: real }, t0 + 500)]);
+    check("Five junk copies posted first take none of the lock's places, and the real one gets in",
+      r1.pile.commitments.length === 1 && r1.pile.commitments[0].record.tx === real.tx, r1.outcome.map((o) => o.reason ?? "added").join("; ").slice(0, 60));
+    const long = (h) => { const i = h.indexOf("02", h.indexOf("fdffffff") + 8); return h.slice(0, i) + "fd0200" + h.slice(i + 2); };
+    const r2 = await run(r1.pile, [ev({ type: "commitment", record: { ...real, tx: long(real.tx) } }, t0 + 600)]);
+    check("The same commitment written another way is the same commitment", r2.pile === r1.pile && readTx(long(real.tx))?.txid === readTx(real.tx).txid);
+    const r3 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: { ...real, tx: long(real.tx) } }, t0 + 1)]);
+    check("…and what is kept is its standard encoding", r3.pile.commitments[0]?.record.tx === real.tx);
+    const shortLock = { ...lock, locktime: Date.parse(prop.settles_by) / 1000 - 86400 };
+    const r4 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: { ...real, lock: shortLock } }, t0 + 1)], { ...reg, locks: [{ ...shortLock, member }] });
+    check("A commitment from a lock that opens before settling ends is not taken",
+      r4.pile.commitments.length === 0 && /opens before this proposal's settling ends/.test(r4.outcome[0]?.reason ?? ""), r4.outcome[0]?.reason);
+
+    // A completion written another way, posted first, does not take the real one's place.
+    const pile = { ...emptyPile(PROPOSAL), commitments: [{ submitted: "2027-01-02T00:00:00Z", record: real }] };
+    const items = [{ type: "completed", tx: long(done), at: t0 + 10 }, { type: "completed", tx: done, at: t0 + 20 }];
+    const canonical = (h) => { try { return Transaction.fromHex(h).toHex(); } catch { return null; } };
+    const txidOf = (h) => readTx(h)?.txid ?? null;
+    const st = await applySettlement(pile, items, { crowdlock: cl, hash: PROPOSAL, hrp: "tb", addressOf: memberAddressForOwnerKey, txidOf, nowIso: "2027-01-30T00:00:00Z", canonical,
+      completedBy: (c) => completedByBoth(c, { valueFor: async () => VALUE }) });
+    check("A completion written another way and posted first is kept, and sent, in the standard encoding",
+      st.pile.completed?.length === 1 && st.pile.completed[0].tx === done && dueToSend(st.pile, 25, txidOf)[0]?.tx === done);
   }
   {
     const x = explorer();

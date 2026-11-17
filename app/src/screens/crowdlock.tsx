@@ -12,13 +12,13 @@ import { DEFAULT_RELAYS } from "../start.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
   STARTING_LIST, loadCrowdlock, membershipOf, committedTotal, COUNTING_RULE_URL, poundsPerBtc, shortBtc, locksOnRegister, submitLock, newestCosigner, keyChanges,
-  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy,
+  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges,
 } from "../crowdlocks.mjs";
 // @ts-ignore — plain module
 import { TEST_APP_URL } from "../build.mjs";
 // @ts-ignore — plain module
 import { postToRelays, announce, fetchAnnouncements } from "../relays.mjs";
-import { loadAddedCrowdlocks, saveAddedCrowdlocks, loadSavedLocks, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys } from "../storage";
+import { loadAddedCrowdlocks, saveAddedCrowdlocks, loadSavedLocks, loadSeenKeys, saveSeenKeys, loadExpectedKeys, saveExpectedKeys, loadSeenRules, saveSeenRules } from "../storage";
 import { NETWORK, IS_TEST_MONEY, chain } from "../config";
 // The look (one theme file) and the shared parts every screen is built from.
 import { Btn, NavRow, Warning } from "../ui/parts";
@@ -87,6 +87,7 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
   const [gbp, setGbp] = useState<number | null>(null);
   const [keyChange, setKeyChange] = useState<{ added: string[]; removed: string[] } | null>(null);
   const [record, setRecord] = useState<{ releases: any[]; unreadable: number } | null>(null);
+  const [ruleChange, setRuleChange] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
     const loaded: Loaded = await loadCrowdlock(url);
@@ -105,6 +106,13 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
         await saveExpectedKeys(url, expected.filter((k) => !x.has(k.slice(2)))).catch(() => {});
       }
       setKeyChange(ch.changed ? { added: ch.added, removed: ch.removed } : null);
+      // And its destination rules: attestors, their number, the waiting
+      // period, and the destinations list itself. The list growing at its end
+      // is how it is meant to change, and is simply remembered.
+      const rules = rulesOf(loaded);
+      const rch = rulesChanges(await loadSeenRules(url), rules);
+      if (!rch.changed) await saveSeenRules(url, rules).catch(() => {});
+      setRuleChange(rch.changed ? rch.notes : null);
       // One after the other, not both at once: each asks the explorer about every
       // lock on the register, and a phone only keeps a few questions open at a time.
       committedTotal(loaded).then(setTotal).catch(() => setTotal(null))
@@ -154,6 +162,15 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
         {historyLinkFor(c.url) && <Btn label="See who changed it" kind="second" onPress={() => Linking.openURL(historyLinkFor(c.url)!)} />}
         <Text style={s.note}>New locks are paused on this phone until you've looked. Taking money home isn't affected.</Text>
         <Btn label="I've checked — carry on" onPress={async () => { await saveSeenKeys(url, c.crowdlock.cosigner_keys ?? []).catch(() => {}); setKeyChange(null); }} />
+      </View>}
+
+      {ruleChange && <View style={s.panel}>
+        <Text style={s.error}>Who approves where this Crowdlock's money may go has changed since you last looked.</Text>
+        {ruleChange.map((n) => <Text key={n} style={s.note}>{n}</Text>)}
+        <Text style={s.note}>These are the rules that stop committed money being paid to an address somebody slipped in. Check with the founder that the change was theirs, and why. Every change is public, with the name of the account that made it.</Text>
+        {historyLinkFor(c.url) && <Btn label="See who changed it" kind="second" onPress={() => Linking.openURL(historyLinkFor(c.url)!)} />}
+        <Text style={s.note}>Committing to a purchase, and co-signing one, are paused on this phone until you've looked. Locking and taking money home aren't affected.</Text>
+        <Btn label="I've checked — carry on" onPress={async () => { await saveSeenRules(url, rulesOf(c)).catch(() => {}); setRuleChange(null); }} />
       </View>}
 
       {toSign && <Warning level="know" title="This Crowdlock's declaration has a new version">
@@ -211,7 +228,9 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
       {me && (showText
         ? <><Text style={s.label}>The declaration you signed{c.versions.length > 1 && mine ? ` (version ${mine.version})` : ""}</Text><Text style={s.declaration}>{mine?.text ?? c.declarationText}</Text></>
         : <NavRow title="The declaration" sub={c.versions.length > 1 && mine ? `The words you signed: version ${mine.version}` : "The words you signed"} onPress={() => setShowText(true)} />)}
-      {record && record.releases.length === 0 && (c.register.locks ?? []).length > 0 && <Text style={s.note}>Co-signer's record: no early releases{record.unreadable ? ` (${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be checked in full just now)` : ""}.</Text>}
+      {record && record.releases.length === 0 && (c.register.locks ?? []).length > 0 && <Text style={s.note}>{record.unreadable
+        ? `Co-signer's record: couldn't check every lock. ${record.unreadable} lock${record.unreadable === 1 ? "" : "s"} couldn't be read in full, so this phone can't say there were no early releases.`
+        : "Co-signer's record: no early releases."}</Text>}
       <NavRow title="Share it" sub="A link or a code that opens it in someone's app" onPress={() => go({ name: "share", words, url })} />
       {repoFromFileUrl(c.url) && <NavRow title="Look after it" sub="For its founder and maintainers" onPress={() => go({ name: "lookAfter", words, url })} />}
 
@@ -261,7 +280,7 @@ function MyLocks({ account, c, onLock, onHome, onAll, all = false, paused = fals
     try {
       setWaiting(await waitingBalance(chain, account.address));
       const medianTime = await chain.medianTime();
-      const onReg = locksOnRegister(c.register, account.address) as LockTerms[];
+      const onReg = locksOnRegister(c.register, account.address, c.crowdlock) as LockTerms[];
       const saved = (await loadSavedLocks()).filter((l) => l.crowdlock === c.url);
       const all: LockTerms[] = [...onReg];
       for (const l of saved) if (!all.some((x) => x.address === l.address)) all.push(l);

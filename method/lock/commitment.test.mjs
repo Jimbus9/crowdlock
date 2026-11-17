@@ -303,6 +303,7 @@ const PROPOSAL = {
   hash: createHash("sha256").update("a proposal document").digest("hex"),
   destination: DEST,
   opensAt: PROPOSAL_OPENS,
+  settlesBy: "2026-12-31T00:00:00Z",
 };
 
 const COMMIT = 400_000;
@@ -632,6 +633,22 @@ const outsiderList = [{ ...e1, attestations: [attest(e1, outsiderKey)] }];
 rejects("A list attested by somebody the Crowdlock's file does not name, even when the list names them itself",
   verifyCommitment({ record, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: outsiderList, destinationRules: { attestors: [OUTSIDER], threshold: 1, instance: INSTANCE },
     utxoValue: utxo.value, network: NETWORK, crowdlock: ours }), "not a listed attestor");
+
+// A lock that opens before the proposal's settling ends is not committed
+// money: its owner could take it home first (second review, 17 November 2026).
+{
+  const dated = (locktime) => {
+    const l = lockAddress({ fanPubkey: ownerPubkey, cosignerPubkey, locktime, network: NETWORK });
+    const b = buildCommitment({ proposalHash: PROPOSAL.hash, utxo, witnessScript: l.witnessScript, destination: DEST,
+      commitSats: utxo.value - FEE, feeSats: FEE, ownerKey, network: NETWORK });
+    return { proposal: PROPOSAL.hash, lock: { address: l.address, owner_pubkey: ownerPubkey.toString("hex"), cosigner_pubkey: cosignerPubkey.toString("hex"), locktime }, tx: b.hex };
+  };
+  const settles = Date.parse(PROPOSAL.settlesBy) / 1000;
+  rejects("A lock that opens before settling ends", verifyWith(dated(settles - 86400)), "opens before the proposal's settling ends");
+  rejects("A lock that opens the moment settling ends", verifyWith(dated(settles)), "opens before the proposal's settling ends");
+  check("A lock that opens after settling ends is accepted", verifyWith(dated(settles + 86400)).valid, true, verifyWith(dated(settles + 86400)).reason);
+  rejects("A date lock checked against a proposal with no settling date", verifyWith(dated(settles + 86400), { proposal: { ...PROPOSAL, settlesBy: undefined } }), "settling date can't be read");
+}
 
 line();
 rule();

@@ -3,12 +3,25 @@
 # -> Run workflow): nothing builds it by itself. It installs beside the test
 # app under its own package name, so the two never share a wallet.
 #
-# The APK is signed with the app's own key, held by the founder and kept in this
-# repository's Actions secrets ANDROID_SIGNING_KEY (the .p12 file as base64) and
-# ANDROID_SIGNING_PASSWORD, made with app/scripts/make-signing-key.sh. A phone
-# only accepts an update signed with the same key, so nobody else can make an
-# "update" of this app. Without both secrets the build stops: it never falls
-# back to Expo's public development key, which signed it until 17 November 2026.
+# Two jobs, so the signing key is never in the same place as code from npm or
+# Gradle:
+#
+#   build  installs the libraries, tests, builds the APK. It has no secrets
+#          and cannot publish anything (read-only token). It hands the
+#          unsigned APK on.
+#   sign   runs nothing but Android's own apksigner, on the APK it is handed.
+#          It runs in the "real-bitcoin" environment, which holds the key
+#          (ANDROID_SIGNING_KEY, ANDROID_SIGNING_PASSWORD, made with
+#          app/scripts/make-signing-key.sh). GitHub hands that environment's
+#          secrets only to a run of the main branch, and only once a named
+#          person has approved it: both are settings of the environment
+#          (Settings -> Environments -> real-bitcoin), enforced by GitHub, so a
+#          branch with its own copy of this file cannot get round them.
+#
+# The signed APK must carry the certificate whose SHA-256 is committed in
+# app/signing-certificate.sha256, or nothing is published. Without the key,
+# or without that file, the build stops: it never falls back to Expo's public
+# development key, which signed it until 17 November 2026.
 
 name: App (real bitcoin)
 
@@ -16,13 +29,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # to publish the release with the APK
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Belt and braces: the environment's own branch rule is what enforces this.
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -68,38 +85,76 @@ jobs:
           done
           exit 1
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-apk
+          path: app/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: real-bitcoin
+    permissions:
+      contents: write   # to publish the release with the APK
+    steps:
+      # Only the one file this job needs from the repository: the certificate
+      # fingerprint. No libraries are installed and no repository code runs.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: app/signing-certificate.sha256
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-apk
+
       - name: Sign it with the app's own key
         env:
           SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
           SIGNING_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
         run: |
+          set -euo pipefail
           if [ -z "$SIGNING_KEY" ] || [ -z "$SIGNING_PASSWORD" ]; then
-            echo "::error::The signing key isn't in this repository's secrets (ANDROID_SIGNING_KEY, ANDROID_SIGNING_PASSWORD). Not publishing an app signed with a public key."
+            echo "::error::The signing key isn't in the real-bitcoin environment's secrets (ANDROID_SIGNING_KEY, ANDROID_SIGNING_PASSWORD). Not publishing an app signed with a public key."
+            exit 1
+          fi
+          expected="$(tr -d ' :\r\n' < app/signing-certificate.sha256 | tr 'A-F' 'a-f')"
+          if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::app/signing-certificate.sha256 doesn't hold the certificate's SHA-256 (64 hex characters). Not publishing."
             exit 1
           fi
           tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           key="$RUNNER_TEMP/crowdlock-release.p12"
-          printf '%s' "$SIGNING_KEY" | base64 -d > "$key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$SIGNING_KEY" | /usr/bin/base64 -d > "$key"
           # apksigner replaces the development signature the build put on it.
           "$tools/apksigner" sign --ks "$key" --ks-type PKCS12 --ks-pass env:SIGNING_PASSWORD \
-            --ks-key-alias crowdlock --out crowdlock-mainnet.apk \
-            app/android/app/build/outputs/apk/release/app-release.apk
+            --ks-key-alias crowdlock --out crowdlock-mainnet.apk app-release.apk
           rm -f "$key"
           "$tools/apksigner" verify --verbose --print-certs crowdlock-mainnet.apk | tee signed.txt
           grep -q "Number of signers: 1" signed.txt
-          grep -q "certificate DN: .*CN=Crowdlock" signed.txt
-          ! grep -q "Android Debug" signed.txt
           grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" signed.txt
-          fingerprint="$(grep -m1 'certificate SHA-256 digest' signed.txt | awk '{print $NF}')"
+          if grep -q "Android Debug" signed.txt; then echo "::error::Signed with a debug key. Not publishing."; exit 1; fi
+          fingerprint="$(grep -m1 'certificate SHA-256 digest' signed.txt | awk '{print $NF}' | tr 'A-F' 'a-f')"
+          if [ "$fingerprint" != "$expected" ]; then
+            echo "::error::Signed with certificate $fingerprint, but app/signing-certificate.sha256 says $expected. Not publishing."
+            exit 1
+          fi
           echo "FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
           echo "Signed. Certificate SHA-256: $fingerprint"
 
       - name: Publish it as the app-mainnet release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release delete app-mainnet --yes --cleanup-tag || true
           gh release create app-mainnet crowdlock-mainnet.apk \
+            --target "$GITHUB_SHA" \
             --title "Crowdlock app — REAL BITCOIN build" \
-            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Signed with the app's own key, certificate SHA-256 ${FINGERPRINT}. Install on Android by opening this file on the phone." \
+            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Signed with the app's own key, certificate SHA-256 ${FINGERPRINT} — the same as app/signing-certificate.sha256 in the repository. Check it before installing. Install on Android by opening this file on the phone." \
             --prerelease

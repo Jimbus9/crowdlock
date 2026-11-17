@@ -536,7 +536,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   const pHash = C.proposalHash(proposal);
   const verifyArgs = (record, utxoValue) => ({
     record, utxoValue, network: net.network,
-    proposal: { hash: pHash, destination, opensAt: proposal.opens },
+    proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy },
     destinationStamps: STAMPS, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE },
   });
 
@@ -545,7 +545,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   const fan = accountFromWords(fanWords, net);
   await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 500_000n, feeRate: 2 })).hex);
   await rpc("generatetoaddress", [1, miner.address]);
-  const FT = (await chain.medianTime()) + 30 * 86400;
+  const FT = (await chain.medianTime()) + 60 * 86400; // outlasts the proposal's settling (40 days)
   const fanLock = lockFor({ account: fan, cosignerPubkey: coKey5, locktime: FT });
   const fl = await buildLock({ account: fan, chain, lock: fanLock, feeRate: 2 });
   await chain.broadcast(fl.hex);
@@ -574,7 +574,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   check("…the money is still in the lock", (await lockState({ chain, lock: fanLock, medianTime: await chain.medianTime() })).confirmed === BigInt(coin.value));
 
   // Tampering is caught by the checker.
-  const vWrong = C.verifyCommitment({ ...verifyArgs(part.record, coin.value), proposal: { hash: pHash, destination: fan.address, opensAt: proposal.opens } });
+  const vWrong = C.verifyCommitment({ ...verifyArgs(part.record, coin.value), proposal: { hash: pHash, destination: fan.address, opensAt: proposal.opens, settlesBy: proposal.settlesBy } });
   check("A commitment checked against another destination is refused", !vWrong.valid, vWrong.reason);
 
   // Settlement: the co-signer completes it, long before the lock's date.
@@ -645,7 +645,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   const cl = { name: "Test", network: "regtest", cosigner_keys: [coKey5], destination_wait_days: 7, max_commitment_fee: 0.01,
     attestor_keys: [attestor.publicKey], attestor_threshold: 1, declaration: { sha256: INSTANCE } };
   const destFile = { attestors: [attestor.address], threshold: 1, entries: [entry] };
-  const appProposal = { hash: pHash, destination, opens: proposal.opens };
+  const appProposal = { hash: pHash, destination, opens: proposal.opens, settles_by: proposal.settlesBy };
   await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 300_000n, feeRate: 2 })).hex);
   await rpc("generatetoaddress", [1, miner.address]);
   const FT2 = (await chain.medianTime()) + 30 * 86400;
@@ -698,7 +698,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   for (const [name, rec] of Object.entries(variants)) {
     const app = await checkCommitment({ record: rec, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
     const refv = C.verifyCommitment({ record: rec, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
-      proposal: { hash: pHash, destination, opensAt: proposal.opens }, destinationStamps: STAMPS, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE } });
+      proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE } });
     if (app.valid !== refv.valid || (!app.valid && app.reason !== refv.reason)) { agreeAll = false; disagree.push(`${name}: app "${app.reason}" vs ref "${refv.reason}"`); }
   }
   check("The app's commitment checker gives the reference checker's verdict and reason, good and tampered", agreeAll, disagree.join(" | "));
@@ -711,7 +711,7 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     const relabelled = { ...good, proposal: other };
     const app = await checkCommitment({ record: relabelled, crowdlock: cl, proposal: { ...appProposal, hash: other }, destinations: destFile, chain, network: net });
     const refv = C.verifyCommitment({ record: relabelled, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
-      proposal: { hash: other, destination, opensAt: proposal.opens }, destinationStamps: STAMPS, destinationEntries: [entry] });
+      proposal: { hash: other, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry] });
     check("A commitment relabelled for another proposal paying the same address is refused, by the app and the reference alike",
       !app.valid && !refv.valid && app.reason === refv.reason && /does not name this proposal inside it/.test(app.reason), `${app.reason} | ${refv.reason}`);
     // A list that names its own attestors: only the Crowdlock's file counts.
@@ -729,6 +729,29 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     check("A destination with a date typed into the file and no stamp is refused", !unstamped.valid && /no stamp on the chain/.test(unstamped.reason), unstamped.reason);
     const tooSoon = await checkCommitment({ record: good, crowdlock: { ...cl, destination_wait_days: 9 }, proposal: appProposal, destinations: destFile, chain, network: net });
     check("A proposal opening before the stamp is old enough is refused", !tooSoon.valid && /days old at the proposal's opening, needs 9/.test(tooSoon.reason), tooSoon.reason);
+
+    // What the second review found (17 November 2026).
+    // A coin that hasn't confirmed: the sender can replace it, so it counts toward nothing.
+    await chain.broadcast((await buildSend({ account: miner, chain, to: lock2.address, amount: 5_000_000n, feeRate: 2 })).hex);
+    const pending = (await chain.utxos(lock2.address)).find((c) => !c.confirmed);
+    const onPending = (await buildCommitment({ account: fan, chain, lock: lock2, coin: pending, proposalHash: pHash, destination, amount: "all", feeRate: 2 })).record;
+    const vPending = await checkCommitment({ record: onPending, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    check("A commitment spending a coin that hasn't confirmed is refused, not counted", !vPending.valid && /hasn't confirmed/.test(vPending.reason), vPending.reason);
+    await refuses("…and the co-signer's words won't complete it", () => completeCommitmentWith({ words: coWords5, record: onPending, chain }), "hasn't confirmed");
+    await rpc("generatetoaddress", [1, miner.address]);
+    // A lock that opens before the proposal finishes settling: its owner could take it home first.
+    await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 300_000n, feeRate: 2 })).hex);
+    await rpc("generatetoaddress", [1, miner.address]);
+    const shortLock = lockFor({ account: fan, cosignerPubkey: coKey5, locktime: Math.floor(Date.parse(proposal.settlesBy) / 1000) - 86400 });
+    await chain.broadcast((await buildLock({ account: fan, chain, lock: shortLock, feeRate: 2 })).hex);
+    await rpc("generatetoaddress", [1, miner.address]);
+    const [sc] = (await chain.utxos(shortLock.address)).filter((c) => c.confirmed);
+    const onShort = (await buildCommitment({ account: fan, chain, lock: shortLock, coin: sc, proposalHash: pHash, destination, amount: "all", feeRate: 2 })).record;
+    const vShort = await checkCommitment({ record: onShort, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    const rShort = C.verifyCommitment({ record: onShort, utxoValue: sc.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
+      proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry] });
+    check("A commitment from a lock that opens before settling ends is refused, by the app and the reference alike",
+      !vShort.valid && !rShort.valid && /opens before the proposal's settling ends/.test(vShort.reason) && vShort.reason === rShort.reason, vShort.reason);
   }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");
@@ -743,6 +766,10 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     check("A commitment's fee is at least the rate asked for, measured on the finished payment", rate >= 2 && rate < 2.1, `${paidFee} sats for ${done.virtualSize()} vbytes, asked 2 sat/vB`);
   }
   await chain.broadcast(finished);
+  {
+    const { commitmentPaid } = await import("../src/wallet/core.mjs");
+    check("A completed payment the network has but no block yet is not shown as paid", (await commitmentPaid({ record: good, chain })) === 0);
+  }
   await rpc("generatetoaddress", [1, miner.address]);
   const paid3 = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
   check("The co-signer's words complete it in the app, and the network accepts it", paid3 === 450_000n, `${paid3} sats to the destination in all`);

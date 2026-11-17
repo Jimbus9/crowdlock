@@ -541,7 +541,9 @@ export async function buildLock({ account, chain, lock, feeRate, amount = "all" 
  * @param {{ chain: any, lock: any, medianTime: number, quick?: boolean, finished?: Map<string, string> | null }} args
  */
 export async function lockState({ chain, lock, medianTime, quick = false, finished = null }) {
-  const over = lock.locktime <= medianTime;
+  // Past, not equal: the network takes the owner's spend only once its clock
+  // is beyond the date (takeHome asks the same).
+  const over = lock.locktime < medianTime;
   const noted = over ? finished?.get(lock.address) : undefined;
   // Already known to be finished, and known how (or this screen doesn't care how).
   if (noted && (noted !== "unasked" || quick)) return { state: noted === "empty" ? "empty" : "withdrawn", confirmed: 0n, arriving: 0n };
@@ -851,6 +853,13 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   } catch (e) { return fail(`lock fields are not a valid lock: ${e.message}`); }
   if (derived !== L.address) return fail("lock address does not re-derive from the stated keys and locktime");
   if (!isCosignerOf(crowdlock, L.cosigner_pubkey)) return fail(`the lock's co-signer is not ${crowdlock.name}'s — this commitment belongs to a different Crowdlock, or to none`);
+  // The lock must still be shut when the proposal's settling ends, or its
+  // owner could take the money home first (method/lock/commitment.mjs).
+  if (L.locktime >= 500000000) {
+    const settles = Date.parse(proposal.settles_by ?? proposal.settlesBy ?? "");
+    if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
+    if (!(L.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");
+  }
 
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch (e) { return fail(`transaction will not parse: ${e.message}`); }
@@ -919,6 +928,9 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
     if (BigInt(tx.outs[1].value) < dustFor(tx.outs[1].script)) return fail(`returns ${Number(tx.outs[1].value)} sats to the lock, too little for the network to pass on`);
   }
   if (!coin) return fail("the coin has already been spent, so this commitment is void");
+  // A coin that hasn't confirmed can be replaced by its sender and vanish, so
+  // it counts toward nothing (17 November 2026: one counted, and could be co-signed).
+  if (!coin.confirmed) return fail("the coin it spends hasn't confirmed yet, so it counts toward nothing");
   const fee = coin.value - tx.outs.reduce((n, o) => n + Number(o.value), 0);
   if (fee < 0) return fail("outputs exceed the input");
   if (fee > committedSats * crowdlock.max_commitment_fee) {
@@ -953,14 +965,15 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
 
 /**
  * Has this commitment been paid? A completed commitment has the same txid as
- * the commitment itself (the txid leaves out the signatures), so if the chain
- * knows that txid, the co-signer completed it and it was sent. Returns the
- * sats it paid the destination, or 0.
+ * the commitment itself (the txid leaves out the signatures), so if that txid
+ * is in a block, the co-signer completed it and it was sent. Returns the sats
+ * it paid the destination, or 0. One the network has seen but no block holds
+ * yet is not paid: until 17 November 2026 it was shown as paid at once.
  */
 export async function commitmentPaid({ record, chain }) {
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch { return 0; }
-  try { await chain.txHex(tx.getId()); } catch { return 0; }
+  try { if (!(await chain.tx(tx.getId()))?.status?.confirmed) return 0; } catch { return 0; }
   return Number(tx.outs[0].value);
 }
 
@@ -984,6 +997,7 @@ export async function completeCommitmentWith({ words, record, chain }) {
   const txid = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
   const coin = (await chain.utxos(L.address)).find((u) => u.txid === txid && u.vout === tx.ins[0].index);
   if (!coin) throw new Error("the coin has already been spent, so this commitment is void");
+  if (!coin.confirmed) throw new Error("the coin this commitment spends hasn't confirmed yet — refusing");
   const sighash = tx.hashForWitnessV0(0, script, BigInt(coin.value), Transaction.SIGHASH_ALL);
   const sig = bscript.signature.encode(node.sign(sighash), Transaction.SIGHASH_ALL);
   const w = tx.ins[0].witness;

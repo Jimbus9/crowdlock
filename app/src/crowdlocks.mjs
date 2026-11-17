@@ -20,7 +20,7 @@
 // A file published anywhere else has its paths read relative to its own folder.
 
 import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, currentVersion, signedVersions, hasSigned } from "../../method/js/crowdlock.mjs";
-import { proposalVersion } from "../../method/js/proposals.mjs";
+import { proposalVersion, stampsFor, destinationHash } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
 import { earlyReleases, readHistory } from "../../method/js/release.mjs";
@@ -333,6 +333,11 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
   const seen = new Set();
   const releases = [];
   let unreadable = 0;
+  // A payment counts as a purchase only to a destination stamped on the
+  // chain, so the stamps are read once for the whole page.
+  const entries = destinations?.entries ?? [];
+  let stamps = {};
+  try { stamps = await stampsFor(entries, [...new Set(entries.filter((e) => e.op === "add").map((e) => e.address))], (id) => chain.tx(id)); } catch {}
   for (const lock of register.locks ?? []) {
     const address = String(lock.address).toLowerCase();
     if (seen.has(address)) continue;
@@ -355,7 +360,7 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
         if (!h.complete) unreadable++;
         else if (closed) closedRecords.set(key, txs);
       }
-      for (const r of earlyReleases(lock, txs, { destinations: destinations ?? null, crowdlock, register }, now)) {
+      for (const r of earlyReleases(lock, txs, { destinations: destinations ?? null, crowdlock, register, stamps, hrp: lockHrp(crowdlock) }, now)) {
         releases.push({ address: lock.address, member: lock.member ?? null, ...r });
       }
     } catch { unreadable++; }
@@ -390,12 +395,67 @@ export function shortBtc(sats) {
   return `${v / 100000000n}${frac ? "." + frac : ""} BTC`;
 }
 
-/** This member's locks on the register, as the app's lock terms. */
-export function locksOnRegister(register, memberAddress) {
+/**
+ * This member's locks on the register, as the app's lock terms. Only records
+ * that really are a lock of this Crowdlock whose owner key is this member's
+ * own: the address is rebuilt from the terms, and the owner is worked out
+ * from the key, never read from the record's `member` label. Until
+ * 17 November 2026 the label was believed, so a register could show any
+ * funded address as a member's lock, or a member's real lock with another
+ * date, which then could not be taken home from the app.
+ */
+export function locksOnRegister(register, memberAddress, crowdlock) {
   const a = String(memberAddress).toLowerCase();
   return (register.locks ?? [])
-    .filter((l) => String(l.member).toLowerCase() === a)
-    .map((l) => ({ address: l.address, locktime: l.locktime, cosignerPubkey: l.cosigner_pubkey }));
+    .filter((l) => { const g = lockIsGenuine(l, { crowdlock, register, hrp: lockHrp(crowdlock) }); return g.ok && g.owner === a; })
+    .map((l) => ({ address: String(l.address).toLowerCase(), locktime: l.locktime, cosignerPubkey: l.cosigner_pubkey }));
+}
+
+// ---------------------------------------------------------------------------
+// A Crowdlock's destination rules, as this phone last saw them
+//
+// Who attests a destination, how many must, how long one waits, and the
+// destinations list itself are all whatever the Crowdlock's repository says
+// today. Whoever can write to it could name an attestor of their own, set the
+// wait to none, or cut a revocation off the end of the list. So the phone
+// keeps what it saw, says when any of it changes, and pauses committing and
+// co-signing until the person has looked (second review, 17 November 2026).
+// ---------------------------------------------------------------------------
+
+/** What this phone remembers of a loaded Crowdlock's destination rules. */
+export function rulesOf(loaded) {
+  const c = loaded?.crowdlock ?? {};
+  const entries = Array.isArray(loaded?.destinations?.entries) ? loaded.destinations.entries : [];
+  let head = null;
+  try { head = entries.length ? destinationHash(entries[entries.length - 1]) : null; } catch { head = "unreadable"; }
+  return {
+    attestors: [...(c.attestor_keys ?? [])].map((k) => String(k).toLowerCase()).sort(),
+    threshold: c.attestor_threshold ?? null,
+    wait: c.destination_wait_days ?? null,
+    entries: entries.length,
+    head,
+    hashes: entries.map((e) => { try { return destinationHash(e); } catch { return "unreadable"; } }),
+  };
+}
+
+/**
+ * What changed since `seen` (null the first time: nothing to compare).
+ * Returns { changed, notes }: one plain sentence per change. Adding entries
+ * to the end of the list is how it grows and is not a change.
+ */
+export function rulesChanges(seen, now) {
+  if (!seen || typeof seen !== "object") return { changed: false, notes: [] };
+  const notes = [];
+  const added = now.attestors.filter((k) => !(seen.attestors ?? []).includes(k));
+  const removed = (seen.attestors ?? []).filter((k) => !now.attestors.includes(k));
+  for (const k of added) notes.push(`An attestor was added: ${k.slice(0, 10)}…${k.slice(-8)}. An attestor approves where committed money may be paid.`);
+  for (const k of removed) notes.push(`An attestor was removed: ${k.slice(0, 10)}…${k.slice(-8)}.`);
+  if (seen.threshold !== now.threshold) notes.push(`The number of attestors a destination needs went from ${seen.threshold} to ${now.threshold}.`);
+  if (seen.wait !== now.wait) notes.push(`The waiting period before a new destination can be paid went from ${seen.wait} to ${now.wait} days.`);
+  const kept = (seen.hashes ?? []).every((h, i) => now.hashes[i] === h);
+  if (now.entries < (seen.entries ?? 0)) notes.push(`The destinations list is shorter than when you last looked (${now.entries} entries, was ${seen.entries}). Nothing is ever meant to be taken off it: a revocation may have been removed.`);
+  else if (!kept) notes.push("An earlier entry in the destinations list has been rewritten. Nothing on it is ever meant to change.");
+  return { changed: notes.length > 0, notes };
 }
 
 /**

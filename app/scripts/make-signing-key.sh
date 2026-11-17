@@ -60,4 +60,9 @@ echo
 echo "Its fingerprint (anyone can check an app against this; it is not secret):"
 echo "  $fingerprint"
 echo
-echo "Next: paste key-for-github.txt and password.txt into GitHub, as the instructions say."
+echo "Next:"
+echo "  1. In GitHub: Settings -> Environments -> New environment, named real-bitcoin."
+echo "     Under it: tick 'Required reviewers' and add yourself; set 'Deployment branches' to main only;"
+echo "     add the secrets ANDROID_SIGNING_KEY (key-for-github.txt) and ANDROID_SIGNING_PASSWORD (password.txt)."
+echo "  2. Put the fingerprint above in app/signing-certificate.sha256 and commit it."
+echo "  3. Delete key-for-github.txt."

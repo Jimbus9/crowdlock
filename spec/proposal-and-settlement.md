@@ -227,7 +227,7 @@ can be bound to a specific purchase for years is wrong.
 ## A commitment
 
 A commitment is **one transaction, spending one lock, signed by its owner only**.
-Its record, its eight verification steps and how a pile is counted are in the
+Its record, its nine verification steps and how a pile is counted are in the
 **commitment format**; what follows is what it means.
 
 It is not a payment. It is the owner's half of a transaction nobody has
@@ -400,12 +400,17 @@ Each `record` is a commitment in the commitment format. `submitted` is when the
 repository first received it, which is the order oversubscription settles in.
 
 The repository's relay inbox keeps this file. It records what arrived and when;
-it refuses a commitment whose lock is not on the register, one posted outside
-the gathering window, a malformed one, a copy, more than five per lock, and one
-the lock's owner has not signed. It records a completed payment only if the
-owner and the co-signer have both signed it. (Anybody can post to the relays:
-without those two checks a stranger could use up a member's five places with
-junk, or post a fake completion ahead of the real one.) It judges nothing else
+it refuses a commitment whose lock is not on the register, one whose lock
+opens before the proposal's settling ends, one posted outside the gathering
+window, a malformed one, a copy, a second for the same coin, more than five per
+lock, one whose co-signer's place is not empty, one spending a coin that has
+not confirmed, and one the lock's owner has not signed. A copy is the same
+payment, however it is written: the same transaction id. It records a
+completed payment only if the owner and the co-signer have both signed it, and
+keeps and sends it in its standard encoding. (Anybody can post to the relays:
+without those checks a stranger could use up a member's five places with
+copies of their own commitment, or post a copy of a completion, written so the
+network will not take it, ahead of the real one.) It judges nothing else
 about a commitment: **every reader checks every commitment in full** before
 counting or completing it (`method/js/proposals.mjs`).
 
@@ -432,7 +437,8 @@ Anyone, with no permission and no account:
 1. Check the signature is valid for the lock it spends.
 2. Check the lock address re-derives from the owner key, co-signer key and
    locktime, exactly as the lock format specifies.
-3. Check the coin is **still unspent**. A supporter whose lock has lapsed may have
+3. Check the coin is **still unspent, and has confirmed**, and that the lock
+   stays shut until the proposal's settling ends. A supporter whose lock has lapsed may have
    taken it home, which voids their commitment.
 4. Check the destination matches the proposal, and that the proposal's destination
    is on the published list.

@@ -13,6 +13,8 @@
 
 No real commitment had been made under version 1. A version-1 commitment does not verify under version 2.
 
+**17 November 2026, later.** A second review found that a pile counted money that was not committed. Two checks are added, in every checker: **the coin must have confirmed**, and **the lock must stay shut until the proposal's settling ends** (`settles_by`). An unconfirmed coin can be replaced by its sender and vanish; a lock that opens sooner can be taken home by its owner alone, even after the co-signer has completed the commitment. The format itself is unchanged.
+
 A commitment is how a supporter backs one specific purchase with their own
 locked money. What a proposal is and how it settles is in the **proposal and
 settlement format**; this document is the record itself.
@@ -112,7 +114,7 @@ overstate every proposal by the total of its fees.
 
 Anybody, with no permission and no account. The owner's signature covers the
 amount of the coin it spends, so checking it (step 4), the fee, and whether the
-coin is still there (step 8) need that coin from any public block explorer. The
+coin is still there and confirmed (step 8) need that coin from any public block explorer. The
 rest needs no network.
 
 1. **Re-derive the lock address** from `owner_pubkey`, `cosigner_pubkey` and
@@ -136,8 +138,15 @@ rest needs no network.
 7. **If there are three outputs**, output 1 pays a lock re-derived from the same
    `owner_pubkey` with a locktime no earlier than `lock.locktime`, co-signed by
    this Crowdlock, and holds at least 330 sats.
-8. **The coin is still unspent.** A supporter whose lock has lapsed may have
-   taken it home, which voids their commitment permanently.
+8. **The coin is still unspent, and has confirmed.** A supporter whose lock has
+   lapsed may have taken it home, which voids their commitment permanently. A
+   coin that has not confirmed can be replaced by whoever sent it, so it counts
+   toward nothing until it has.
+9. **The lock stays shut until the proposal's settling ends**: its locktime is
+   after the proposal's `settles_by`. A lock that opens sooner can be taken
+   home by its owner alone at any time from then on, so its money is not
+   committed. (Locks dated by block height exist only on private test chains
+   and are not compared.)
 
 One more check needs the register rather than the transaction: **the lock's
 owner has signed the version of the declaration the proposal was published
@@ -166,7 +175,7 @@ pass a payment on, so the commitment could not be settled.
 
 ```
 committed = Σ (output 0 value of every commitment that passes verification
-               and whose coin is still unspent)
+               and whose coin is confirmed and still unspent)
 ```
 
 - **One coin, one commitment, per proposal.** A second commitment for the same

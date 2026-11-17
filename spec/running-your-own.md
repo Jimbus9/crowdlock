@@ -198,13 +198,15 @@ owner and the co-signer together at any time. The second is meant only for a
 purchase, but Bitcoin cannot enforce that. A co-signer willing to sign anything
 could let members take counted money back early.
 
-What Bitcoin does record is which way each lock was opened: a co-signed spend
-carries the co-signer's signature in its witness, and nothing can disguise it.
-So the register page and the app list every lock opened before its date with
-the co-signer's signature that sent any of its money somewhere other than a
-listed destination or back into a lock of the same owner, read straight from
-the chain, the whole of each lock's history (`method/js/release.mjs`). A
-co-signer cannot keep one off it.
+What Bitcoin does record is when each lock was opened. Before its date the
+owner alone cannot open it, so every spend before the date had the co-signer's
+signature, whatever its witness looks like. So the register page and the app
+list every lock opened before its date that sent any of its money somewhere
+other than a destination the co-signer could pay at that moment (attested,
+stamped and past its waiting period), back into the same lock or a lock of the
+same owner on the register, or out as more fee than a commitment may leave.
+It is read straight from the chain, the whole of each lock's history
+(`method/js/release.mjs`). A co-signer cannot keep one off it.
 Choose co-signers who would rather refuse than appear there.
 
 ## Putting the key in, and changing it later

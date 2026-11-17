@@ -8,9 +8,9 @@ import { waitingBalance, lockState, xpubForKey } from "../wallet/core.mjs";
 import { phaseOf } from "../../../method/js/proposals.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  loadCrowdlock, membershipOf, locksOnRegister, newestCosigner, keyChanges, newVersionToSign,
+  loadCrowdlock, membershipOf, locksOnRegister, newestCosigner, keyChanges, newVersionToSign, rulesOf, rulesChanges,
 } from "../crowdlocks.mjs";
-import { loadSavedLocks, rememberLocks, loadSeenKeys, loadExpectedKeys, saveLook } from "../storage";
+import { loadSavedLocks, rememberLocks, loadSeenKeys, loadExpectedKeys, loadSeenRules, saveLook } from "../storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB, EXPLORER_BACKUP_WEB, CONNECTION_TARGETS } from "../config";
 import { checkConnection, describeResult, sumUp } from "../connection.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
@@ -69,10 +69,11 @@ function useOverview(account: any): Overview {
       const cosigner: string | undefined = newestCosigner(c.crowdlock);
       const changed = keyChanges(await loadSeenKeys(c.url), c.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(c.url)).changed;
       if (member && changed) notes.push({ url: c.url, name: c.crowdlock.name, kind: "keys" });
+      if (member && rulesChanges(await loadSeenRules(c.url), rulesOf(c)).changed) notes.push({ url: c.url, name: c.crowdlock.name, kind: "rules" });
       if (!signedJustNow(c, account.address) && newVersionToSign(c, account.address)) notes.push({ url: c.url, name: c.crowdlock.name, kind: "version" });
       const mine: MyLock[] = [];
       if (member) {
-        const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address)];
+        const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address, c.crowdlock)];
         for (const l of saved.filter((x) => x.crowdlock === c.url)) if (!terms.some((x) => x.address === l.address)) terms.push(l);
         // Keep every one of them on this phone, with what a Ledger needs, so
         // that taking a lock home never depends on this Crowdlock's site.
@@ -192,6 +193,10 @@ function HomeTab({ o, words, go, setTab }: { o: Overview; words: string; go: Go;
       {o.alerts.map((a) => a.kind === "version" ? (
         <Warning key={a.url + a.kind} level="know" title={`${a.name}: its declaration has a new version`}>
           <Btn kind="link" label="Read what changed" onPress={() => go({ name: "sign", words, url: a.url })} />
+        </Warning>
+      ) : a.kind === "rules" ? (
+        <Warning key={a.url + a.kind} level="know" title={`${a.name}: who approves where its money may go has changed`}>
+          <Btn kind="link" label={`Look at ${a.name}`} onPress={() => go({ name: "crowdlock", words, url: a.url })} />
         </Warning>
       ) : (
         <Warning key={a.url + a.kind} level="know" title={`${a.name}: its co-signer keys have changed`}>

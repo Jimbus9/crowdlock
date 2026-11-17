@@ -206,6 +206,23 @@ export async function saveSeenKeys(url: string, keys: string[]): Promise<void> {
   await SecureStore.setItemAsync(SEEN_KEYS, JSON.stringify(all));
 }
 
+// A Crowdlock's destination rules as this phone last saw them: its attestors,
+// how many must attest, its waiting period, and its destinations list (see
+// rulesOf in src/crowdlocks.mjs). Not secret. A change is what makes somebody
+// look before committing or co-signing.
+const SEEN_RULES = "crowdlock.seenrules.v1";
+
+export async function loadSeenRules(url: string): Promise<any | null> {
+  try { return JSON.parse((await SecureStore.getItemAsync(SEEN_RULES)) ?? "{}")[url] ?? null; } catch { return null; }
+}
+
+export async function saveSeenRules(url: string, rules: any): Promise<void> {
+  let all: Record<string, any> = {};
+  try { all = JSON.parse((await SecureStore.getItemAsync(SEEN_RULES)) ?? "{}"); } catch {}
+  all[url] = rules;
+  await SecureStore.setItemAsync(SEEN_RULES, JSON.stringify(all));
+}
+
 // Keys this phone added itself, waiting for the website to show them. Kept
 // apart from what it has seen, because the website lags a minute or more
 // behind GitHub: treating an added key as already seen made the stale page

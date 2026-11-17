@@ -4,3 +4,4 @@ method/cosigner/cosigner-pubkey.txt
 method/cosigner/cosigner-xpub.txt
 method/relay/.message
 method/relay/.broken
+method/relay/cursors.json

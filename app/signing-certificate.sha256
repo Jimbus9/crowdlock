@@ -1,0 +1,1 @@
+Replace this line with the SHA-256 from fingerprint.txt in your crowdlock-signing-key folder (made by app/scripts/make-signing-key.sh). Until then the real-bitcoin app is not published.

@@ -103,6 +103,18 @@ Every one of these was reproduced before it was fixed, and each fix has a test t
 - **An early release could be hidden from the co-signer's record.** The record looked only at a spend's first output, so 330 sats to a listed destination and the rest to the member's own wallet read as a purchase; and it read only the newest page of a lock's history, so 25 small payments to the lock's address pushed an older release out of sight. Now every output must be a listed destination, money staying in a lock of the same owner, or an `OP_RETURN` holding nothing, and the whole history is read (or the record says it couldn't be).
 - **A destination's waiting period counted from a date written in the file** (`firstSeen`), which whoever could write the file could backdate. It now counts from the block of a stamp payment carrying the entry and its attestations (`spec/destinations-format.md`, "The waiting period").
 
+## What the second review found, and what changed (17 November 2026, later)
+
+Each was reproduced first, and each fix has a test that fails on the old code.
+
+- **The early-release record could still be dodged four ways.** A spend whose branch selector was the byte `00` (valid in a block, though not relayed) was not read as co-signed; a spend paying everything as fee had nothing to flag; any `add` line in `destinations.json`, attested or not, made a payment read as a purchase; and money could hop to the same owner's lock under a second co-signer key, which nobody watched. Now every spend before a lock's date counts as co-signed whatever its witness, the fee may be no more than a commitment's, a destination counts only if attested, stamped and past its wait at the time of the payment, and money "stays locked" only in the same lock or a lock on the register.
+- **A proposal's total counted money that wasn't committed:** coins that hadn't confirmed, and locks that open before the proposal finishes settling. Both are refused by every checker, the inbox and the spec now, and the co-signer's screen adds the total up again before completing anything.
+- **A stranger could still use up a member's five places,** with copies of the member's own commitment carrying junk in the co-signer's place, and **could block a completion** with a copy written so the network won't take it. Commitments must leave the co-signer's place empty; copies are told apart by transaction id; payments are kept and sent in their standard encoding.
+- **The app believed the register about which locks are yours.** A record labelled with your address showed as your money, and your own lock with another date couldn't be taken home. Only a genuine lock of your own key counts now, in the app and on the website.
+- **The phone didn't notice the destination rules changing.** It now remembers the attestors, their number, the waiting period and the destinations list, and pauses committing and co-signing when any of them changes, or the list gets shorter or is rewritten.
+- **The real-bitcoin build could be signed from any branch,** in the same job as every npm and Gradle library. Signing is now a separate job running only Android's own tools, in a protected environment, and the certificate must match the one committed in `app/signing-certificate.sha256`.
+- **A large enough flood on the relays hid older records for good.** Each pass now carries on from where the last stopped.
+
 ## Limits we already know about
 
 - **One block explorer is believed at a time.** The register adds a lock when the explorer its Crowdlock's file names (`chain_api`) reports confirmed coins at the lock's address, so a lying explorer could make a lock count without the money being there. The app is in a better place than it was: it reads the chain for every Crowdlock from its own explorer for the network, never the one the Crowdlock names, and before signing anything it checks each coin's amount against the transaction the coin came from. Its backup explorer is only asked when the first is silent or broken. Nothing anywhere compares two explorers, or asks a node.
@@ -113,6 +125,11 @@ Every one of these was reproduced before it was fixed, and each fix has a test t
 - **A destination's stamp proves it existed, not that anyone saw it.** The waiting period counts from the block of the destination's stamp, which nobody can backdate. But someone holding a stolen attestor key and write access to the repository could stamp an entry without publishing it, wait out the period, then publish the entry and a proposal together. They can no longer do it in an afternoon; they must hold the stolen keys unnoticed for the whole period. Two or more attestors would raise the bar further.
 - **A lock's date is worked out from the clock of the phone or computer that makes it.**
 - **No test checks a specification against the code it describes.**
+- **The real-bitcoin app is built from whatever the libraries produce.** Signing is kept apart from them, but a compromised npm or Gradle library could still change the app before it is signed.
+- **The relay inbox remembers how far back it has read only for one run** (about 48 minutes, 24 passes). A flood larger than one run can read still delays records until it ends.
+- **A payment the inbox sent is not checked again.** One dropped from the network's waiting list is not sent a second time.
+- **A commitment is judged by the time its poster wrote on it,** not when it arrived, so one posted while a proposal settles can be dated into its gathering window.
+- **A destination's age can be up to about an hour short,** because a block's time can be set behind the real time.
 
 ## Things we would most like checked
 

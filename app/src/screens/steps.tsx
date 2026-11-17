@@ -403,7 +403,7 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
       try {
         setWaiting(await waitingBalance(chain, account.address));
         const medianTime = await chain.medianTime();
-        const onReg = (loaded.ok ? locksOnRegister(loaded.register, account.address) : []) as LockTerms[];
+        const onReg = (loaded.ok ? locksOnRegister(loaded.register, account.address, loaded.crowdlock) : []) as LockTerms[];
         const saved = (await loadSavedLocks()).filter((l) => l.crowdlock === loaded.url || l.crowdlock === url);
         const all: LockTerms[] = [...onReg];
         for (const l of saved) if (!all.some((x) => x.address === l.address)) all.push(l);

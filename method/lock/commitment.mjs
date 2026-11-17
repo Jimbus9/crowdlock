@@ -450,12 +450,12 @@ export const MIN_FEE_RATE = 1;
  */
 export function verifyCommitment({
   record,                 // { proposal, lock, tx }
-  proposal,               // { hash, destination, opensAt }
+  proposal,               // { hash, destination, opensAt, settlesBy }
   destinationEntries = [],
   destinationRules = null, // { attestors, threshold, instance } — used only when no Crowdlock is given
   destinationStamps = {},  // { txid: tx } — the stamp payments, as an explorer describes them
   utxoValue,              // the lock's value, needed to check the signature and the fee
-  coinIsUnspent = null,
+  coinIsUnspent = null,   // true only for a coin that is confirmed and unspent
   network,
   crowdlock = null,
 }) {
@@ -488,6 +488,17 @@ export function verifyCommitment({
       return fail(`the lock's co-signer is not ${crowdlock.name}'s — this commitment belongs to a different Crowdlock, or to none`);
     }
     note("lock belongs to this Crowdlock", true, crowdlock.name);
+  }
+
+  // The lock must still be shut when the proposal's settling ends. A lock that
+  // opens sooner can be taken home by its owner alone, at any moment up to
+  // and after the co-signer completes it, so its money is not committed.
+  // (Block heights are for private test chains only, and are not compared.)
+  if (record.lock.locktime >= 500_000_000) {
+    const settles = Date.parse(proposal.settlesBy ?? "");
+    if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
+    if (!(record.lock.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");
+    note("the lock stays shut until settling ends", true);
   }
 
   // 2. exactly one input
