@@ -409,7 +409,9 @@ anything but the remainder lock its record names (which must be the same
 owner's, co-signed by this Crowdlock, and open no earlier), one posted outside the gathering
 window, one it first sees more than an hour after the proposal closed (whatever
 time the record gives itself, which its poster chooses), a malformed one, a copy, a second for the same coin, more than five per
-lock, one whose co-signer's place is not empty, one spending a coin that has
+lock, one whose co-signer's place is not empty, one whose input carries a script of
+its own (the owner's signature does not cover it, and the network never takes
+such a payment), one spending a coin that has
 not confirmed, and one the lock's owner has not signed. A copy is the same
 payment, however it is written: the same transaction id. It records a
 completed payment only if the owner and the co-signer have both signed it, and

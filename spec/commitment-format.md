@@ -17,6 +17,8 @@ No real commitment had been made under version 1. A version-1 commitment does no
 
 **17 November 2026, security loop.** Three things. **A lock dated by block height is refused** on every network but a private test chain: it used to be left uncompared with the settling date, so a lock dated by a height already passed, which its owner can take home alone, counted as committed money and could be completed. **The record's `remainder` is written down here**; the code always had it. And **only the parts of a record listed here are judged or kept**: anything else a poster adds is dropped.
 
+**17 November 2026, security loop, round 2.** Two more. **The input's own script must be empty** (step 2): the owner's signature does not cover it, so anybody could add one to a member's commitment, and the copy counted and could never be paid. And **a commitment counts as paid only if the coin it spent was the lock's** ("Counting the pile"): a payment's id says nothing about who signed, so an ordinary payment to the seller could be dressed as a paid commitment.
+
 A commitment is how a supporter backs one specific purchase with their own
 locked money. What a proposal is and how it settles is in the **proposal and
 settlement format**; this document is the record itself.
@@ -132,7 +134,11 @@ rest needs no network.
 1. **Re-derive the lock address** from `owner_pubkey`, `cosigner_pubkey` and
    `locktime`, exactly as the lock format specifies. It must equal
    `lock.address`.
-2. **Exactly one input.**
+2. **Exactly one input, and its own script (scriptSig) is empty.** A spend of a
+   lock carries everything in its witness. The owner's signature does not
+   cover the input's script, so one can be added by anybody: the result has
+   another transaction id, still carries the owner's signature, and is never
+   mined.
 3. **The witness is the purchase branch** in the shape above, with the
    co-signer's slot empty and the witness script matching the one just derived.
 4. **The owner's signature verifies** over the transaction's sighash for that
@@ -201,6 +207,18 @@ committed = Σ (output 0 value of every commitment that passes verification
   why. Each proposal's own total is honest; their sum double-counts.
 - A pile total is **not money that has moved**. Until broadcast it is a
   collection of signatures. It must never be presented as settled.
+- **A commitment has been paid** when a transaction with its id is in a
+  block **and the coin that transaction spent was a coin of the commitment's
+  own lock**. Both halves are needed. A transaction's id leaves out its
+  signatures, so it says which coin was spent and where the money went, and
+  nothing about who signed: an ordinary payment from anybody's wallet to the
+  destination, carrying the proposal's marker, has the id of a "commitment"
+  written around it. Only a coin that really sat in the lock can have left it
+  this way, and only with the co-signer's signature, because the payment
+  declares no date and the lock's going-home exit refuses it.
+- **The value a signature is checked against must come from a coin at the
+  lock's address** (or, once spent, from the output that paid that address).
+  A value read from any other coin proves nothing about the lock.
 
 ## Submission
 

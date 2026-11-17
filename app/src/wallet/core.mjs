@@ -33,7 +33,7 @@ import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { BIP32, Output, Psbt, signers, networks, keyExpressionBIP32 } from "@bitcoinerlab/descriptors";
 import * as ecc from "@bitcoinerlab/secp256k1";
 import bs58check from "bs58check";
-import { Transaction, script as bscript, address as baddress } from "bitcoinjs-lib";
+import { Transaction, script as bscript, address as baddress, crypto as bcrypto } from "bitcoinjs-lib";
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
@@ -868,6 +868,9 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch (e) { return fail(`transaction will not parse: ${e.message}`); }
   if (tx.ins.length !== 1) return fail(`${tx.ins.length} inputs, must be exactly 1`);
+  // The input's own script must be empty: the owner's signature does not
+  // cover it, and a lock's spend that has one is never mined (method/lock/commitment.mjs).
+  if (tx.ins[0].script.length !== 0) return fail("its input carries a script, which a spend of a lock never does — the network would not take it");
   const w = tx.ins[0].witness;
   if (w.length !== 4) return fail(`witness has ${w.length} items, the purchase branch has 4`);
   if (w[0].length !== 0) return fail("the co-signer's slot is not empty — this is a completed spend, not a commitment");
@@ -886,7 +889,14 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (value === null) {
     try {
       const src = Transaction.fromHex(String(await chain.txHex(txid)).trim());
-      if (src.getId() === txid && src.outs[tx.ins[0].index]) value = BigInt(src.outs[tx.ins[0].index].value);
+      const spent = src.getId() === txid ? src.outs[tx.ins[0].index] : null;
+      // The coin must have been a coin OF THIS LOCK. Until 17 November 2026
+      // (security loop, round 2) any coin's value was read here, so a
+      // payment from an ordinary wallet, dressed as a spend of a lock, passed
+      // as a commitment whose coin "has already been spent", and was then
+      // counted as paid.
+      if (spent && toHex(spent.script) !== toHex(lockOutputScript(script))) return fail("the coin it spends was never a coin of the lock it names, so this is not a spend of that lock");
+      if (spent) value = BigInt(spent.value);
     } catch { /* below */ }
     if (value === null) return fail("the coin it spends can't be read from the chain just now, so its signature can't be checked");
   }
@@ -979,6 +989,11 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
   return { address, signature: sig };
 }
 
+/** The output script of a lock: segwit v0, the SHA-256 of its witness script. */
+function lockOutputScript(witnessScript) {
+  return Uint8Array.from([0x00, 0x20, ...bcrypto.sha256(Uint8Array.from(witnessScript))]);
+}
+
 /** The id of a commitment's payment, which a completed one shares (the id leaves out the signatures). Null if it won't read. */
 export function commitmentTxid(record) {
   try { return Transaction.fromHex(record.tx).getId(); } catch { return null; }
@@ -990,10 +1005,28 @@ export function commitmentTxid(record) {
  * is in a block, the co-signer completed it and it was sent. Returns the sats
  * it paid the destination, or 0. One the network has seen but no block holds
  * yet is not paid: until 17 November 2026 it was shown as paid at once.
+ *
+ * The id says which coin was spent and where the money went, and nothing
+ * about who signed. So this asks the chain what that coin was: it counts as
+ * paid only if the coin was a coin of the lock the record names. Without
+ * that, an ordinary payment from anybody's wallet to the seller, carrying
+ * the proposal's marker, read as a paid commitment (security loop, round 2).
+ * Such a coin can only have been spent this way with the co-signer's
+ * signature: the payment declares no date, so the lock's going-home exit
+ * refuses it.
  */
 export async function commitmentPaid({ record, chain }) {
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch { return 0; }
+  if (tx.ins.length !== 1) return 0;
+  try {
+    const L = record.lock ?? {};
+    const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
+    const from = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
+    const src = Transaction.fromHex(String(await chain.txHex(from)).trim());
+    const spent = src.getId() === from ? src.outs[tx.ins[0].index] : null;
+    if (!spent || toHex(spent.script) !== toHex(lockOutputScript(script))) return 0;
+  } catch { return 0; }
   try { if (!(await chain.tx(tx.getId()))?.status?.confirmed) return 0; } catch { return 0; }
   return Number(tx.outs[0].value);
 }
@@ -1015,6 +1048,7 @@ export async function completeCommitmentWith({ words, record, chain }) {
   const L = record.lock;
   const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
   const tx = Transaction.fromHex(record.tx);
+  if (tx.ins.length !== 1 || tx.ins[0].script.length !== 0) throw new Error("its input carries a script, which a spend of a lock never does — the network would not take it");
   const txid = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
   const coin = (await chain.utxos(L.address)).find((u) => u.txid === txid && u.vout === tx.ins[0].index);
   if (!coin) throw new Error("the coin has already been spent, so this commitment is void");

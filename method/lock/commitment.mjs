@@ -454,7 +454,7 @@ export function verifyCommitment({
   destinationEntries = [],
   destinationRules = null, // { attestors, threshold, instance } — used only when no Crowdlock is given
   destinationStamps = {},  // { txid: tx } — the stamp payments, as an explorer describes them
-  utxoValue,              // the lock's value, needed to check the signature and the fee
+  utxoValue,              // the value of the coin it spends, which MUST be read from a coin at the lock's own address: the signature is checked against it, and a value taken from any other coin proves nothing about the lock
   coinIsUnspent = null,   // true only for a coin that is confirmed and unspent
   network,
   crowdlock = null,
@@ -512,6 +512,11 @@ export function verifyCommitment({
   catch (e) { return fail(`transaction will not parse: ${e.message}`); }
   if (tx.ins.length !== 1) return fail(`${tx.ins.length} inputs, must be exactly 1`);
   note("exactly one input", true);
+  // The input's own script (scriptSig) must be empty. The owner's signature
+  // does not cover it, so anybody can add one to a commitment; the result has
+  // another id, still carries the owner's signature, and can never be mined
+  // (security loop, 17 November 2026).
+  if (tx.ins[0].script.length !== 0) return fail("its input carries a script, which a spend of a lock never does — the network would not take it");
 
   // 3. the witness is the purchase branch, co-signer's slot empty
   const w = tx.ins[0].witness;
@@ -649,6 +654,7 @@ export function completeCommitment({ record, cosignerKey, utxoValue, network }) 
   });
 
   const tx = Transaction.fromHex(record.tx);
+  if (tx.ins.length !== 1 || tx.ins[0].script.length !== 0) throw new Error("its input carries a script, which a spend of a lock never does — the network would not take it");
   const w = tx.ins[0].witness;
   if (w[0].length !== 0) throw new Error("already completed");
 

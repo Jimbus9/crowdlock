@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-17h";
+export const TEMPLATE_VERSION = "2026-11-17i";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -46,6 +46,7 @@ export const CHANGES = [
   { version: "2026-11-17d", change: "With no waiting period, a destination can be paid as soon as its stamp is in a block, even if that block's clock ran a little fast. No change to how your inbox runs" },
   { version: "2026-11-17e", change: "Fixes from a second review. Your inbox no longer takes a commitment spending a coin that hasn't confirmed, or from a lock that opens before the proposal finishes settling, or with anything in the co-signer's place; copies of a payment written another way no longer take a member's places or block a real completion; and a large flood of junk on the relays can delay a record but no longer hide it for good" },
   { version: "2026-11-17h", change: "Fixes from a security review. A stranger's altered or misdated copy of a member's commitment can no longer keep the member's own out of a proposal; the remainder lock on a commitment of part of a lock is checked; only the parts a commitment has are kept in your repository; a lock dated by block height is refused; nothing posted to the relays can start a line of its own in your inbox's log; and the inbox installs its libraries without running their install scripts" },
+  { version: "2026-11-17i", change: "One more fix from the security review. Your inbox no longer takes a copy of a member's commitment that has a script added to its input: such a copy could never be paid, and posted first it kept the member's own commitment out" },
 ];
 
 const FROM_REPO = [

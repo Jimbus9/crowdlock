@@ -486,6 +486,18 @@ const ev = (id, created_at) => ({ id, created_at });
     check("An exact copy dated outside the window, posted by a stranger, does not hide the member's own post",
       only(p6)?.tx === real.tx, p6.outcome.map((o) => o.reason ?? "added").join("; ").slice(0, 70));
 
+    // A script in the input (security loop, round 2): the owner's signature
+    // does not cover it, the copy has another id, and it can never be paid.
+    const scripted = (hex) => { const t = Transaction.fromHex(hex); t.ins[0].script = Buffer.from("51", "hex"); return t.toHex(); };
+    const withScript = { ...real, tx: scripted(real.tx) };
+    check("A copy with a script added to its input has another id and still carries the owner's signature",
+      readTx(withScript.tx).txid !== readTx(real.tx).txid && /carries a script/.test(ownerSigned(withScript, coins).reason ?? ""), ownerSigned(withScript, coins).reason ?? "TAKEN AS SIGNED");
+    const p7 = await run(emptyPile(PROPOSAL), [ev({ type: "commitment", record: withScript }, t0 + 2), ev({ type: "commitment", record: real }, t0 + 500)]);
+    check("…posted first, it is refused and the member's real commitment gets in",
+      only(p7)?.tx === real.tx && p7.outcome.some((o) => !o.added && /carries a script/.test(o.reason)), p7.outcome.map((o) => o.reason ?? "added").join("; ").slice(0, 80));
+    check("A completion with a script added to its input is not taken as signed by both",
+      completedBy(scripted(done), withScript, VALUE).ok === false, completedBy(scripted(done), withScript, VALUE).reason);
+
     // A completion written another way, posted first, does not take the real one's place.
     const pile = { ...emptyPile(PROPOSAL), commitments: [{ submitted: "2027-01-02T00:00:00Z", record: real }] };
     const items = [{ type: "completed", tx: long(done), at: t0 + 10 }, { type: "completed", tx: done, at: t0 + 20 }];

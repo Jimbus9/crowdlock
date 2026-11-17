@@ -638,6 +638,14 @@ rejects("A list attested by somebody the Crowdlock's file does not name, even wh
   verifyCommitment({ record, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: outsiderList, destinationRules: { attestors: [OUTSIDER], threshold: 1, instance: INSTANCE },
     utxoValue: utxo.value, network: NETWORK, crowdlock: ours }), "not a listed attestor");
 
+// A script in the input (security loop, round 2). The owner's signature does
+// not cover it; a lock's spend that has one is never mined.
+{
+  const tx = bitcoin.Transaction.fromHex(record.tx);
+  tx.ins[0].script = Buffer.from("51", "hex");
+  rejects("A copy with a script added to its input", verifyWith({ ...record, tx: tx.toHex() }), "carries a script");
+}
+
 // A lock that opens before the proposal's settling ends is not committed
 // money: its owner could take it home first (second review, 17 November 2026).
 {
