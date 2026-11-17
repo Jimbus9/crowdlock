@@ -3,9 +3,12 @@
 # -> Run workflow): nothing builds it by itself. It installs beside the test
 # app under its own package name, so the two never share a wallet.
 #
-# The APK is still signed with Expo's standard development key. A real release
-# needs its own signing key (milestone 7). Until then this is for the founder's
-# own phone only.
+# The APK is signed with the app's own key, held by the founder and kept in this
+# repository's Actions secrets ANDROID_SIGNING_KEY (the .p12 file as base64) and
+# ANDROID_SIGNING_PASSWORD, made with app/scripts/make-signing-key.sh. A phone
+# only accepts an update signed with the same key, so nobody else can make an
+# "update" of this app. Without both secrets the build stops: it never falls
+# back to Expo's public development key, which signed it until 17 November 2026.
 
 name: App (real bitcoin)
 
@@ -65,13 +68,37 @@ jobs:
           done
           exit 1
 
+      - name: Sign it with the app's own key
+        env:
+          SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_KEY" ] || [ -z "$SIGNING_PASSWORD" ]; then
+            echo "::error::The signing key isn't in this repository's secrets (ANDROID_SIGNING_KEY, ANDROID_SIGNING_PASSWORD). Not publishing an app signed with a public key."
+            exit 1
+          fi
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          key="$RUNNER_TEMP/crowdlock-release.p12"
+          printf '%s' "$SIGNING_KEY" | base64 -d > "$key"
+          # apksigner replaces the development signature the build put on it.
+          "$tools/apksigner" sign --ks "$key" --ks-type PKCS12 --ks-pass env:SIGNING_PASSWORD \
+            --ks-key-alias crowdlock --out crowdlock-mainnet.apk \
+            app/android/app/build/outputs/apk/release/app-release.apk
+          rm -f "$key"
+          "$tools/apksigner" verify --verbose --print-certs crowdlock-mainnet.apk | tee signed.txt
+          grep -q "Number of signers: 1" signed.txt
+          grep -q "certificate DN: CN=Crowdlock" signed.txt
+          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" signed.txt
+          fingerprint="$(grep -m1 'certificate SHA-256 digest' signed.txt | awk '{print $NF}')"
+          echo "FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
+          echo "Signed. Certificate SHA-256: $fingerprint"
+
       - name: Publish it as the app-mainnet release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/android/app/build/outputs/apk/release/app-release.apk crowdlock-mainnet.apk
           gh release delete app-mainnet --yes --cleanup-tag || true
           gh release create app-mainnet crowdlock-mainnet.apk \
             --title "Crowdlock app — REAL BITCOIN build" \
-            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Install on Android by opening this file on the phone." \
+            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Signed with the app's own key, certificate SHA-256 ${FINGERPRINT}. Install on Android by opening this file on the phone." \
             --prerelease
