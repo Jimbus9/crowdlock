@@ -83,4 +83,25 @@ ok("…a Ledger wallet keeps no words at all", (await S.loadWalletText()).starts
 reset(); await S.saveWordsWallet(W, text); await S.forgetWallet();
 ok("Removing the wallet removes every entry", mem.size === 0);
 
+// A lock's terms, kept so it can be taken home with nothing from anybody else.
+reset();
+{
+  const mine = { crowdlock: "https://a.example/crowdlocks/x.json", address: "bc1qlockone", locktime: 1900000000, cosignerPubkey: "03" + "aa".repeat(32) };
+  await S.saveLock(mine);
+  await S.rememberLocks([
+    { ...mine, cosignerXpub: "xpubOfTheCosigner", name: "A Crowdlock" },                       // one the phone already holds
+    { crowdlock: mine.crowdlock, address: "bc1qlocktwo", locktime: 1950000000, cosignerPubkey: mine.cosignerPubkey, cosignerXpub: "xpubOfTheCosigner", name: "A Crowdlock" }, // one made elsewhere, found on the register
+  ]);
+  const kept = await S.loadSavedLocks();
+  ok("A lock found on the register is kept on the phone, with what a Ledger needs to take it home",
+    kept.length === 2 && kept[1].address === "bc1qlocktwo" && kept[1].cosignerXpub === "xpubOfTheCosigner");
+  ok("…and one the phone already held gains the co-signer's xpub and its Crowdlock's name, its terms untouched",
+    kept[0].cosignerXpub === "xpubOfTheCosigner" && kept[0].name === "A Crowdlock" && kept[0].locktime === 1900000000 && kept[0].cosignerPubkey === mine.cosignerPubkey);
+  await S.rememberLocks([{ ...mine, locktime: 1, cosignerPubkey: "02" + "bb".repeat(32) }]);
+  const after = await S.loadSavedLocks();
+  ok("A lock's own terms are never changed by what is read later", after[0].locktime === 1900000000 && after[0].cosignerPubkey === mine.cosignerPubkey && after.length === 2);
+  await S.rememberLocks([]);
+  ok("…and nothing is ever removed", (await S.loadSavedLocks()).length === 2);
+}
+
 console.log(process.exitCode ? "\nThe wallet's storage has a problem." : "\nThe wallet's storage keeps the words apart, locked where it can.");

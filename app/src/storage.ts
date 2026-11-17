@@ -143,7 +143,12 @@ export async function forgetAddedCrowdlocks(): Promise<void> {
 // lock. Once a lock is on the register its terms are public there too, so
 // restoring from the backup words finds it again; this copy covers the minutes
 // between sending and the register taking it.
-export type SavedLock = { crowdlock: string; address: string; locktime: number; cosignerPubkey: string };
+// A lock's terms, kept on the phone: with these and the wallet's own key, a
+// lock can be taken home after its date with nothing from anybody else, the
+// Crowdlock's own website included. `cosignerXpub` is what a Ledger needs to
+// do that; `name` is only for showing the lock when its Crowdlock can't be
+// loaded. Both are filled in whenever the Crowdlock is next read.
+export type SavedLock = { crowdlock: string; address: string; locktime: number; cosignerPubkey: string; cosignerXpub?: string; name?: string };
 const LOCKS = "crowdlock.locks.v1";
 
 export async function loadSavedLocks(): Promise<SavedLock[]> {
@@ -158,6 +163,27 @@ export async function saveLock(lock: SavedLock): Promise<void> {
   if (!(await loadSavedLocks()).some((l) => l.address === lock.address)) {
     throw new Error("the phone did not save the lock's terms, so nothing was sent");
   }
+}
+
+/**
+ * Keep these locks' terms on the phone: any it doesn't hold yet (a lock made
+ * on the website, or before the app was reinstalled, is found on the register
+ * and kept from then on), and a co-signer xpub or a name it was missing.
+ * Never removes or changes a lock's own terms. Best effort: reading a
+ * Crowdlock must not fail because the phone's store is full.
+ */
+export async function rememberLocks(locks: SavedLock[]): Promise<void> {
+  try {
+    const all = await loadSavedLocks();
+    let changed = false;
+    for (const l of locks) {
+      const have = all.find((x) => x.address === l.address);
+      if (!have) { all.push(l); changed = true; continue; }
+      if (l.cosignerXpub && have.cosignerXpub !== l.cosignerXpub) { have.cosignerXpub = l.cosignerXpub; changed = true; }
+      if (l.name && have.name !== l.name) { have.name = l.name; changed = true; }
+    }
+    if (changed) await SecureStore.setItemAsync(LOCKS, JSON.stringify(all));
+  } catch {}
 }
 
 export async function forgetSavedLocks(): Promise<void> {

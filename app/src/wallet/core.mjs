@@ -41,7 +41,7 @@ import { messageHash, verifyMembership, memberAddressForOwnerKey } from "../../.
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
-import { destinationIsPermitted } from "../../../method/js/proposals.mjs";
+import { destinationIsPermitted, attestorsOf } from "../../../method/js/proposals.mjs";
 import { isCosignerOf } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
@@ -55,6 +55,18 @@ export const NETWORKS = {
 // Below this a native-segwit output is "dust": nodes will not relay a
 // transaction creating one, so it would be stuck. Bitcoin Core's figure.
 export const DUST_SATS = 294n;
+
+/**
+ * The same limit for any kind of output, by Bitcoin Core's rule: three sats
+ * for every byte the output takes up, counting what it will cost to spend.
+ * 294 for a plain segwit address, 330 for a lock (or a taproot address), 546
+ * for an old-style one. A commitment pays a seller's address, of whatever
+ * kind, and may return the rest to a lock, so one figure is not enough.
+ */
+export function dustFor(script) {
+  const witness = script.length >= 4 && script.length <= 42 && (script[0] === 0x00 || (script[0] >= 0x51 && script[0] <= 0x60)) && script[1] === script.length - 2;
+  return BigInt(3 * (8 + 1 + script.length + (witness ? 67 : 148)));
+}
 
 // ---------------------------------------------------------------------------
 // Backup words
@@ -632,6 +644,36 @@ export async function relock({ account, chain, lock, newLock, feeRate, medianTim
 // ---------------------------------------------------------------------------
 
 /**
+ * The output that names the proposal: OP_RETURN and the proposal's 32-byte
+ * hash, carrying no money. It is the last output of every commitment, so the
+ * owner's signature covers which proposal the payment is for. Without it a
+ * commitment could be relabelled for any other proposal paying the same
+ * address (method/lock/commitment.mjs, proposalMarker).
+ */
+export function proposalMarker(proposalHash) {
+  const out = new Uint8Array(34);
+  out[0] = 0x6a; out[1] = 0x20; out.set(fromHex(proposalHash), 2);
+  return out;
+}
+
+// The size of a finished commitment, for its fee. Worked out from its parts,
+// because the library's own figure is for the cheaper way out of a lock (the
+// owner alone, one signature), and a commitment leaves by the other, with
+// two. Until 17 November 2026 the fee was sized on that smaller figure, about
+// a tenth too low.
+const SIGNATURE_BYTES = 72; // the most a low-S signature takes, with its last byte
+function commitmentVsize({ destinationScript, scriptLength, withRemainder }) {
+  const output = (len) => 8 + 1 + len;
+  const base = 4 + 1 + (36 + 1 + 4) + 1 + output(destinationScript.length) + (withRemainder ? output(34) : 0) + output(34) + 4;
+  const witness = 2 + 1 + (1 + SIGNATURE_BYTES) + 1 + (1 + SIGNATURE_BYTES) + (1 + scriptLength);
+  return Math.ceil((base * 4 + witness) / 4);
+}
+/** The size the finished payment will have, given the commitment as recorded (the co-signer's signature still to come). */
+function completedVsize(tx) {
+  return Math.ceil((tx.weight() + SIGNATURE_BYTES) / 4);
+}
+
+/**
  * The owner's half of a purchase: one coin of one lock, spent down the
  * purchase branch to the proposal's destination, signed by the owner only.
  * Nothing is broadcast and nothing moves. Without the co-signer's signature
@@ -678,9 +720,12 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
   const back = new Output({ descriptor: lockDescriptor({ ...account, kind: "words" }, check.cosignerPubkey, lock.locktime), network: net });
 
   const value = BigInt(coin.value);
-  const weightOf = (withRemainder) =>
-    44 + out.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES") + dest.outputWeight() + (withRemainder ? back.outputWeight() : 0);
-  const feeFor = (withRemainder) => BigInt(Math.ceil((weightOf(withRemainder) / 4) * feeRate));
+  const destinationScript = dest.getScriptPubKey();
+  const lockScriptLength = out.getWitnessScript()?.length;
+  if (!lockScriptLength) throw new Error("the lock's script is missing — refusing");
+  const feeFor = (withRemainder) => BigInt(Math.ceil(commitmentVsize({ destinationScript, scriptLength: lockScriptLength, withRemainder }) * feeRate));
+  // What each output must hold for the network to pass the payment on.
+  const leastCommitted = dustFor(destinationScript), leastBack = dustFor(back.getScriptPubKey());
 
   let committed, remainder, fee;
   if (amount === "all") {
@@ -691,9 +736,9 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
     fee = feeFor(true); remainder = value - committed - fee;
     if (remainder < 0n) throw new Error("that is more than this coin holds, after the fee");
     // A remainder too small to be worth an output goes to the destination too.
-    if (remainder < DUST_SATS) { fee = feeFor(false); committed = value - fee; remainder = 0n; }
+    if (remainder < leastBack) { fee = feeFor(false); committed = value - fee; remainder = 0n; }
   }
-  if (committed < DUST_SATS) throw new Error("too little left to commit after the fee");
+  if (committed < leastCommitted) throw new Error("too little left to commit after the fee");
   // The spec's own sanity check: verifiers refuse a fee above this share.
   if (Number(fee) > Number(committed) * maxFee) {
     const smallest = BigInt(Math.ceil(Number(fee) / maxFee));
@@ -705,8 +750,14 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
   out.updatePsbtAsInput({ psbt, txHex: await coinSource(chain, coin), vout: coin.vout });
   dest.updatePsbtAsOutput({ psbt, value: committed });
   if (remainder > 0n) back.updatePsbtAsOutput({ psbt, value: remainder });
+  // Last, the proposal itself, so that what is signed says what it is for.
+  psbt.addOutput({ script: proposalMarker(proposalHash), value: 0n });
   psbt.setLocktime(0);
   if (psbt.locktime !== 0 || psbt.txInputs.length !== 1) throw new Error("a commitment spends one coin and declares no date — refusing");
+  // The signature will cover these two, so nobody could put them right
+  // afterwards: a version the network passes on, and no waiting period.
+  if (psbt.version !== 1 && psbt.version !== 2) throw new Error("a commitment must be an ordinary version 1 or 2 transaction — refusing");
+  if ((psbt.txInputs[0].sequence & 0x80000000) === 0) throw new Error("a commitment's input must set no waiting period — refusing");
 
   await signWith(account, psbt, [{ descriptor, name: lockPolicyName(lock.locktime) }]);
 
@@ -718,6 +769,9 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
 
   const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
   tx.setWitness(0, [new Uint8Array(0), new Uint8Array(0), mine.signature, witnessScript]);
+  // The fee was worked out before anything was built. Check it against the
+  // payment as built: never under what the network needs to pass it on.
+  if (fee < BigInt(completedVsize(tx))) throw new Error("the fee came out below what the network needs — refusing");
 
   const record = {
     proposal: proposalHash,
@@ -738,7 +792,11 @@ export async function buildCommitment({ account, chain, lock, coin, proposalHash
  * the Crowdlock's destinations file. The coin's value, and whether it is still
  * unspent, come from the chain.
  *
- * @returns {Promise<{ valid: boolean, reason: string, committedSats: number, fee: number, ownerPubkey?: string }>}
+ * `coin` in the answer is the coin the commitment spends ("txid:vout"), so a
+ * caller adding up a pile can count each coin once: two commitments spending
+ * the same coin can never both be paid.
+ *
+ * @returns {Promise<{ valid: boolean, reason: string, committedSats: number, fee: number, ownerPubkey?: string, coin?: string }>}
  */
 export async function checkCommitment({ record, crowdlock, proposal, destinations, chain, network }) {
   const net = typeof network === "string" ? NETWORKS[network].network : (network.network ?? network);
@@ -772,27 +830,38 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
     try {
       const decoded = bscript.signature.decode(w[2]);
       const sighash = tx.hashForWitnessV0(0, script, BigInt(coin.value), Transaction.SIGHASH_ALL);
-      sigOk = decoded.hashType === Transaction.SIGHASH_ALL && ecc.verify(sighash, fromHex(L.owner_pubkey), decoded.signature);
+      // Strict: a signature with a high S value is refused, as the network refuses to pass one on.
+      sigOk = decoded.hashType === Transaction.SIGHASH_ALL && ecc.verify(sighash, fromHex(L.owner_pubkey), decoded.signature, true);
     } catch { sigOk = false; }
     if (!sigOk) return fail("the owner's signature does not verify over this transaction");
   }
   if (tx.locktime !== 0) return fail(`declares nLockTime ${tx.locktime}, must be 0`);
+  // The owner's signature covers these two, so a commitment that gets them
+  // wrong can never be put right by anyone else: it would count and never pay.
+  if (tx.version !== 1 && tx.version !== 2) return fail(`is transaction version ${tx.version}, which the network does not pass on — must be 1 or 2`);
+  if ((tx.ins[0].sequence & 0x80000000) === 0) return fail("its sequence number sets a waiting period before it could be mined — it must set none");
 
-  if (tx.outs.length < 1 || tx.outs.length > 2) return fail(`${tx.outs.length} outputs, must be 1 or 2`);
+  // The last output names this proposal, inside what the owner signed.
+  if (tx.outs.length < 2 || tx.outs.length > 3) return fail(`${tx.outs.length} outputs, must be 2 or 3`);
+  const marker = tx.outs[tx.outs.length - 1];
+  if (toHex(marker.script) !== toHex(proposalMarker(proposal.hash)) || BigInt(marker.value) !== 0n) {
+    return fail("the payment does not name this proposal inside it — it could have been signed for another");
+  }
   let out0;
   try { out0 = baddress.fromOutputScript(tx.outs[0].script, net); } catch { return fail("output 0 is not a recognisable address"); }
   if (out0 !== proposal.destination) return fail(`output 0 pays ${out0}, but the proposal names ${proposal.destination}`);
-  if (!Array.isArray(destinations?.attestors) || destinations.threshold === undefined) {
-    return fail("no attestor set was supplied, so the destinations list cannot be checked for attestation");
-  }
+  // The attestors are the ones the Crowdlock's own file names, and the list
+  // must be this Crowdlock's: never what a destinations file says of itself.
+  const rules = attestorsOf(crowdlock, hrp);
   const permitted = destinationIsPermitted({
-    address: out0, entries: destinations.entries ?? [], opensAt: proposal.opens,
-    minimumAgeDays: crowdlock.destination_wait_days, attestors: destinations.attestors, threshold: destinations.threshold, hrp,
+    address: out0, entries: destinations?.entries ?? [], opensAt: proposal.opens,
+    minimumAgeDays: crowdlock.destination_wait_days, attestors: rules.attestors, threshold: rules.threshold, instance: rules.instance, hrp,
   });
   if (!permitted.permitted) return fail(`destination not permitted: ${permitted.reason}`);
 
   const committedSats = Number(tx.outs[0].value);
-  if (tx.outs.length === 2) {
+  if (BigInt(committedSats) < dustFor(tx.outs[0].script)) return fail(`commits ${committedSats} sats, too little for the network to pass on`);
+  if (tx.outs.length === 3) {
     const r = record.remainder;
     if (!r) return fail("has a second output but no remainder lock declared to check it against");
     let back;
@@ -804,6 +873,7 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
     if (r.owner_pubkey !== L.owner_pubkey) return fail("remainder lock has a different owner — this would move coins out of the owner's hands");
     if (r.locktime < L.locktime) return fail("remainder lock expires earlier than the lock being spent — an early escape");
     if (!isCosignerOf(crowdlock, r.cosigner_pubkey)) return fail("remainder lock is co-signed by a different Crowdlock");
+    if (BigInt(tx.outs[1].value) < dustFor(tx.outs[1].script)) return fail(`returns ${Number(tx.outs[1].value)} sats to the lock, too little for the network to pass on`);
   }
   if (!coin) return fail("the coin has already been spent, so this commitment is void");
   const fee = coin.value - tx.outs.reduce((n, o) => n + Number(o.value), 0);
@@ -811,7 +881,9 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (fee > committedSats * crowdlock.max_commitment_fee) {
     return fail(`fee of ${fee} sats is more than ${crowdlock.max_commitment_fee * 100}% of the ${committedSats} committed — refusing in case of a client bug`);
   }
-  return { valid: true, reason: "", committedSats, fee, ownerPubkey: L.owner_pubkey };
+  const least = completedVsize(tx);
+  if (fee < least) return fail(`fee of ${fee} sats is below the ${least} the network needs to pass this payment on`);
+  return { valid: true, reason: "", committedSats, fee, ownerPubkey: L.owner_pubkey, coin: `${txid}:${tx.ins[0].index}` };
 }
 
 /**

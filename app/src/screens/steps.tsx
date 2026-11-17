@@ -276,7 +276,7 @@ export function LockFlow({ words, url, go }: { words: string; url: string; go: G
       const feeRate = await chain.feeRate(whileOpen.feeSpeed);
       const tx = await buildLock({ account: await signingAccount(account), chain, lock, feeRate, amount: chosen.amount });
       // The terms are saved before the money moves, and checked saved.
-      await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner! });
+      await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner!, cosignerXpub: lock.cosignerXpub ?? undefined, name: c.crowdlock.name });
       await chain.broadcast(tx.hex);
       if (viaRelays) await postToRelays(c.crowdlock, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: cosigner, locktime, address: lock.address }).catch(() => {});
       whileOpen.overview = null;   // Home reads afresh
@@ -392,14 +392,19 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
     (async () => {
       const loaded: Loaded = await loadCrowdlock(url);
       setC(loaded);
-      if (!loaded.ok) return;
-      setYears(loaded.crowdlock.lock_lengths_years[0]);
-      setPaused(keyChanges(await loadSeenKeys(url), loaded.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(url)).changed);
+      // A lock is taken home with its own terms and the wallet's key, nothing
+      // else. If the Crowdlock can't be loaded (its site is down, or its file
+      // fails its checks) the page carries on from the terms this phone kept;
+      // only locking again needs the Crowdlock.
+      if (loaded.ok) {
+        setYears(loaded.crowdlock.lock_lengths_years[0]);
+        setPaused(keyChanges(await loadSeenKeys(url), loaded.crowdlock.cosigner_keys ?? [], await loadExpectedKeys(url)).changed);
+      } else { setYears(0); setPage("home"); }
       try {
         setWaiting(await waitingBalance(chain, account.address));
         const medianTime = await chain.medianTime();
-        const onReg = locksOnRegister(loaded.register, account.address) as LockTerms[];
-        const saved = (await loadSavedLocks()).filter((l) => l.crowdlock === loaded.url);
+        const onReg = (loaded.ok ? locksOnRegister(loaded.register, account.address) : []) as LockTerms[];
+        const saved = (await loadSavedLocks()).filter((l) => l.crowdlock === loaded.url || l.crowdlock === url);
         const all: LockTerms[] = [...onReg];
         for (const l of saved) if (!all.some((x) => x.address === l.address)) all.push(l);
         const out: LockRow[] = [];
@@ -417,13 +422,16 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
   useBack(() => { if (page === "again" && !again) { if (!busy) { setPage("home"); setError(null); } return true; } return false; });
 
   if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
-  if (!c.ok) return (
+  const cl: any = c.ok ? c.crowdlock : null;   // null: the Crowdlock couldn't be loaded
+  if (!cl && !loadError && !rows) return <ActivityIndicator style={{ marginTop: 60 }} />;
+  if (!cl && !loadError && rows && rows.length === 0) return (
     <View>
-      <Text style={s.h1}>This Crowdlock failed its checks</Text>
-      {c.problems.map((p, i) => <Text key={i} style={s.error}>{p}</Text>)}
+      <Text style={s.h1}>This Crowdlock couldn't be loaded</Text>
+      {(c as any).problems.map((p: string, i: number) => <Text key={i} style={s.error}>{p}</Text>)}
+      <Text style={s.p}>This phone holds no lock of yours for it that is ready to take home.</Text>
     </View>
   );
-  const name: string = c.crowdlock.name;
+  const name: string = cl?.name ?? rows?.find((r) => r.name)?.name ?? "this Crowdlock";
   const kick = <Text style={s.kick}>Step 6 of 6: Take it home</Text>;
 
   if (page === "done" && done) return (
@@ -457,11 +465,14 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
     </View>
   );
 
-  const cosigner: string | undefined = newestCosigner(c.crowdlock);
-  const noLedgerXpub = account.kind === "ledger" && !!cosigner && !xpubForKey(c.crowdlock, cosigner);
-  const lengths: number[] = c.crowdlock.lock_lengths_years;
-  const viaRelays = Array.isArray(c.crowdlock.relays);
-  const oldLock = { ...row, cosignerXpub: xpubForKey(c.crowdlock, row.cosignerPubkey) };
+  const cosigner: string | undefined = cl ? newestCosigner(cl) : undefined;
+  const noLedgerXpub = account.kind === "ledger" && !!cosigner && !xpubForKey(cl, cosigner);
+  const lengths: number[] = cl?.lock_lengths_years ?? [];
+  const viaRelays = Array.isArray(cl?.relays);
+  // The co-signer's xpub is only needed by a Ledger. It comes from the
+  // Crowdlock's file, or from what the phone kept when that can't be loaded.
+  const oldLock = { ...row, cosignerXpub: (cl ? xpubForKey(cl, row.cosignerPubkey) : null) ?? row.cosignerXpub ?? null };
+  const ledgerStuck = !cl && account.kind === "ledger" && !oldLock.cosignerXpub;
   const feeNote = (vb: number) => (
     <>
       <SumRow label="Network fee" value={aboutFee(rate, vb)} />
@@ -493,14 +504,20 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
       <SumRow label="Unlocked" value={when(row.locktime)} />
       <SumRow label="It goes to" value="Your waiting balance, in this wallet" />
       <Text style={s.p}>There you can lock it again or send it out. It stops counting towards this Crowdlock's total.</Text>
+      {!cl && (
+        <Warning level="know" title="This Crowdlock's own site couldn't be loaded">
+          Your lock doesn't depend on it. This phone kept the lock's terms, and taking it home needs only those and your own key. Locking again does need the Crowdlock, so that choice is off until it can be loaded.
+        </Warning>
+      )}
+      {ledgerStuck && <Text style={s.error}>A Ledger also needs the co-signer's xpub to take a lock home, and this phone didn't keep one for this lock. It is in the Crowdlock's file: open this page again once the Crowdlock loads. The money is safe in the lock meanwhile.</Text>}
       {feeNote(VB_HOME)}
       <Warning level="know" title="The network's clock runs about an hour behind">
         The date is judged by the bitcoin network's own clock, which runs about an hour behind real time on real bitcoin. If this is refused for its date, wait an hour and try again.
       </Warning>
       <LedgerHint account={account} />
       {error && <Text style={s.error}>{error}</Text>}
-      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Sending…") : "Take it home"} disabled={busy} onPress={takeIt} />
-      <Btn kind="second" label="Lock it again instead" disabled={busy} onPress={() => { setError(null); setPage("again"); }} />
+      <Btn label={busy ? (account.kind === "ledger" ? "Approve it on your Ledger…" : "Sending…") : "Take it home"} disabled={busy || ledgerStuck} onPress={takeIt} />
+      {!!cl && <Btn kind="second" label="Lock it again instead" disabled={busy} onPress={() => { setError(null); setPage("again"); }} />}
     </View>
   );
 
@@ -524,15 +541,15 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
   const lockAgain = async () => {
     setBusy(true); setError(null);
     try {
-      const newLock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner!) };
+      const newLock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(cl, cosigner!) };
       const tx = await relock({
         account: await signingAccount(account), chain, lock: oldLock, newLock, addWaiting: extra > 0n,
         feeRate: await chain.feeRate(whileOpen.feeSpeed), medianTime: await chain.medianTime(),
       });
       // The new terms are saved before the money moves.
-      await saveLock({ crowdlock: c.url, address: newLock.address, locktime, cosignerPubkey: cosigner! });
+      await saveLock({ crowdlock: c.url, address: newLock.address, locktime, cosignerPubkey: cosigner!, cosignerXpub: newLock.cosignerXpub ?? undefined, name });
       await chain.broadcast(tx.hex);
-      if (viaRelays) await postToRelays(c.crowdlock, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: cosigner, locktime, address: newLock.address }).catch(() => {});
+      if (viaRelays) await postToRelays(cl, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: cosigner, locktime, address: newLock.address }).catch(() => {});
       whileOpen.overview = null;
       setDone(`Locked ${btc(tx.sent)} again for ${name} until ${when(locktime)}. The network fee was ${btc(tx.fee)}. Once it confirms it goes on the register by itself.`);
       setPage("done");

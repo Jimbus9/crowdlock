@@ -17,7 +17,7 @@
 // figure that is not really locked, or not really a member's.
 
 import * as proven from "../lock/lock.mjs";
-import { lockScript, lockAddress, hrpFor, prepareLock, addLock } from "./lockrecord.mjs";
+import { lockScript, lockAddress, hrpFor, prepareLock, addLock, lockIsGenuine } from "./lockrecord.mjs";
 import { memberAddressForOwnerKey } from "./verify.mjs";
 import { readFileSync } from "node:fs";
 
@@ -153,6 +153,48 @@ refuses("A locktime that is not a whole number",
   prepareLock({ ...good, locktime: "soon" }, ctx), "whole number");
 refuses("A register file of the wrong shape",
   prepareLock(good, { ...ctx, register: { locks: [] } }), "not in the expected shape");
+
+// ---------------------------------------------------------------------------
+rule();
+console.log("WHAT A READER BELIEVES OF A REGISTER (found by review, 17 November 2026)");
+rule();
+{
+  // The lock the endpoint itself would publish is believed…
+  const onRegister = added.register;
+  const record = onRegister.locks[0];
+  const read = { crowdlock, register: onRegister };
+  check("A lock the endpoint published is a genuine one to a reader", lockIsGenuine(record, read).ok, lockIsGenuine(record, read).reason);
+  // …and nothing else is, whatever the file says.
+  const not = (what, lock, ctx2 = read, expect = "") => {
+    const r = lockIsGenuine(lock, ctx2);
+    check(`Not counted: ${what}`, !r.ok && r.reason.includes(expect), r.ok ? "WAS BELIEVED" : r.reason);
+  };
+  not("an ordinary address a register calls a lock", { ...record, address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kwmyzaz" }, read, "not the lock its terms make");
+  not("a lock whose date was edited after the fact", { ...record, locktime: record.locktime + 1 }, read, "not the lock its terms make");
+  not("a lock co-signed by a key that is not this Crowdlock's", (() => {
+    const other = "03" + "5a".repeat(32);
+    return { ...record, cosigner_pubkey: other, address: lockAddress({ ownerPubkey: OWNER, cosignerPubkey: other, locktime: record.locktime }, "bc") };
+  })(), read, "co-signer is not this Crowdlock's");
+  // A real lock stays a real lock whoever the record says owns it: the
+  // counting rule counts its money. Its owner is worked out from its key.
+  const relabelled = lockIsGenuine({ ...record, member: "bc1qsomebodyelse" }, read);
+  check("A real lock credited to somebody else is still a lock, and its owner is still the key's own address",
+    relabelled.ok && relabelled.owner === member && relabelled.member === true);
+  const stranger = lockIsGenuine(record, { crowdlock, register: { ...onRegister, members: [] } });
+  check("A real lock whose owner never joined is a lock, and its owner is not counted as a member", stranger.ok && stranger.member === false);
+  not("a record with no keys", { address: record.address, member: record.member, locktime: record.locktime }, read, "not public keys");
+  not("a lock whose owner and co-signer are one key", { ...record, cosigner_pubkey: "03" + OWNER.slice(2) }, read, "same key");
+  not("anything at all, for a network the checker does not know", record, { crowdlock: { ...crowdlock, network: "nowhere" }, register: onRegister }, "network");
+  // The real registers, as they stand: every lock on them is genuine.
+  const root = new URL("../../", import.meta.url);
+  const test = JSON.parse(readFileSync(new URL("crowdlocks/kop-fund-testnet4.json", root), "utf8"));
+  const testReg = JSON.parse(readFileSync(new URL(test.register.registrations, root), "utf8"));
+  check(`Every lock on the test Crowdlock's own register is genuine (${testReg.locks.length})`,
+    testReg.locks.length > 0 && testReg.locks.every((l) => lockIsGenuine(l, { crowdlock: test, register: testReg }).ok));
+  const fundReg = JSON.parse(readFileSync(new URL("../fixtures/the-kop-fund/registrations.json", import.meta.url), "utf8"));
+  check(`…and so is every lock on The Kop Fund's register, as frozen for these tests (${(fundReg.locks ?? []).length})`,
+    (fundReg.locks ?? []).every((l) => lockIsGenuine(l, { crowdlock: kop, register: fundReg }).ok));
+}
 
 console.log();
 rule();

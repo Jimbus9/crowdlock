@@ -91,31 +91,77 @@ console.log("-".repeat(80));
 console.log("TOTALS AND JOINING");
 console.log("-".repeat(80));
 
+// Locks for these tests' registers: real ones, whose address is the lock
+// their terms make and whose owner is the member named. A register is only
+// believed about a record that checks out (see "A register cannot count…").
+const { lockAddress: lockAddressFor } = await import("../../method/js/lockrecord.mjs");
+const { memberAddressForOwnerKey: memberFor } = await import("../../method/js/verify.mjs");
+const TEST_COSIGNER = "03" + "c0".repeat(32);
+const realLock = (hrp, n, locktime) => {
+  const owner_pubkey = "02" + n.toString(16).padStart(2, "0").repeat(32);
+  return { owner_pubkey, cosigner_pubkey: TEST_COSIGNER, locktime, member: memberFor(owner_pubkey, hrp),
+    address: lockAddressFor({ ownerPubkey: owner_pubkey, cosignerPubkey: TEST_COSIGNER, locktime }, hrp) };
+};
+const membersOf = (locks, extra = []) => [...new Set(locks.map((l) => l.member)), ...extra].map((address, i) => ({ n: i + 1, address }));
+
 // A pretend chain with one lock in date and above the minimum, one below it,
 // and one whose date has passed — only the first may count.
 const now = 1800000000;
+const counts = realLock("tb", 1, now + 1000), tooSmall = realLock("tb", 2, now + 1000), lapsed = realLock("tb", 2, now - 1);
 const fakeLoaded = {
-  crowdlock: { network: "testnet4", chain_api: "https://chain.example", minimum_counted_lock_sats: 10000 },
+  crowdlock: { network: "testnet4", chain_api: "https://chain.example", minimum_counted_lock_sats: 10000, cosigner_keys: [TEST_COSIGNER] },
   // Three signed; only member one holds a lock that counts.
-  register: { members: [{ n: 1, address: "tb1qone" }, { n: 2, address: "tb1qtwo" }, { n: 3, address: "tb1qthree" }], locks: [
-    { address: "tb1qcounts", member: "tb1qone", locktime: now + 1000 },
-    { address: "tb1qtoosmall", member: "tb1qtwo", locktime: now + 1000 },
-    { address: "tb1qlapsed", member: "tb1qtwo", locktime: now - 1 },
-    { address: "TB1QCOUNTS", member: "tb1qone", locktime: now + 1000 },
-  ] },
+  register: { members: membersOf([counts, tooSmall], ["tb1qthree"]), locks: [counts, tooSmall, lapsed, { ...counts, address: counts.address.toUpperCase() }] },
 };
 const chainFetch = async (url) => {
-  const coins = { tb1qcounts: [{ txid: "a", vout: 0, value: 50000, status: { confirmed: true } }, { txid: "b", vout: 0, value: 999, status: { confirmed: false } }],
-    tb1qtoosmall: [{ txid: "c", vout: 0, value: 5000, status: { confirmed: true } }],
-    tb1qlapsed: [{ txid: "d", vout: 0, value: 90000, status: { confirmed: true } }] };
+  const coins = { [counts.address]: [{ txid: "a", vout: 0, value: 50000, status: { confirmed: true } }, { txid: "b", vout: 0, value: 999, status: { confirmed: false } }],
+    [tooSmall.address]: [{ txid: "c", vout: 0, value: 5000, status: { confirmed: true } }],
+    [lapsed.address]: [{ txid: "d", vout: 0, value: 90000, status: { confirmed: true } }] };
   const addr = String(url).split("/address/")[1].split("/")[0];
-  return Response.json(coins[addr] ?? []);
+  return Response.json(coins[addr] ?? coins[addr.toLowerCase()] ?? []);
 };
 const totals = await committedTotal(fakeLoaded, chainFetch, now);
 check("The committed total counts only confirmed, in-date, above-minimum locks, once each",
   totals.sats === 50000n && totals.locks === 1, `${totals.sats} sats in ${totals.locks} lock(s)`);
 check("…and the only people it counts are committed members, never signatures",
   totals.members === 1, `${totals.members} committed of 3 signed`);
+
+// A register cannot count what is not a lock. Found by review on 17 November
+// 2026: the total believed whatever address a register listed, so a changed
+// register (or a founder's own) could name any well-funded address a "lock".
+{
+  const asked = [];
+  const rich = async (url) => { asked.push(String(url)); return Response.json([{ txid: "f", vout: 0, value: 5000000000, status: { confirmed: true } }]); };
+  const good = realLock("tb", 7, now + 1000);
+  const base = { network: "testnet4", chain_api: "https://chain.example", minimum_counted_lock_sats: 10000, cosigner_keys: [TEST_COSIGNER] };
+  const notALock = [
+    ["an ordinary address called a lock", { ...good, address: "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx" }],
+    ["a lock with another Crowdlock's co-signer", realLockWith("03" + "dd".repeat(32))],
+    ["a record with no keys at all", { address: good.address, member: good.member, locktime: good.locktime }],
+  ];
+  function realLockWith(cosigner) {
+    const owner_pubkey = "02" + "07".repeat(32);
+    return { owner_pubkey, cosigner_pubkey: cosigner, locktime: now + 1000, member: memberFor(owner_pubkey, "tb"),
+      address: lockAddressFor({ ownerPubkey: owner_pubkey, cosignerPubkey: cosigner, locktime: now + 1000 }, "tb") };
+  }
+  const results = [];
+  for (const [what, lock] of notALock) {
+    asked.length = 0;
+    const t = await committedTotal({ crowdlock: base, register: { members: membersOf([good]), locks: [lock] } }, rich, now);
+    results.push(t.sats === 0n && t.members === 0 && t.notLocks === 1 && asked.length === 0 ? null : `${what}: ${t.sats} sats, ${asked.length} asked`);
+  }
+  check("A register cannot count what is not a lock: an ordinary address, another Crowdlock's lock, or a record with no keys",
+    results.every((r) => r === null), results.filter(Boolean).join(" | "));
+  // A real lock's money counts whoever the record says owns it (the counting
+  // rule); its owner is counted as a committed member only if they are one,
+  // and who that is comes from the lock's own key, not the record's label.
+  const someoneElse = "tb1qsomebodyelse";
+  const mislabelled = await committedTotal({ crowdlock: base, register: { members: [{ n: 1, address: someoneElse }], locks: [{ ...good, member: someoneElse }] } }, rich, now);
+  check("A real lock credited to a member who does not own it: the money counts, the member does not",
+    mislabelled.sats === 5000000000n && mislabelled.members === 0, `${mislabelled.sats} sats, ${mislabelled.members} members`);
+  const honest = await committedTotal({ crowdlock: base, register: { members: membersOf([good]), locks: [good] } }, rich, now);
+  check("…and the chain is not even asked about one, while a real lock still counts, with its owner", honest.sats === 5000000000n && honest.notLocks === 0 && honest.members === 1);
+}
 
 let posted = null;
 const endpointFetch = async (url, init) => { posted = { url, body: JSON.parse(init.body) }; return Response.json({ ok: true, n: 7 }); };
@@ -274,20 +320,18 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   // The co-signer's record: a lock well past its date has a closed record.
   const { coSignerRecord } = await import("../src/crowdlocks.mjs");
   const now = 2000000000;
-  const old = { address: "tb1qold", locktime: now - 4 * 3600, member: "tb1qm" };
-  const recent = { address: "tb1qrecent", locktime: now - 3600, member: "tb1qm" };
-  const open = { address: "tb1qopen", locktime: now + 3600, member: "tb1qm" };
-  const early = { txid: "e9", status: { confirmed: true, block_time: now - 5 * 3600 }, vin: [{ prevout: { scriptpubkey_address: "tb1qold", value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
+  const old = realLock("tb", 9, now - 4 * 3600), recent = realLock("tb", 9, now - 3600), open = realLock("tb", 9, now + 3600);
+  const early = { txid: "e9", status: { confirmed: true, block_time: now - 5 * 3600 }, vin: [{ prevout: { scriptpubkey_address: old.address, value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
   const seenUrls = [];
-  const recFetch = async (url) => { seenUrls.push(String(url)); return Response.json(String(url).includes("tb1qold") ? [early] : []); };
-  const reg = { crowdlock: { network: "testnet4", chain_api: "https://closed" }, register: { locks: [old, recent, open] }, destinations: { entries: [] } };
+  const recFetch = async (url) => { seenUrls.push(String(url)); return Response.json(String(url).includes(old.address) ? [early] : []); };
+  const reg = { crowdlock: { network: "testnet4", chain_api: "https://closed", cosigner_keys: [TEST_COSIGNER] }, register: { members: membersOf([old]), locks: [old, recent, open] }, destinations: { entries: [] } };
   const r1 = await coSignerRecord(reg, recFetch, now);
   askAfresh(recFetch);
   const r2 = await coSignerRecord(reg, recFetch, now);
   const times = (a) => seenUrls.filter((u) => u.includes(a)).length;
   check("A lock well past its date has its record read once; it still shows what was found",
-    times("tb1qold") === 1 && r1.releases.length === 1 && r2.releases.length === 1 && r2.releases[0].txid === "e9", seenUrls.join(" "));
-  check("…one just past its date, or still ahead of it, is read every time", times("tb1qrecent") === 2 && times("tb1qopen") === 2);
+    times(old.address) === 1 && r1.releases.length === 1 && r2.releases.length === 1 && r2.releases[0].txid === "e9", seenUrls.join(" "));
+  check("…one just past its date, or still ahead of it, is read every time", times(recent.address) === 2 && times(open.address) === 2);
 }
 
 // A slow connection. The first try is never cut short: the second runs
@@ -479,14 +523,15 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
   const some = async (url) => (String(url).startsWith("https://r") ? Promise.reject(new TypeError("x")) : Response.json(String(url).endsWith("/fee-estimates") ? { "2": 40.2, "4": 21, "25": 3 } : []));
   const someFees = await esploraChain("https://r", some, 50, { backup: "https://b" }).feeRates();
   check("…and a wait it has no figure for takes the next longer one", someFees.fast === 41 && someFees.normal === 21 && someFees.slow === 3, JSON.stringify(someFees));
+  const mainLock = realLock("bc", 5, 4000000000);
   const mainDown = async (url) => {
     url = String(url);
     if (url.startsWith("https://mempool.space")) throw new TypeError("Network request failed");
-    return Response.json(url.startsWith("https://blockstream.info/api/address/bc1qlock/utxo") ? [{ txid: "aa", vout: 0, value: 250000, status: { confirmed: true } }] : []);
+    return Response.json(url.startsWith(`https://blockstream.info/api/address/${mainLock.address}/utxo`) ? [{ txid: "aa", vout: 0, value: 250000, status: { confirmed: true } }] : []);
   };
   const total = await committedTotal({
-    crowdlock: { network: "mainnet", chain_api: "https://mempool.space/api", minimum_counted_lock_sats: 200000 },
-    register: { locks: [{ address: "bc1qlock", locktime: 4000000000, member: "bc1qm" }] },
+    crowdlock: { network: "mainnet", chain_api: "https://mempool.space/api", minimum_counted_lock_sats: 200000, cosigner_keys: [TEST_COSIGNER] },
+    register: { members: membersOf([mainLock]), locks: [mainLock] },
   }, mainDown);
   check("A Crowdlock's total is still counted when its explorer is down, from the backup", total.sats === 250000n && total.members === 1, String(total.sats));
 }
@@ -527,14 +572,14 @@ check("A failed answer isn't remembered", calls === 2, `${calls} calls`);
 // The co-signer's record, as the Crowdlock screen reads it.
 {
   const { coSignerRecord } = await import("../src/crowdlocks.mjs");
-  const L = { address: "tb1qlock", locktime: 2000000000, member: "tb1qm", cosigner_pubkey: "02cc" };
-  const early = { txid: "e1", status: { confirmed: true, block_time: 1900000000 }, vin: [{ prevout: { scriptpubkey_address: "tb1qlock", value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
-  const onDate = { txid: "h1", status: { confirmed: true, block_time: 2000000100 }, vin: [{ prevout: { scriptpubkey_address: "tb1qlock2", value: 5000 }, witness: ["01", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qm" }] };
-  const loaded = { crowdlock: { network: "testnet4", chain_api: "https://rec" }, register: { locks: [L, { ...L, address: "tb1qlock2" }, L] }, destinations: { entries: [] } };
-  const fake = async (url) => Response.json(String(url).includes("tb1qlock2") ? [onDate] : [early]);
+  const L = realLock("tb", 11, 2000000000), L2 = realLock("tb", 11, 2000000001);
+  const early = { txid: "e1", status: { confirmed: true, block_time: 1900000000 }, vin: [{ prevout: { scriptpubkey_address: L.address, value: 5000 }, witness: ["aa", "", "bb", "cc"] }], vout: [{ scriptpubkey_address: "tb1qelsewhere" }] };
+  const onDate = { txid: "h1", status: { confirmed: true, block_time: 2000000100 }, vin: [{ prevout: { scriptpubkey_address: L2.address, value: 5000 }, witness: ["01", "bb", "cc"] }], vout: [{ scriptpubkey_address: L.member }] };
+  const loaded = { crowdlock: { network: "testnet4", chain_api: "https://rec", cosigner_keys: [TEST_COSIGNER] }, register: { members: membersOf([L]), locks: [L, L2, L] }, destinations: { entries: [] } };
+  const fake = async (url) => Response.json(String(url).includes(L2.address) ? [onDate] : [early]);
   const rec = await coSignerRecord(loaded, fake);
   check("The Crowdlock screen finds a co-signer's early release, once, and nothing else",
-    rec.releases.length === 1 && rec.releases[0].txid === "e1" && rec.releases[0].member === "tb1qm" && rec.unreadable === 0);
+    rec.releases.length === 1 && rec.releases[0].txid === "e1" && rec.releases[0].member === L.member && rec.unreadable === 0);
 }
 
 // A hardware wallet's view of the lock. Given the co-signer as an xpub, the
@@ -694,9 +739,10 @@ console.log("-".repeat(80));
     if (url.startsWith("https://founders-own.example")) return Response.json(url.endsWith("/utxo") ? [{ txid: "ff", vout: 0, value: 5000000000, status: { confirmed: true } }] : []);
     return Response.json([]);   // the app's own explorer: nothing there
   };
+  const empty = realLock("bc", 12, 4000000000);
   const faked = {
-    crowdlock: { network: "mainnet", chain_api: "https://founders-own.example/api", minimum_counted_lock_sats: 10000 },
-    register: { locks: [{ address: "bc1qnothinghere", locktime: 4000000000, member: "bc1qm" }] }, destinations: { entries: [] },
+    crowdlock: { network: "mainnet", chain_api: "https://founders-own.example/api", minimum_counted_lock_sats: 10000, cosigner_keys: [TEST_COSIGNER] },
+    register: { members: membersOf([empty]), locks: [empty] }, destinations: { entries: [] },
   };
   const t = await committedTotal(faked, liar);
   await coSignerRecord(faked, liar);

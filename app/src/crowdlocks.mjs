@@ -24,7 +24,11 @@ import { proposalVersion } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
 import { earlyReleases } from "../../method/js/release.mjs";
-import { checkCosignerXpubs } from "./wallet/core.mjs";
+import { checkCosignerXpubs, NETWORKS } from "./wallet/core.mjs";
+import { lockIsGenuine, hrpFor } from "../../method/js/lockrecord.mjs";
+
+// The prefix a Crowdlock's addresses carry, as the wallet knows its network.
+const lockHrp = (crowdlock) => NETWORKS[crowdlock?.network]?.network?.bech32 ?? hrpFor(crowdlock?.network);
 
 // This build's starting list and counting-rule link live in ./build.mjs, the
 // one file that differs between builds of the app.
@@ -290,19 +294,27 @@ export async function committedTotal(loaded, fetchImpl = globalThis.fetch, now =
   const chain = chainFor(crowdlock, fetchImpl);
   const seen = new Set();
   const committed = new Set();
-  let sats = 0n, counted = 0;
+  let sats = 0n, counted = 0, notLocks = 0;
   for (const lock of register.locks ?? []) {
     const address = String(lock.address).toLowerCase();
     if (seen.has(address) || !(lock.locktime > now)) continue;
     seen.add(address);
+    // A register is a file, and a file can say anything: a record only counts
+    // if it really is a lock of this Crowdlock (its address is the lock its
+    // terms make, co-signed by this Crowdlock). The chain is not asked about
+    // one that isn't.
+    const genuine = lockIsGenuine(lock, { crowdlock, register, hrp: lockHrp(crowdlock) });
+    if (!genuine.ok) { notLocks++; continue; }
     const coins = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
     const total = coins.reduce((s, c) => s + BigInt(c.value), 0n);
     if (total >= BigInt(crowdlock.minimum_counted_lock_sats)) {
       sats += total; counted++;
-      if (lock.member) committed.add(String(lock.member).toLowerCase());
+      // Its owner, worked out from the lock's own key and not read from the
+      // record's label, is a committed member if they are a member at all.
+      if (genuine.member) committed.add(genuine.owner);
     }
   }
-  return { sats, locks: counted, members: committed.size };
+  return { sats, locks: counted, members: committed.size, notLocks };
 }
 
 const CLOSED_AFTER = 3 * 3600;
@@ -324,6 +336,7 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
     const address = String(lock.address).toLowerCase();
     if (seen.has(address)) continue;
     seen.add(address);
+    if (!lockIsGenuine(lock, { crowdlock, register, hrp: lockHrp(crowdlock) }).ok) continue; // not a lock of this Crowdlock: nothing of the co-signer's to record
     try {
       // Only a spend before the lock's date can be a release, so once a lock is
       // well past its date its record is closed: what was read then is kept for

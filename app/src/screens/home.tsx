@@ -10,7 +10,7 @@ import { phaseOf } from "../../../method/js/proposals.mjs";
 import {
   loadCrowdlock, membershipOf, locksOnRegister, newestCosigner, keyChanges, newVersionToSign,
 } from "../crowdlocks.mjs";
-import { loadSavedLocks, loadSeenKeys, loadExpectedKeys, saveLook } from "../storage";
+import { loadSavedLocks, rememberLocks, loadSeenKeys, loadExpectedKeys, saveLook } from "../storage";
 import { NETWORK, IS_TEST_MONEY, chain, EXPLORER_WEB, EXPLORER_BACKUP_WEB, CONNECTION_TARGETS } from "../config";
 import { checkConnection, describeResult, sumUp } from "../connection.mjs";
 // The look (one theme file) and the shared parts every screen is built from.
@@ -74,6 +74,10 @@ function useOverview(account: any): Overview {
       if (member) {
         const terms: { address: string; locktime: number; cosignerPubkey: string }[] = [...locksOnRegister(c.register, account.address)];
         for (const l of saved.filter((x) => x.crowdlock === c.url)) if (!terms.some((x) => x.address === l.address)) terms.push(l);
+        // Keep every one of them on this phone, with what a Ledger needs, so
+        // that taking a lock home never depends on this Crowdlock's site.
+        await rememberLocks(terms.map((l) => ({ crowdlock: c.url, address: l.address, locktime: l.locktime, cosignerPubkey: l.cosignerPubkey,
+          cosignerXpub: xpubForKey(c.crowdlock, l.cosignerPubkey) ?? undefined, name: c.crowdlock.name })));
         for (const l of terms) {
           if (!alive.current) return;   // Home has been left: stop asking
           try {
@@ -90,6 +94,16 @@ function useOverview(account: any): Overview {
         locks: mine, openProposal: open ? { title: open.title, hash: open.hash } : null,
         committed: member && open ? await inPile(c, open, account.publicKey) : false,
       });
+    }
+    // Locks whose Crowdlock couldn't be loaded just now (its site is down, or
+    // its file failed its checks). They are still this wallet's: shown from
+    // the terms the phone kept, and they can be taken home from here.
+    for (const l of saved.filter((x) => !here.some((c) => c.url === x.crowdlock))) {
+      if (!alive.current) return;
+      try {
+        const st = await lockState({ chain, lock: l, medianTime, quick: true, finished: finishedLocks });
+        if (st.confirmed > 0n || st.arriving > 0n) all.push({ crowdlock: l.crowdlock, name: `${l.name ?? "A Crowdlock"} (couldn't be loaded)`, address: l.address, locktime: l.locktime, ...st, offline: true });
+      } catch { missed++; }
     }
     if (!alive.current) return;
     all.sort((a, b) => a.locktime - b.locktime);

@@ -68,6 +68,11 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
     items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
   }
   const pile: Pile = { count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0, notice };
+  // One coin, one commitment, per proposal: a second commitment spending the
+  // same coin is ignored and the earlier one stands (spec/commitment-format.md,
+  // "Counting the pile"). Only one of them could ever be paid, so counting
+  // both showed a proposal nearer its target than it was.
+  const counted = new Set<string>();
   for (const it of items) {
     if (it.type === "completed") { pile.completed++; continue; }
     if (it.type === "notice") { if (!pile.notice && genuine(it.notice)) pile.notice = { ...it.notice, published: new Date(it.at * 1000).toISOString() }; continue; }
@@ -85,6 +90,8 @@ async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any):
       }
       pile.refused.push(v.reason); continue;
     }
+    if (v.coin && counted.has(v.coin)) { pile.refused.push("an earlier commitment already spends the same coin, and only one can be paid"); continue; }
+    if (v.coin) counted.add(v.coin);
     pile.count++; pile.sats += v.committedSats;
     pile.good.push({ record: it.record, at: it.at, sats: v.committedSats });
     if (v.ownerPubkey === account.publicKey) pile.mine.push({ sats: v.committedSats, record: it.record });

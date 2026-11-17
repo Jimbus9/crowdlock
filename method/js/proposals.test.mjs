@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
   PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
-  chainIsIntact, destinationIsPermitted, nextDestination, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
+  chainIsIntact, destinationIsPermitted, attestorsOf, nextDestination, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
   applyCommitments, emptyPile, PER_LOCK_LIMIT, applySettlement, dueToSend, noticeStatement, noticeIsGenuine,
 } from "./proposals.mjs";
 import { memberAddressForOwnerKey } from "./verify.mjs";
@@ -77,7 +77,7 @@ const e1 = { ...d1, attestations: [sign(d1, key)], firstSeen: s1 };
 const { entry: d2 } = nextDestination({ instance, entries: [e1] }, { address: addrOf(key), text: "Second", now: new Date("2026-11-20T00:00:00Z") });
 const e2 = { ...d2, attestations: [sign(d2, outsider)], firstSeen: "2026-11-20T00:00:00Z" };
 const list = [e1, e2];
-const rules = { attestors: [addrOf(key)], threshold: 1, hrp: "tb" };
+const rules = { attestors: [addrOf(key)], threshold: 1, hrp: "tb", instance };
 check("A new entry chains to the one before it, with whole-second times", d1.prev === ZERO_PREV && d2.prev === ref.destinationHash(e1) && s1 === "2026-11-01T12:00:00Z");
 check("Destination lines, hashes and statements are the reference code's",
   list.every((e) => destinationLine(e) === ref.destinationLine(e) && destinationHash(e) === ref.destinationHash(e) && attestationStatement(e) === ref.attestationStatement(e)));
@@ -94,6 +94,23 @@ check("Permitted or not: the same answer and reason as the reference code, in ev
     && agree(ask(addrOf(outsider), "2026-11-01T12:00:00Z", 0)) && ask(addrOf(outsider), "2026-11-01T12:00:00Z", 0)[0].permitted
     && agree(ask(addrOf(key), "2026-12-30T00:00:00Z", 7)) && !ask(addrOf(key), "2026-12-30T00:00:00Z", 7)[0].permitted
     && agree(ask("tb1qnotonthelist", "2026-12-30T00:00:00Z", 7)));
+// Found by review, 17 November 2026: the list must be this Crowdlock's own,
+// and its attestors the ones the Crowdlock's file names.
+{
+  const other = "9".repeat(64);
+  const { entry: x1, firstSeen } = nextDestination({ instance: other, entries: [] }, { address: addrOf(outsider), text: "Test seller", now: new Date("2026-11-01T12:00:00Z") });
+  const elsewhere = [{ ...x1, attestations: [sign(x1, key)], firstSeen }];
+  const here = (extra = {}) => [destinationIsPermitted, ref.destinationIsPermitted].map((f) => f({ address: addrOf(outsider), entries: elsewhere, opensAt: "2026-11-10T00:00:00Z", minimumAgeDays: 7, ...rules, ...extra }));
+  check("An entry the same attestor signed for another Crowdlock is refused here (and so says the reference code)",
+    here().every((r) => !r.permitted && /different instance/.test(r.reason)) && here({ instance: other }).every((r) => r.permitted));
+  const bare = (args) => [destinationIsPermitted, ref.destinationIsPermitted].map((f) => f({ address: addrOf(outsider), entries: list, opensAt: "2026-11-10T00:00:00Z", minimumAgeDays: 7, ...args }));
+  check("A check given no fingerprint, or no attestors, is refused rather than waved through",
+    bare({ attestors: rules.attestors, threshold: 1, hrp: "tb" }).every((r) => !r.permitted) && bare({ hrp: "tb", instance }).every((r) => !r.permitted));
+  const pub = (k) => Buffer.from(k.publicKey).toString("hex");
+  const a = attestorsOf({ network: "testnet4", attestor_keys: [pub(key)], attestor_threshold: 1, declaration: { sha256: instance } });
+  check("A Crowdlock's attestors are the keys its own file names, as addresses",
+    JSON.stringify(a.attestors) === JSON.stringify([addrOf(key)]) && a.threshold === 1 && a.instance === instance && a.hrp === "tb");
+}
 check("A destination text with a | is refused", throws(() => nextDestination(dfile, { address: addrOf(key), text: "a|b" }), "may not contain"));
 
 // Commitments on the relays.

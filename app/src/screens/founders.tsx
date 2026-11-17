@@ -14,6 +14,7 @@ import {
 import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
   proposalHash, fieldsOf, nextDestination, attestationStatement, destinationIsPermitted, checkProposals, chainIsIntact, attestationsAreValid,
+  attestorsOf,
 } from "../../../method/js/proposals.mjs";
 import { ledgerAppFor } from "../ledgerDevice";
 // @ts-ignore — plain modules shared with the tests
@@ -715,7 +716,10 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const d = c.destinations ?? { entries: [], attestors: [] };
   const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
-  const isAttestor = (d.attestors ?? []).includes(account.address);
+  // Its attestors are the ones its own file names (attestor_keys), never
+  // what the destinations list says of itself.
+  const rules = attestorsOf(c.crowdlock, hrp);
+  const isAttestor = rules.attestors.includes(account.address);
   const path = repoPathOf(c, c.crowdlock.register.destinations);
   const add = async () => {
     setBusy(true); setMsg(null);
@@ -734,9 +738,9 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
             return { address: account.address, signature };
           },
           check: (file: any) => {
-            const ch = chainIsIntact(file.entries);
+            const ch = chainIsIntact(file.entries, rules.instance);
             const last = file.entries[file.entries.length - 1];
-            const att = attestationsAreValid(last, { attestors: file.attestors, threshold: file.threshold, hrp });
+            const att = attestationsAreValid(last, { attestors: rules.attestors, threshold: rules.threshold, hrp });
             return { ok: ch.ok && att.ok, problems: [ch.reason, att.reason].filter(Boolean) };
           },
         });
@@ -781,7 +785,7 @@ function WriteProposal({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: 
   const nowIso = () => new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
   const usable = (d.entries ?? []).filter((e: any) => e.op === "add").filter((e: any) => destinationIsPermitted({
     address: e.address, entries: d.entries, opensAt: nowIso(), minimumAgeDays: c.crowdlock.destination_wait_days,
-    attestors: d.attestors, threshold: d.threshold, hrp,
+    ...attestorsOf(c.crowdlock, hrp),
   }).permitted);
   const draft = (): { p?: any; problem?: string } => {
     const cur = currency.trim();

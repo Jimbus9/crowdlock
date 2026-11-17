@@ -118,6 +118,7 @@ console.log();
 const FEE = 500;
 const COMMIT = Number(LOCKED) - FEE;   // whole coin, so no remainder lock is involved
 const half = commitment.buildCommitment({
+  proposalHash: "0".repeat(64),
   utxo, witnessScript: built.witnessScript, destination: DESTINATION,
   commitSats: COMMIT, feeSats: FEE, ownerKey: owner, network: NETWORK,
 });
@@ -198,6 +199,7 @@ check("The co-signer alone cannot move a coin", !stolen.ok, stolen.reason ?? "IT
 // it does not have the owner's key. This is the property the whole design rests
 // on, so it is worth watching a node refuse it rather than taking it on faith.
 const honest = commitment.buildCommitment({
+  proposalHash: "0".repeat(64),
   utxo: utxo2, witnessScript: built.witnessScript, destination: DESTINATION,
   commitSats: COMMIT, feeSats: FEE, ownerKey: owner, network: NETWORK,
 });
@@ -237,6 +239,7 @@ for (let i = 0; i < N; i++) {
   records.push({
     ...record,
     tx: commitment.buildCommitment({
+  proposalHash: "0".repeat(64),
       utxo: { txid: hex(Buffer.alloc(32, (i % 250) + 1)), vout: i % 4, value: utxo.value },
       witnessScript: built.witnessScript, destination: DESTINATION,
       commitSats: COMMIT, feeSats: FEE, ownerKey: owner, network: NETWORK,

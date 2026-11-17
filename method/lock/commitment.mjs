@@ -20,7 +20,7 @@ import * as ecc from "tiny-secp256k1";
 import { createHash } from "node:crypto";
 import { lockScript, lockAddress } from "./lock.mjs";
 import { isCosignerOf } from "../js/crowdlock.mjs";
-import { verifyMembership } from "../js/verify.mjs";
+import { verifyMembership, memberAddressForOwnerKey } from "../js/verify.mjs";
 
 const { Transaction, script: bscript } = bitcoin;
 
@@ -125,12 +125,15 @@ export function attestationsAreValid(entry, { attestors = [], threshold = 1, hrp
  * Check the hash chain runs unbroken from entry 1 to the head.
  * Returns { ok, reason }.
  */
-export function chainIsIntact(entries) {
+export function chainIsIntact(entries, instance = null) {
   let expected = ZERO_PREV;
-  const instance = entries[0]?.instance;
+  // Every entry names the Crowdlock it was attested for. Given that
+  // Crowdlock's fingerprint, every entry must name it; without one, they
+  // must at least all name the same.
+  const wanted = instance ?? entries[0]?.instance;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
-    if (e.instance !== instance) return { ok: false, reason: `entry ${e.index} belongs to a different instance` };
+    if (e.instance !== wanted) return { ok: false, reason: `entry ${e.index} belongs to a different instance` };
     if (e.index !== i + 1) return { ok: false, reason: `entry at position ${i} has index ${e.index}, expected ${i + 1}` };
     if (e.prev !== expected) return { ok: false, reason: `entry ${e.index} chains to ${e.prev.slice(0, 12)}…, expected ${expected.slice(0, 12)}…` };
     expected = destinationHash(e);
@@ -165,8 +168,21 @@ export function destinationIsPermitted({
   attestors = null,
   threshold = null,
   hrp = "bc",
+  instance = null,
 }) {
-  const chain = chainIsIntact(entries);
+  // The list must be this Crowdlock's own. Each entry carries the fingerprint
+  // of the Crowdlock it was attested for, and until 17 November 2026 nothing
+  // compared it with the Crowdlock doing the checking: an entry the same
+  // attestor had signed for another Crowdlock passed.
+  if (!/^[0-9a-f]{64}$/.test(String(instance ?? ""))) {
+    return { permitted: false, reason: "no Crowdlock fingerprint was supplied, so the list cannot be tied to this Crowdlock" };
+  }
+  // And it must be checked for attestation: with no attestor set this used to
+  // check age only.
+  if (!Array.isArray(attestors) || !Number.isInteger(threshold)) {
+    return { permitted: false, reason: "no attestor set was supplied, so the list cannot be checked for attestation" };
+  }
+  const chain = chainIsIntact(entries, instance);
   if (!chain.ok) return { permitted: false, reason: `the list itself is broken: ${chain.reason}` };
 
   const mine = entries.filter((e) => e.address === address);
@@ -176,14 +192,12 @@ export function destinationIsPermitted({
   const revoked = mine.filter((e) => e.op === "revoke" && e.index > added.index).pop();
   if (revoked) return { permitted: false, reason: `revoked by entry ${revoked.index}` };
 
-  // Attestations are checked on the entry that put this address on the list,
-  // and on the revocation if there is one — a forged revocation is as much an
-  // attack as a forged addition, since it can strand a legitimate purchase.
-  if (attestors !== null || threshold !== null) {
-    const rules = { attestors: attestors ?? [], threshold: threshold ?? 1, hrp };
-    const att = attestationsAreValid(added, rules);
-    if (!att.ok) return { permitted: false, reason: att.reason };
-  }
+  // Attestations are checked on the entry that put this address on the list.
+  // A revocation is believed without them: it can only stop a payment, never
+  // allow one, and whoever can write a revocation into the file can stop a
+  // payment in simpler ways.
+  const att = attestationsAreValid(added, { attestors, threshold, hrp });
+  if (!att.ok) return { permitted: false, reason: att.reason };
 
   if (!added.firstSeen) {
     return {
@@ -301,6 +315,9 @@ export function proposalHash(proposal) {
  * commitSats   how much reaches the destination (output 0)
  * feeSats      taken from the coin; what is left over goes to the remainder
  * remainder    optional { ownerPubkey, cosignerPubkey, locktime } for a new lock
+ * proposalHash the proposal this is for. It goes into the payment itself, as
+ *              the last output (see proposalMarker), so the owner's signature
+ *              covers it.
  */
 export function buildCommitment({
   utxo,
@@ -311,7 +328,9 @@ export function buildCommitment({
   ownerKey,
   remainder = null,
   network,
+  proposalHash,
 }) {
+  if (!/^[0-9a-f]{64}$/.test(String(proposalHash ?? ""))) throw new Error("a commitment names its proposal: proposalHash is needed");
   const leftover = utxo.value - commitSats - feeSats;
   if (leftover < 0) throw new Error("commitSats + feeSats exceeds the lock's value");
   if (leftover > 0 && !remainder) throw new Error("a partial commitment needs a remainder lock");
@@ -327,6 +346,9 @@ export function buildCommitment({
     const back = lockAddress({ ...remainder, network });
     tx.addOutput(back.output, leftover);
   }
+  // Last, the proposal itself: an output that carries no money and can never
+  // be spent, holding the proposal's hash.
+  tx.addOutput(proposalMarker(proposalHash), 0);
 
   const sighash = tx.hashForWitnessV0(0, witnessScript, utxo.value, Transaction.SIGHASH_ALL);
   const ownerSig = bscript.signature.encode(Buffer.from(ownerKey.sign(sighash)), Transaction.SIGHASH_ALL);
@@ -337,6 +359,44 @@ export function buildCommitment({
 
   return { tx, hex: tx.toHex(), sighash, ownerSig };
 }
+
+// ---------------------------------------------------------------------------
+// What a commitment must also be, for the network to take it
+// ---------------------------------------------------------------------------
+
+/**
+ * The output that names the proposal: OP_RETURN and the proposal's 32-byte
+ * hash, carrying no money. It is the last output of every commitment.
+ *
+ * Without it, nothing the owner signed said which proposal the payment was
+ * for: only an address and an amount. A commitment to one proposal could be
+ * relabelled for any other paying the same address, including one made long
+ * after the first had failed. With it, the owner's signature covers the
+ * proposal, and the chain itself carries which purchase each payment was for.
+ */
+export function proposalMarker(proposalHash) {
+  return Buffer.concat([Buffer.from([0x6a, 0x20]), Buffer.from(proposalHash, "hex")]);
+}
+
+/**
+ * The least an output of this kind may hold before the network refuses to
+ * pass the payment on ("dust"). Bitcoin Core's rule: three sats for every
+ * byte the output takes up, counting what it will cost to spend.
+ */
+export function dustFor(script) {
+  const witness = script.length >= 4 && script.length <= 42 && (script[0] === 0x00 || (script[0] >= 0x51 && script[0] <= 0x60)) && script[1] === script.length - 2;
+  return 3 * (8 + 1 + script.length + (witness ? 67 : 148));
+}
+
+// The co-signer's signature is still to come when a commitment is checked:
+// at most this many bytes more.
+const COSIGNER_SIGNATURE_BYTES = 72;
+/** The size the finished payment will have, in virtual bytes, which is what its fee is measured against. */
+export function completedVsize(tx) {
+  return Math.ceil((tx.weight() + COSIGNER_SIGNATURE_BYTES) / 4);
+}
+/** The lowest fee rate the network passes on, in sats per virtual byte. */
+export const MIN_FEE_RATE = 1;
 
 // ---------------------------------------------------------------------------
 // Verifying
@@ -357,7 +417,7 @@ export function verifyCommitment({
   record,                 // { proposal, lock, tx }
   proposal,               // { hash, destination, opensAt }
   destinationEntries = [],
-  destinationRules = null, // { attestors, threshold } — the destinations file's own
+  destinationRules = null, // { attestors, threshold, instance } — used only when no Crowdlock is given
   utxoValue,              // the lock's value, needed to check the signature and the fee
   coinIsUnspent = null,
   network,
@@ -409,23 +469,35 @@ export function verifyCommitment({
   if (!w[3].equals(derived.witnessScript)) return fail("witness script is not the lock's script");
   note("purchase branch, co-signer's slot empty", true);
 
-  // 4. the owner's signature
+  // 4. the owner's signature. Strictly encoded, over the whole payment, and
+  // with a low S value: the network does not pass on a high one.
   const sighash = tx.hashForWitnessV0(0, derived.witnessScript, utxoValue, Transaction.SIGHASH_ALL);
   let sigOk = false;
   try {
     const decoded = bscript.signature.decode(w[2]);
     sigOk = decoded.hashType === Transaction.SIGHASH_ALL &&
-      ecc.verify(sighash, Buffer.from(record.lock.owner_pubkey, "hex"), decoded.signature);
+      ecc.verify(sighash, Buffer.from(record.lock.owner_pubkey, "hex"), decoded.signature, true);
   } catch { sigOk = false; }
   if (!sigOk) return fail("the owner's signature does not verify over this transaction");
   note("owner's signature verifies", true);
 
-  // 5. no declared locktime
+  // 5. no declared locktime, and nothing else that would keep it out of a
+  // block. The owner's signature covers the version and the sequence number,
+  // so a commitment that gets these wrong can never be put right by anyone
+  // else: it would count toward a target and never be payable.
   if (tx.locktime !== 0) return fail(`declares nLockTime ${tx.locktime}, must be 0`);
-  note("declares no locktime", true);
+  if (tx.version !== 1 && tx.version !== 2) return fail(`is transaction version ${tx.version}, which the network does not pass on — must be 1 or 2`);
+  if ((tx.ins[0].sequence & 0x80000000) === 0) return fail("its sequence number sets a waiting period before it could be mined — it must set none");
+  note("declares no locktime and no waiting period", true);
 
-  // 6. output 0 pays the proposal's destination, which must be permitted
-  if (tx.outs.length < 1 || tx.outs.length > 2) return fail(`${tx.outs.length} outputs, must be 1 or 2`);
+  // 6. the last output names this proposal, inside what the owner signed;
+  // output 0 pays the proposal's destination, which must be permitted
+  if (tx.outs.length < 2 || tx.outs.length > 3) return fail(`${tx.outs.length} outputs, must be 2 or 3`);
+  const marker = tx.outs[tx.outs.length - 1];
+  if (!marker.script.equals(proposalMarker(proposal.hash)) || marker.value !== 0) {
+    return fail("the payment does not name this proposal inside it — it could have been signed for another");
+  }
+  note("the payment itself names this proposal", true);
   let out0;
   try { out0 = bitcoin.address.fromOutputScript(tx.outs[0].script, network); }
   catch { return fail("output 0 is not a recognisable address"); }
@@ -437,7 +509,14 @@ export function verifyCommitment({
   // against a weaker rule than the list publishes. Passing the entries alone,
   // with no attestor set, is refused rather than quietly checked for age
   // only — an unattested list is the attack this is here to stop.
-  const rules = destinationRules ?? {};
+  //
+  // Given the Crowdlock's file, the attestors are the ones IT names
+  // (attestor_keys), whatever the destinations file says about itself: a
+  // list must not be able to appoint its own attestors.
+  const hrpHere = network?.bech32 ?? "bc";
+  const rules = crowdlock
+    ? { attestors: (crowdlock.attestor_keys ?? []).map((k) => memberAddressForOwnerKey(k, hrpHere)), threshold: crowdlock.attestor_threshold, instance: crowdlock.declaration?.sha256 }
+    : (destinationRules ?? {});
   if (!Array.isArray(rules.attestors) || rules.threshold === undefined) {
     return fail("no attestor set was supplied, so the destinations list cannot be checked for attestation");
   }
@@ -448,18 +527,20 @@ export function verifyCommitment({
     minimumAgeDays,
     attestors: rules.attestors,
     threshold: rules.threshold,
+    instance: rules.instance,
     // An attestor's address is written in the prefix of the network this
     // Crowdlock runs on. Checking a testnet attestation against mainnet
     // rules derives a different address and reports, misleadingly, that the
     // signature belongs to somebody else.
-    hrp: network?.bech32 ?? "bc",
+    hrp: hrpHere,
   });
   if (!permitted.permitted) return fail(`destination not permitted: ${permitted.reason}`);
   note("destination is attested and on the published list", true);
 
   // 7. the remainder, if any, goes back into a lock the owner still cannot escape
   const committedSats = tx.outs[0].value;
-  if (tx.outs.length === 2) {
+  if (committedSats < dustFor(tx.outs[0].script)) return fail(`commits ${committedSats} sats, too little for the network to pass on`);
+  if (tx.outs.length === 3) {
     const r = record.remainder;
     if (!r) return fail("has a second output but no remainder lock declared to check it against");
     let back;
@@ -475,6 +556,7 @@ export function verifyCommitment({
     if (r.owner_pubkey !== record.lock.owner_pubkey) return fail("remainder lock has a different owner — this would move coins out of the owner's hands");
     if (r.locktime < record.lock.locktime) return fail("remainder lock expires earlier than the lock being spent — an early escape");
     if (crowdlock && !isCosignerOf(crowdlock, r.cosigner_pubkey)) return fail("remainder lock is co-signed by a different Crowdlock");
+    if (tx.outs[1].value < dustFor(tx.outs[1].script)) return fail(`returns ${tx.outs[1].value} sats to the lock, too little for the network to pass on`);
     note("remainder returns to the owner's own lock, no earlier", true);
   }
 
@@ -485,6 +567,8 @@ export function verifyCommitment({
   if (fee > committedSats * maxFee) {
     return fail(`fee of ${fee} sats is more than ${maxFee * 100}% of the ${committedSats} committed — refusing in case of a client bug`);
   }
+  const least = completedVsize(tx) * MIN_FEE_RATE;
+  if (fee < least) return fail(`fee of ${fee} sats is below the ${least} the network needs to pass this payment on`);
   note("fee is sane", true, `${fee} sats`);
 
   // 8. still unspent

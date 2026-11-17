@@ -500,11 +500,12 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   const verifyArgs = (record, utxoValue) => ({
     record, utxoValue, network: net.network,
     proposal: { hash: pHash, destination, opensAt: proposal.opens },
-    destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1 },
+    destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE },
   });
 
   // A fan locks, then commits part of the lock.
-  const fan = accountFromWords(newWords(), net);
+  const fanWords = newWords();
+  const fan = accountFromWords(fanWords, net);
   await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 500_000n, feeRate: 2 })).hex);
   await rpc("generatetoaddress", [1, miner.address]);
   const FT = (await chain.medianTime()) + 30 * 86400;
@@ -603,7 +604,9 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
 
   // The app's own commitment checker gives the reference checker's verdicts.
   const { checkCommitment, completeCommitmentWith } = await import("../src/wallet/core.mjs");
-  const cl = { name: "Test", cosigner_keys: [coKey5], destination_wait_days: 7, max_commitment_fee: 0.01 };
+  // The attestors are the ones the Crowdlock's own file names, and the list is tied to its fingerprint.
+  const cl = { name: "Test", network: "regtest", cosigner_keys: [coKey5], destination_wait_days: 7, max_commitment_fee: 0.01,
+    attestor_keys: [attestor.publicKey], attestor_threshold: 1, declaration: { sha256: INSTANCE } };
   const destFile = { attestors: [attestor.address], threshold: 1, entries: [entry] };
   const appProposal = { hash: pHash, destination, opens: proposal.opens };
   await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 300_000n, feeRate: 2 })).hex);
@@ -625,19 +628,77 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     "a remainder that expires sooner": { ...good, remainder: { ...good.remainder, locktime: good.lock.locktime - 1 } },
     "a co-signer from another Crowdlock": { ...good, lock: { ...good.lock, cosigner_pubkey: otherOwner.publicKey } },
   };
+  // What a review found (17 November 2026): each of these is a commitment the
+  // owner really signed, which used to count and could never have been paid,
+  // or could have been counted for a proposal its owner never chose. They are
+  // the good one with one thing changed, signed again with the fan's own key.
+  const fanKey = ECPair.fromPrivateKey(Buffer.from(BIP32.fromSeed(mnemonicToSeedSync(fanWords), net.network).derivePath(`m/84'/${net.coin}'/0'/0/0`).privateKey));
+  const lock2Script = (await import("../../method/lock/lock.mjs")).lockScript({ fanPubkey: Buffer.from(fan.publicKey, "hex"), cosignerPubkey: Buffer.from(coKey5, "hex"), locktime: FT2 });
+  const remade = (change, { highS = false } = {}) => {
+    const tx = bitcoinjs.Transaction.fromHex(good.tx);
+    change(tx);
+    const sighash = tx.hashForWitnessV0(0, lock2Script, c3.value, bitcoinjs.Transaction.SIGHASH_ALL);
+    let sig = Buffer.from(fanKey.sign(sighash));
+    if (highS) {
+      const N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+      sig = Buffer.concat([sig.subarray(0, 32), Buffer.from((N - BigInt("0x" + sig.subarray(32).toString("hex"))).toString(16).padStart(64, "0"), "hex")]);
+    }
+    tx.setWitness(0, [Buffer.alloc(0), Buffer.alloc(0), bitcoinjs.script.signature.encode(sig, bitcoinjs.Transaction.SIGHASH_ALL), lock2Script]);
+    return { ...good, tx: tx.toHex() };
+  };
+  check("The fan's key, derived here, is the one the app signs with", Buffer.from(fanKey.publicKey).toString("hex") === fan.publicKey);
+  Object.assign(variants, {
+    "the good one signed again, unchanged": remade(() => {}),
+    "a waiting period in its sequence number": remade((tx) => { tx.ins[0].sequence = 0x0000ffff; }),
+    "a version the network does not pass on": remade((tx) => { tx.version = 7; }),
+    "a high-S signature": remade(() => {}, { highS: true }),
+    "no proposal inside the payment": remade((tx) => { tx.outs.pop(); }),
+    "a proposal marker carrying money": remade((tx) => { tx.outs[2].value = 1; tx.outs[1].value -= 1; }),
+    "a remainder under what a lock output needs": remade((tx) => { const spare = tx.outs[1].value - 300; tx.outs[1].value = 300; tx.outs[0].value += spare; }),
+    "a fee below what the network needs": remade((tx) => { tx.outs[1].value += (c3.value - tx.outs.reduce((n, o) => n + o.value, 0)) - 50; }),
+  });
   let agreeAll = true; const disagree = [];
   for (const [name, rec] of Object.entries(variants)) {
     const app = await checkCommitment({ record: rec, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
     const refv = C.verifyCommitment({ record: rec, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
-      proposal: { hash: pHash, destination, opensAt: proposal.opens }, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1 } });
+      proposal: { hash: pHash, destination, opensAt: proposal.opens }, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE } });
     if (app.valid !== refv.valid || (!app.valid && app.reason !== refv.reason)) { agreeAll = false; disagree.push(`${name}: app "${app.reason}" vs ref "${refv.reason}"`); }
   }
   check("The app's commitment checker gives the reference checker's verdict and reason, good and tampered", agreeAll, disagree.join(" | "));
   const appGood = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
   check("…and counts what a good one commits", appGood.valid && appGood.committedSats === 100_000, appGood.reason);
+  check("…naming the coin it spends, so a pile can count each coin once", appGood.coin === `${c3.txid}:${c3.vout}`, appGood.coin);
+  {
+    // Relabelled: the same signed payment, offered for another proposal that pays the same address.
+    const other = C.proposalHash({ ...proposal, document: "e".repeat(64) });
+    const relabelled = { ...good, proposal: other };
+    const app = await checkCommitment({ record: relabelled, crowdlock: cl, proposal: { ...appProposal, hash: other }, destinations: destFile, chain, network: net });
+    const refv = C.verifyCommitment({ record: relabelled, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
+      proposal: { hash: other, destination, opensAt: proposal.opens }, destinationEntries: [entry] });
+    check("A commitment relabelled for another proposal paying the same address is refused, by the app and the reference alike",
+      !app.valid && !refv.valid && app.reason === refv.reason && /does not name this proposal inside it/.test(app.reason), `${app.reason} | ${refv.reason}`);
+    // A list that names its own attestors: only the Crowdlock's file counts.
+    const impostor = accountFromWords(newWords(), net);
+    const forgedEntry = { ...entry0, attestations: [{ address: impostor.address, signature: signStatement(impostor, C.attestationStatement(entry0)) }] };
+    const selfAppointed = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: { attestors: [impostor.address], threshold: 1, entries: [forgedEntry] }, chain, network: net });
+    check("A destinations list attested by somebody it names itself, not the Crowdlock's file, is refused", !selfAppointed.valid && /not a listed attestor/.test(selfAppointed.reason), selfAppointed.reason);
+    const elsewhere0 = { ...entry0, instance: "7".repeat(64) };
+    const elsewhere = { ...elsewhere0, attestations: [{ address: attestor.address, signature: signStatement(attestor, C.attestationStatement(elsewhere0)) }] };
+    const crossed = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: { entries: [elsewhere] }, chain, network: net });
+    check("A destination the same attestor signed for another Crowdlock is refused", !crossed.valid && /different instance/.test(crossed.reason), crossed.reason);
+  }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");
   const finished = await completeCommitmentWith({ words: coWords5, record: good, chain });
+  {
+    // The fee is sized for the payment as it is finally sent: two signatures,
+    // and the output naming the proposal. Until 17 November 2026 it was sized
+    // for a smaller payment and came out under the rate asked for.
+    const done = bitcoinjs.Transaction.fromHex(finished);
+    const paidFee = c3.value - done.outs.reduce((n, o) => n + o.value, 0);
+    const rate = paidFee / done.virtualSize();
+    check("A commitment's fee is at least the rate asked for, measured on the finished payment", rate >= 2 && rate < 2.1, `${paidFee} sats for ${done.virtualSize()} vbytes, asked 2 sat/vB`);
+  }
   await chain.broadcast(finished);
   await rpc("generatetoaddress", [1, miner.address]);
   const paid3 = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);

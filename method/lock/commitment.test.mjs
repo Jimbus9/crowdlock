@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { ECPair, lockAddress, networkFor } from "./lock.mjs";
 import {
-  buildCommitment, verifyCommitment, completeCommitment,
+  buildCommitment, verifyCommitment, completeCommitment, dustFor,
   destinationLine, destinationHash, attestationStatement, attestationsAreValid,
   proposalLine, proposalHash,
   chainIsIntact, destinationIsPermitted, ZERO_PREV, MAX_FEE_FRACTION,
@@ -94,7 +94,7 @@ const LIST = [e1, e2];
 // hrp: these fixtures are testnet, and an attestor's address carries its
 // network's prefix. Checking a tb1q attestation under mainnet rules derives a
 // different address and blames the signer.
-const RULES = { attestors: ATTESTORS, threshold: 1, hrp: NETWORK.bech32 };
+const RULES = { attestors: ATTESTORS, threshold: 1, hrp: NETWORK.bech32, instance: INSTANCE };
 
 const PROPOSAL_OPENS = "2026-11-21T00:00:00Z"; // 20 days after e1, 1 day after e2
 
@@ -265,6 +265,7 @@ const COMMIT = 400_000;
 const FEE = 300;
 
 const built = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: DEST,
   commitSats: COMMIT, feeSats: FEE, ownerKey,
   remainder: { fanPubkey: ownerPubkey, cosignerPubkey, locktime: LOCKTIME },
@@ -322,6 +323,7 @@ rejects("A record naming a different proposal",
 
 // tampered destination
 const toOther = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: OTHER,
   commitSats: COMMIT, feeSats: FEE, ownerKey,
   remainder: { fanPubkey: ownerPubkey, cosignerPubkey, locktime: LOCKTIME },
@@ -341,6 +343,7 @@ rejects("Pays a destination that has not waited out its period",
 // a destination nobody attested
 const UNLISTED = bitcoin.payments.p2wpkh({ pubkey: ownerPubkey, network: NETWORK }).address;
 const toUnlisted = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: UNLISTED,
   commitSats: COMMIT, feeSats: FEE, ownerKey,
   remainder: { fanPubkey: ownerPubkey, cosignerPubkey, locktime: LOCKTIME },
@@ -377,6 +380,7 @@ rejects("A commitment against a list attested by an outsider",
 
 // forged owner signature
 const forged = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: DEST,
   commitSats: COMMIT, feeSats: FEE, ownerKey: strangerKey,
   remainder: { fanPubkey: ownerPubkey, cosignerPubkey, locktime: LOCKTIME },
@@ -397,6 +401,7 @@ rejects("A lock whose owner key is also the co-signer key",
 
 // an absurd fee
 const greedy = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: DEST,
   commitSats: 10_000, feeSats: 990_000, ownerKey, network: NETWORK,
 });
@@ -405,6 +410,7 @@ rejects(`A fee above ${MAX_FEE_FRACTION * 100}% of the committed amount`,
 
 // a remainder that escapes the lock early
 const escapeEarly = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: DEST,
   commitSats: COMMIT, feeSats: FEE, ownerKey,
   remainder: { fanPubkey: ownerPubkey, cosignerPubkey, locktime: LOCKTIME - 100_000 },
@@ -419,6 +425,7 @@ rejects("Remainder goes to a lock that expires EARLIER",
 
 // a remainder that goes to somebody else
 const escapeToStranger = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: DEST,
   commitSats: COMMIT, feeSats: FEE, ownerKey,
   remainder: { fanPubkey: Buffer.from(strangerKey.publicKey), cosignerPubkey, locktime: LOCKTIME },
@@ -488,14 +495,18 @@ rule();
 // The Kop Fund's own file, given this test's co-signer. A second Crowdlock with
 // a different co-signer. The commitment above belongs to the first only.
 const kop = JSON.parse(readFileSync(new URL("../fixtures/the-kop-fund/crowdlocks/kop-fund.json", import.meta.url), "utf8"));
-const ours = { ...kop, cosigner_keys: [cosignerPubkey.toString("hex")] };
-const theirs = { ...kop, name: "Another Crowdlock", cosigner_keys: [Buffer.from(strangerKey.publicKey).toString("hex")] };
+// Its attestors are the ones its own file names (attestor_keys), whatever a
+// destinations file says about itself.
+const attestorKeys = [attestorKeyA, attestorKeyB].map((k) => Buffer.from(k.publicKey).toString("hex"));
+const ours = { ...kop, cosigner_keys: [cosignerPubkey.toString("hex")], attestor_keys: attestorKeys, attestor_threshold: 1 };
+const theirs = { ...kop, name: "Another Crowdlock", cosigner_keys: [Buffer.from(strangerKey.publicKey).toString("hex")], attestor_keys: attestorKeys, attestor_threshold: 1 };
 
 const mine = verifyWith(record, { crowdlock: ours });
 check("Verifies under the Crowdlock that co-signs it", mine.valid, true, mine.reason || ours.name);
 rejects("Refused by a Crowdlock with a different co-signer",
   verifyWith(record, { crowdlock: theirs }), "belongs to a different Crowdlock");
 const leaksAcross = buildCommitment({
+  proposalHash: PROPOSAL.hash,
   utxo, witnessScript: lock.witnessScript, destination: DEST,
   commitSats: COMMIT, feeSats: FEE, ownerKey,
   remainder: { fanPubkey: ownerPubkey, cosignerPubkey: Buffer.from(strangerKey.publicKey), locktime: LOCKTIME },
@@ -510,6 +521,73 @@ rejects("The Crowdlock's own fee cap is used, not the default",
   verifyWith(record, { crowdlock: { ...ours, max_commitment_fee: 0.0005 } }), "refusing in case of a client bug");
 rejects("The Crowdlock's own destination wait is used, not the default",
   verifyWith(record, { crowdlock: { ...ours, destination_wait_days: 10_000 } }), "needs 10000");
+
+// ---------------------------------------------------------------------------
+// Found by review, 17 November 2026. Each of these used to pass.
+// ---------------------------------------------------------------------------
+
+line();
+rule();
+line("WHAT A REVIEW FOUND, AND NOW REFUSES");
+rule();
+
+/** The good commitment with something changed, signed again by the owner so only the change is at fault. */
+const remade = (change, { highS = false } = {}) => {
+  const tx = bitcoin.Transaction.fromHex(built.hex);
+  change(tx);
+  const sighash = tx.hashForWitnessV0(0, lock.witnessScript, utxo.value, bitcoin.Transaction.SIGHASH_ALL);
+  let sig = Buffer.from(ownerKey.sign(sighash));
+  if (highS) {
+    const N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+    sig = Buffer.concat([sig.subarray(0, 32), Buffer.from((N - BigInt("0x" + sig.subarray(32).toString("hex"))).toString(16).padStart(64, "0"), "hex")]);
+  }
+  tx.setWitness(0, [Buffer.alloc(0), Buffer.alloc(0), bitcoin.script.signature.encode(sig, bitcoin.Transaction.SIGHASH_ALL), lock.witnessScript]);
+  return { ...record, tx: tx.toHex() };
+};
+check("The same commitment, signed again unchanged, still verifies", verifyWith(remade(() => {})).valid, true);
+
+// Relabelling: the proposal is inside what the owner signed.
+const OTHER_PROPOSAL = { ...PROPOSAL, hash: createHash("sha256").update("another proposal paying the same address").digest("hex") };
+rejects("A commitment relabelled for another proposal paying the same address",
+  verifyCommitment({ record: { ...record, proposal: OTHER_PROPOSAL.hash }, proposal: OTHER_PROPOSAL, destinationEntries: LIST, destinationRules: RULES, utxoValue: utxo.value, network: NETWORK }),
+  "does not name this proposal inside it");
+rejects("A payment with no proposal in it at all (the old format)",
+  verifyWith(remade((tx) => { tx.outs.pop(); })), "does not name this proposal inside it");
+rejects("A proposal marker carrying money",
+  verifyWith(remade((tx) => { tx.outs[2].value = 1; tx.outs[1].value -= 1; })), "does not name this proposal inside it");
+check("The marker is OP_RETURN and the proposal's 32-byte hash, last, holding nothing",
+  built.tx.outs[2].script.toString("hex") === "6a20" + PROPOSAL.hash && built.tx.outs[2].value === 0, true);
+
+// Never payable: the signature covers these, so nobody else can put them right.
+rejects("A sequence number that sets a waiting period (about 15 months)",
+  verifyWith(remade((tx) => { tx.ins[0].sequence = 0x0000ffff; })), "waiting period");
+rejects("A transaction version the network does not pass on",
+  verifyWith(remade((tx) => { tx.version = 7; })), "version 7");
+rejects("An owner's signature with a high S value",
+  verifyWith(remade(() => {}, { highS: true })), "signature does not verify");
+rejects("A commitment of less than the network passes on (dust)",
+  verifyWith(remade((tx) => { tx.outs[1].value += tx.outs[0].value - 200; tx.outs[0].value = 200; })), "too little for the network");
+rejects("A remainder of 300 sats, under the 330 a lock output needs",
+  verifyWith(remade((tx) => { const spare = tx.outs[1].value - 300; tx.outs[1].value = 300; tx.outs[0].value += spare; })), "too little for the network");
+rejects("A fee below what the network needs to pass it on",
+  verifyWith(remade((tx) => { tx.outs[1].value += FEE - 100; })), "below the");
+check("dustFor: 294 for a plain segwit address, 330 for a lock, 546 for an old-style address",
+  dustFor(bitcoin.address.toOutputScript(DEST, NETWORK)) === 294 && dustFor(lock.output) === 330 && dustFor(Buffer.from("76a914" + "00".repeat(20) + "88ac", "hex")) === 546, true);
+
+// The destinations list is this Crowdlock's, and its attestors are the Crowdlock's.
+const elsewhere = [attested({ ...e1, instance: OTHER_INSTANCE, attestations: undefined })];
+const crossed = destinationIsPermitted({ address: DEST, entries: elsewhere, opensAt: PROPOSAL_OPENS, ...RULES });
+check("An entry the same attestor signed for another Crowdlock is refused", crossed.permitted, false, crossed.reason);
+check("…though it is a perfectly good list for that other Crowdlock",
+  destinationIsPermitted({ address: DEST, entries: elsewhere, opensAt: PROPOSAL_OPENS, ...RULES, instance: OTHER_INSTANCE }).permitted, true);
+check("A check given no fingerprint is refused, not waved through",
+  destinationIsPermitted({ address: DEST, entries: LIST, opensAt: PROPOSAL_OPENS, attestors: ATTESTORS, threshold: 1, hrp: NETWORK.bech32 }).permitted, false);
+check("A check given no attestors is refused, not checked for age only",
+  destinationIsPermitted({ address: DEST, entries: LIST, opensAt: PROPOSAL_OPENS, hrp: NETWORK.bech32, instance: INSTANCE }).permitted, false);
+const outsiderList = [{ ...e1, attestations: [attest(e1, outsiderKey)] }];
+rejects("A list attested by somebody the Crowdlock's file does not name, even when the list names them itself",
+  verifyCommitment({ record, proposal: PROPOSAL, destinationEntries: outsiderList, destinationRules: { attestors: [OUTSIDER], threshold: 1, instance: INSTANCE },
+    utxoValue: utxo.value, network: NETWORK, crowdlock: ours }), "not a listed attestor");
 
 line();
 rule();

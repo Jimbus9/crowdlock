@@ -260,10 +260,12 @@ const ev = (id, created_at) => ({ id, created_at });
   const FUNDING = "ab".repeat(32), VALUE = 500000;
   const COIN = `${FUNDING}:0`;
 
-  const unsigned = () => {
+  const PROPOSAL = "5e".repeat(32);
+  const unsigned = (proposal = PROPOSAL) => {
     const tx = new Transaction(); tx.version = 2; tx.locktime = 0;
     tx.addInput(Buffer.from(FUNDING, "hex").reverse(), 0, 0xfffffffd);
     tx.addOutput(Buffer.from("0014" + "11".repeat(20), "hex"), 499000n);
+    tx.addOutput(Buffer.from("6a20" + proposal, "hex"), 0n); // the output naming the proposal
     return tx;
   };
   const der = (compact, hashType = Transaction.SIGHASH_ALL) => bscript.signature.encode(Buffer.from(compact), hashType);
@@ -276,7 +278,7 @@ const ev = (id, created_at) => ({ id, created_at });
   const commitment = async (opts = {}) => {
     const tx = unsigned();
     tx.setWitness(0, [Buffer.alloc(0), Buffer.alloc(0), opts.ownerSig ?? await sigBy(ownerPriv, tx, opts), script]);
-    return { proposal: "p", lock, tx: tx.toHex() };
+    return { proposal: PROPOSAL, lock, tx: tx.toHex() };
   };
   const completion = async (record, coSig) => {
     const tx = Transaction.fromHex(record.tx);
@@ -289,6 +291,10 @@ const ev = (id, created_at) => ({ id, created_at });
   const real = await commitment();
   check("A commitment its lock's owner signed is recognised", ownerSigned(real, coins).ok === true && coinOf(real.tx) === COIN);
   const junkSig = await commitment({ ownerSig: der(Buffer.concat([Buffer.alloc(31), Buffer.from([1]), Buffer.alloc(31), Buffer.from([1])])) });
+  let asked = 0;
+  const counting = new Proxy(coins, { get: (t, k) => { asked++; return t[k]; } });
+  check("One relabelled for another proposal is refused, before the explorer is asked anything",
+    /does not name this proposal/.test(ownerSigned({ ...real, proposal: "6f".repeat(32) }, counting).reason) && asked === 0);
   check("One with a made-up signature is not", ownerSigned(junkSig, coins).ok === false, ownerSigned(junkSig, coins).reason);
   check("One signed by somebody else is not", ownerSigned(await commitment({ ownerSig: await sigBy(coPriv, unsigned()) }), coins).ok === false);
   check("One signed for a different amount than the coin holds is not", ownerSigned(await commitment({ value: VALUE + 1 }), coins).ok === false);

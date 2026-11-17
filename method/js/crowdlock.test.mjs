@@ -136,6 +136,22 @@ refuses("A register file naming another declaration",
 refuses("A destinations list from another Crowdlock",
   checkRegisterFiles(kop, { destinations: { ...jsonFix("destinations.json"), instance: "e".repeat(64) } }), "different Crowdlock");
 
+// Found by review, 17 November 2026: a list could name its own attestors,
+// and an entry attested for another Crowdlock was accepted.
+{
+  const key = "02" + "ab".repeat(32);
+  const withAttestor = { ...kop, attestor_keys: [key] };
+  const own = { ...jsonFix("destinations.json"), attestors: [] };
+  refuses("A destinations list naming attestors the Crowdlock's file does not",
+    checkRegisterFiles(kop, { destinations: { ...own, attestors: ["bc1qsomebodyelse"] } }), "not the ones the Crowdlock's file names");
+  refuses("…or leaving out one it does",
+    checkRegisterFiles(withAttestor, { destinations: own }), "not the ones the Crowdlock's file names");
+  check("A list whose attestors are the Crowdlock's own agrees with it",
+    checkRegisterFiles(kop, { destinations: own }).ok);
+  refuses("A destinations list holding an entry attested for another Crowdlock",
+    checkRegisterFiles(kop, { destinations: { ...own, entries: [{ instance: "e".repeat(64), index: 1 }] } }), "attested for a different Crowdlock");
+}
+
 const woods = {
   ...kop, name: "A woodland",
   declaration: { ...kop.declaration, title: "Woodland Declaration", sha256: "d".repeat(64) },

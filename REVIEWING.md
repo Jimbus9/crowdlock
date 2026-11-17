@@ -6,7 +6,7 @@ Crowdlock is a method for a fund that nobody pools money into: each fan locks th
 
 ## If you have an hour, read these, in this order
 
-1. **The commitment's witness, which is laid out by hand.** A commitment is half a transaction: the owner signs, and the co-signer's place is left empty until settlement. The Bitcoin library we use will not finish half a transaction, so the witness stack is assembled in our own code: `[co-signer's signature, empty, owner's signature, script]`. It is built, checked and completed in `method/lock/commitment.mjs` (`buildCommitment`, `verifyCommitment`, `completeCommitment`) and again in the app in `app/src/wallet/core.mjs` (`buildCommitment`, `checkCommitment`, `completeCommitmentWith`). The signatures themselves are the libraries'. This is the code most likely to hold a mistake that costs money.
+1. **The commitment, which is laid out by hand.** A commitment is half a transaction: the owner signs, and the co-signer's place is left empty until settlement. Its last output names the proposal it is for, so the owner's signature covers that too (`spec/commitment-format.md`, version 2). The Bitcoin library we use will not finish half a transaction, so the witness stack is assembled in our own code: `[co-signer's signature, empty, owner's signature, script]`. It is built, checked and completed in `method/lock/commitment.mjs` (`buildCommitment`, `verifyCommitment`, `completeCommitment`) and again in the app in `app/src/wallet/core.mjs` (`buildCommitment`, `checkCommitment`, `completeCommitmentWith`). The signatures themselves are the libraries'. This is the code most likely to hold a mistake that costs money.
 2. **The lock script.** 79 bytes, two exits, in `method/lock/lock.mjs`. Everything else rests on it.
 3. **Where the app keeps recovery words.** `app/src/storage.ts` and `signingAccount` in `app/src/screens/shared.tsx`. The words sit in the phone's keystore and are read only at the moment of signing, behind the phone's fingerprint or face check. This code is new (16 November 2026).
 4. **What the repository's inbox accepts without being asked.** `method/js/inbox.mjs`, `method/js/proposals.mjs` and `method/relay/inbox.mjs`. Anyone can post a record to the relays; this code decides what reaches the register and each proposal's pile.
@@ -40,6 +40,8 @@ Crowdlock is a method for a fund that nobody pools money into: each fan locks th
 | Proposals, destinations, the pile, the co-signer's notice (browser-safe) | `method/js/proposals.mjs` |
 | The co-signer's public record of early releases | `method/js/release.mjs` |
 | Relay inbox judgement and job | `method/js/inbox.mjs`, `method/relay/inbox.mjs`, `method/relay/nostr.mjs` |
+| What the inbox checks about a commitment's signatures, and how it sends a completed payment | `method/relay/signed.mjs` |
+| Whether a record on a register really is a lock | `lockIsGenuine` in `method/js/lockrecord.mjs` |
 | Making and restoring a co-signer key on a computer | `method/cosigner/generate.mjs`, `method/cosigner/restore.mjs` |
 | App wallet (keys, spends, relock, commitments, co-signing) | `app/src/wallet/core.mjs` |
 | App: where recovery words are kept and read | `app/src/storage.ts`, `signingAccount` in `app/src/screens/shared.tsx` |
@@ -82,7 +84,22 @@ Be careful not to overstate any of this.
 - **Built and tested, but never run on a live network:** the taproot variant. It is not used.
 - **Tried by hand on testnet4 (November 2026), not by an automated test:** a proposal funded and settled end to end through the app; a proposal that fell short, declared dead by the co-signer; a Ledger Nano X locking, committing and taking a lock home, in the app and on The Kop Fund's website; a new version of a declaration published and signed again by a member.
 - **Real bitcoin: one lock.** The founder locked 0.00250863 BTC on 10 November 2026, until 11 November 2027, from the app with a Ledger. Nothing else has been done with real money: no lock has been taken home, and nothing has been committed or settled. Nobody else should lock real bitcoin until this review is done.
-- **Not reviewed by anyone outside this project.** That is why we are asking. The project has read its own code line by line, with an AI assistant, on 16 November 2026: the app's wallet module, its explorer code and its Ledger adapter, and the method's code under `method/lock`, `method/js`, `method/relay` and `method/cosigner`. That is the author checking its own work, not a review.
+- **Not reviewed by anyone outside this project.** That is why we are asking. The project has read its own code line by line, with an AI assistant, on 16 November 2026: the app's wallet module, its explorer code and its Ledger adapter, and the method's code under `method/lock`, `method/js`, `method/relay` and `method/cosigner`. A second AI tool reviewed both repositories separately on 17 November. That is the author checking its own work, not a review. What the two found is listed next, because it shows the kind of mistake this code has had in it.
+
+## What our own reviews found, and what changed (17 November 2026)
+
+Every one of these was reproduced before it was fixed, and each fix has a test that fails on the old code.
+
+- **A commitment could be relabelled for another proposal.** The proposal was named beside the payment, not inside what the owner signed. The payment now carries the proposal's hash in its last output (commitment format, version 2).
+- **A commitment could pass every check and never be payable:** an unusual transaction version, a sequence number that sets a waiting period, a high-S signature, an output or a fee too small for the network to pass on. All are refused now.
+- **Two commitments spending the same coin both counted** toward a proposal. The earlier now stands, as the spec always said.
+- **A register's total believed the register.** Any address a record named was counted. A record now counts only if its address is the lock its own terms make, co-signed by this Crowdlock (`lockIsGenuine`).
+- **A destinations list could name its own attestors,** and an entry attested for another Crowdlock was accepted. The attestors are now the ones the Crowdlock's file names, and every entry must carry its fingerprint.
+- **The relay inbox never sent a completed payment.** It asked the explorer a question that is answered "yes" for any payment, and marked every one sent. It also took unsigned records: five were enough to shut a member out of a proposal, and a fake completion posted first blocked the real one. It now sends, and checks the owner's signature on a commitment and both signatures on a completion.
+- **The website's lock planner used the oldest co-signer key,** not the newest. **Its Commit page believed any "declared dead" notice.** **Its "Check it" button did nothing.** All fixed in The Kop Fund's repository.
+- **The app's Take it home needed the Crowdlock's website.** A lock's terms are now kept on the phone, and a lock can be taken home from them when the Crowdlock cannot be loaded.
+- **The anchor checker called any proof that named a block finished.** It now checks the block.
+- **A commitment's fee was sized for a smaller payment** than the one sent, and came out about a tenth under the rate asked for.
 
 ## Limits we already know about
 

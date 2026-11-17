@@ -59,11 +59,12 @@ export type Go = (s: Screen) => void;
 export type Loaded = { ok: true; url: string; crowdlock: any; declarationText: string; versions: any[]; statement: string; register: any; destinations: any; proposals: any[]; proposalProblems: string[] }
   | { ok: false; url: string; problems: string[] };
 
-export type LockTerms = { address: string; locktime: number; cosignerPubkey: string };
+export type LockTerms = { address: string; locktime: number; cosignerPubkey: string; cosignerXpub?: string; name?: string };
 
 export type LockRow = LockTerms & { state: string; confirmed: bigint; arriving: bigint; onRegister: boolean; note?: string };
 
-export type MyLock = { crowdlock: string; name: string; address: string; locktime: number; state: string; confirmed: bigint; arriving: bigint };
+// `offline`: its Crowdlock couldn't be loaded, and it is shown from the terms this phone kept.
+export type MyLock = { crowdlock: string; name: string; address: string; locktime: number; state: string; confirmed: bigint; arriving: bigint; offline?: boolean };
 
 export type HomeAlert = { url: string; name: string; kind: "keys" | "version" };
 
@@ -352,7 +353,9 @@ const SPEED_WHEN: Record<FeeSpeed, string> = { slow: "about an hour", normal: "a
 // real payments: taking one lock payment home is 122, and so is committing
 // all of one; a new lock as the destination adds 12; keeping part of a lock
 // back adds 43; each waiting payment swept in adds 68.
-export const VB_HOME = 122, VB_AGAIN = 134, VB_WAITING = 68, VB_COMMIT = 122, VB_COMMIT_PART = 165;
+// A commitment leaves a lock with two signatures and carries one more output,
+// naming its proposal: 183 vbytes for a whole lock, 226 for part of one.
+export const VB_HOME = 122, VB_AGAIN = 134, VB_WAITING = 68, VB_COMMIT = 183, VB_COMMIT_PART = 226;
 
 /** The fee rate at the chosen speed, and a way to read it again after the speed changes. */
 export function useFeeRate(): [number | null, () => void] {
