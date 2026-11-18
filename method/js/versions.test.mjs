@@ -159,7 +159,7 @@ check("The browser's line and the reference code's agree, for both",
 const prop = (extra) => {
   const p = { title: "T", text: "Buy it.", destination: fields.destination, requires: 100000, currency: "GBP",
     opens: fields.opens, closes: fields.closes, settles_by: fields.settlesBy,
-    target: { sats: 1000000, rate: "1 BTC = £50,000", at: "2027-02-01T00:00:00Z" }, ...extra };
+    target: { sats: 2000000, rate: "1 BTC = 50000.00 GBP", at: "2027-02-01T00:00:00Z" }, ...extra };
   return { ...p, hash: proposalHash(fieldsOf(p, v1.declaration.sha256)) };
 };
 const pv2 = prop({ declaration_version: 2 });

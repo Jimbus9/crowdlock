@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
+  targetSats,
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
   PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
   chainIsIntact, destinationIsPermitted, attestorsOf, nextDestination, stampLine, stampHash, stampScript, stampedAt, stampsFor, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
@@ -26,7 +27,7 @@ const p = {
   title: "Test purchase", text, destination: "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
   requires: 12345, currency: "GBP",
   opens: "2026-11-11T00:00:00Z", closes: "2026-11-25T00:00:00Z", settles_by: "2026-12-02T00:00:00Z",
-  target: { sats: 250000, rate: "1 BTC = 66000.00 GBP", at: "2026-11-10T22:00:00Z" },
+  target: { sats: 187045, rate: "1 BTC = 66000.00 GBP", at: "2026-11-10T22:00:00Z" },
 };
 const fields = fieldsOf(p, instance);
 const hash = proposalHash(fields);
@@ -51,6 +52,15 @@ check("A proposal gathering longer than the Crowdlock allows is refused",
 check("The same proposal listed twice is refused", !checkProposals({ ...file, proposals: [{ ...p, hash }, { ...p, hash }] }, crowdlock).ok);
 check("A target without its rate and moment is refused",
   !checkProposals({ ...file, proposals: [{ ...p, hash, target: { sats: 1 } }] }, crowdlock).ok);
+{
+  const withTarget = (target) => checkProposals({ ...file, proposals: [{ ...p, hash, target: { ...p.target, ...target } }] }, crowdlock);
+  check("A target matching what the proposal requires at its stated rate is accepted", withTarget({}).ok, withTarget({}).problems?.[0]);
+  check("A target cut to a tenth, at the same stated rate, is refused", /not what it requires/.test(withTarget({ sats: Math.round(p.target.sats / 10) }).problems?.[0] ?? ""));
+  check("A target in another currency's rate is refused", /must read/.test(withTarget({ rate: "1 BTC = 66000.00 USD" }).problems?.[0] ?? ""));
+  check("A rate in words the reader can't check is refused", /must read/.test(withTarget({ rate: "about 66k" }).problems?.[0] ?? ""));
+  check("Sats are worked out from minor units: pence, whole yen, thousandths",
+    targetSats(16500, "GBP", 66000) === 250000 && targetSats(1650, "JPY", 66000) === 2500000 && targetSats(16500, "KWD", 66000) === 25000);
+}
 
 check("Phases: soon, gathering, settling, over",
   phaseOf(p, Date.parse("2026-11-10T00:00:00Z")) === "soon" && phaseOf(p, Date.parse("2026-11-12T00:00:00Z")) === "gathering"

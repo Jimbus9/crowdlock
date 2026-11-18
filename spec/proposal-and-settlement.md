@@ -343,8 +343,16 @@ can change, and it decides whether a reader says "the target is met". A reader
 therefore remembers the highest target it has seen for each proposal, and
 pauses committing and co-signing, with a warning, when a target falls to less
 than half of it. This catches a target cut to a fraction; it does not replace
-looking at the price. Who may restate a target, and by how much, is not yet a
-rule of the method.
+looking at the price.
+
+**A target must be what `requires` comes to at the rate it states**, within
+1% for rounding: `rate` reads exactly `1 BTC = <price> <currency>`, with the
+proposal's own currency, and `sats` is `requires` (in minor units) divided by
+that price. A proposal file that breaks this is refused. Cutting a target
+therefore means stating a price anyone can compare with the market, not quietly
+changing one number (decided 18 November 2026). Whoever writes the proposals
+file still restates it; a reader that wants more than this checks the stated
+price against the market itself.
 
 ## Fees
 
