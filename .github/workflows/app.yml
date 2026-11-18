@@ -104,9 +104,8 @@ jobs:
       # A new release for every build, as for the real-bitcoin app (see
       # app-mainnet.yml): with immutable releases on, a published app can't be
       # changed, so each build gets its own tag, made as a draft and published
-      # once its file is attached. Only the newest test build is kept. The
-      # link people use lists it:
-      #   https://github.com/Jimbus9/crowdlock/releases?q=app-test
+      # once its file is attached. The two newest test builds are kept. The
+      # link people use is https://crowdlock.org/get/test/ (written below).
       - name: Publish it as a new test release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,7 +120,45 @@ jobs:
             --notes "Test money only (testnet4). Built from ${GITHUB_SHA::7}. Install on Android by opening this file on the phone."
           gh release edit "$tag" --draft=false --latest=false
           echo "Published $tag: https://github.com/${GH_REPO}/releases/download/$tag/crowdlock-test.apk"
-          # Older test builds go (an immutable release can still be deleted; its tag is never reused).
-          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^app-test(-|$)' | grep -vx "$tag" | while read -r old; do
+
+          # crowdlock.org/get/test/ starts the download of the newest build.
+          # The tag changes with every build, so the website's "Download
+          # Crowdlock Test" button points at that page, and this rewrites it.
+          url="https://github.com/${GH_REPO}/releases/download/$tag/crowdlock-test.apk"
+          cat > page.html <<PAGE
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Download Crowdlock Test</title>
+          <meta name="robots" content="noindex">
+          <meta http-equiv="refresh" content="0; url=$url">
+          <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+          <link rel="stylesheet" href="../../style.css">
+          </head>
+          <body>
+          <main class="wrap">
+            <section class="hero">
+              <h1>Downloading Crowdlock Test</h1>
+              <p class="lede">The test app for Android. It uses test bitcoin, which is free and worth nothing.</p>
+              <p>If the download hasn't started, <a href="$url">download it here</a>. Open the file on your phone to install it.</p>
+              <p class="soft small">This page is rewritten each time the test app is built.</p>
+            </section>
+          </main>
+          </body>
+          </html>
+          PAGE
+          sha=$(gh api "repos/${GH_REPO}/contents/get/test/index.html" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "repos/${GH_REPO}/contents/get/test/index.html" \
+            -f message="Test app download link: $tag" \
+            -f content="$(base64 -w0 page.html)" \
+            ${sha:+-f sha="$sha"}
+
+          # Older test builds go, keeping the one before this as well, so the
+          # download page still works in the few minutes before the website
+          # picks up its new version. (An immutable release can still be
+          # deleted; its tag is never reused.)
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^app-test(-|$)' | sort -r | tail -n +3 | while read -r old; do
             gh release delete "$old" --yes --cleanup-tag || true
           done

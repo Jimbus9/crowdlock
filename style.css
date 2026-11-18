@@ -93,8 +93,10 @@ main > section > h2 + p { margin-bottom: 20px; }
 
 /* Buttons and panels */
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.rows .actions { margin-top: 10px; }
 .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 54px; padding: 0 24px; border-radius: 4px; border: 1px solid var(--brand); background: var(--brand); color: var(--on-brand); font-weight: 700; text-decoration: none; }
 .btn.ghost { background: transparent; color: var(--brand); }
+.btn.off { background: transparent; color: var(--soft); border-color: var(--rule); border-style: dashed; cursor: not-allowed; user-select: none; }
 .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 24px; display: flex; flex-direction: column; gap: 10px; }
 .panel h2 { font-size: 22px; margin: 0; }
 .more { display: inline-flex; align-items: center; min-height: 48px; font-weight: 700; }
