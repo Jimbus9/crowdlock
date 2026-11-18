@@ -488,7 +488,7 @@ export function AddCrowdlock({ words, go, link: given }: { words: string; go: Go
 // fake by announcing.
 // ---------------------------------------------------------------------------
 
-type Found = { url: string; name: string; about: string; sats: bigint; members: number; declaration: string; cosigners: string[]; copyOf?: string; sharesWith?: string };
+type Found = { url: string; name: string; about: string; sats: bigint; members: number; declaration: string; cosigners: string[]; copyOf?: string; sharesWith?: string; unread?: boolean };
 
 export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
   const [found, setFound] = useState<Found[] | null>(null);
@@ -509,9 +509,10 @@ export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
       await Promise.all(announced.map(async (a: any) => {
         const c: Loaded = await loadCrowdlock(a.url);
         if (!c.ok || c.crowdlock.network !== NETWORK) return;   // fails its checks: never shown
-        let t = { sats: 0n, members: 0 };
-        try { t = await committedTotal(c); } catch {}
-        results.push({ url: c.url, name: c.crowdlock.name, about: c.crowdlock.about ?? "", sats: t.sats, members: t.members, declaration: c.crowdlock.declaration.sha256, cosigners: c.crowdlock.cosigner_keys ?? [] });
+        // A total that couldn't be read is said, not shown as nothing (OpenAI review 7).
+        let t = { sats: 0n, members: 0 }, unread = false;
+        try { t = await committedTotal(c); } catch { unread = true; }
+        results.push({ url: c.url, name: c.crowdlock.name, about: c.crowdlock.about ?? "", sats: t.sats, members: t.members, declaration: c.crowdlock.declaration.sha256, cosigners: c.crowdlock.cosigner_keys ?? [], unread });
       }));
       // A lock counts for whichever file names its co-signer key, so a copy
       // of a Crowdlock's file would show that Crowdlock's money as its own.
@@ -544,6 +545,7 @@ export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
           {f.about ? <Text style={s.p}>{f.about}</Text> : null}
           {f.copyOf
             ? <Text style={s.error}>This names the same co-signer key or declaration as {f.copyOf}, which is already in your list. Its locks are that Crowdlock's, so none are counted here. It may be a copy made to mislead.</Text>
+            : f.unread ? <Text style={s.note}>Its total couldn't be read just now</Text>
             : <Text style={s.note}>{btc(f.sats)} locked · {f.members} member{f.members === 1 ? "" : "s"} with a lock that counts</Text>}
           {f.sharesWith && <Text style={s.error}>This and {f.sharesWith} name the same co-signer key or declaration, so the same locks count for both. Only one can be the real one: check its web address with someone you trust before you open it.</Text>}
           <Text style={mine.includes(f.url) ? s.good : s.link}>{mine.includes(f.url) ? "In your list" : "Have a look →"}</Text>

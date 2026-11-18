@@ -200,7 +200,7 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
         if (!h.complete) throw e;
         return coinsFromHistory(address, h.txs);
       }
-      return list.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value, confirmed: !!u.status?.confirmed }));
+      return list.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value, confirmed: !!u.status?.confirmed, height: u.status?.block_height ?? null }));
     },
     txHex: (txid) => get(`/tx/${txid}/hex`, "text"),
     /** Ask everything afresh: what "check again" means when the fan asks for it. */
@@ -223,6 +223,10 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
      * lock's date is judged against this, not against any phone's clock, and
      * it runs about an hour behind real time.
      */
+    /** The height of the newest block. */
+    async tipHeight() {
+      return Number(String(await get("/blocks/tip/height", "text")).trim());
+    },
     async medianTime() {
       const hash = await get("/blocks/tip/hash", "text");
       return (await get(`/block/${hash.trim()}`, "json", true)).mediantime;

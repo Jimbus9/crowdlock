@@ -1,16 +1,18 @@
-# Checks that the test Crowdlock's register has only ever grown: no lock or
-# member taken off or changed in any commit, ever (method/register-history.mjs).
-# Force-pushes to main are refused, so the history it reads is the whole one.
+# Checks that this repository's Crowdlocks' records have only ever grown: no lock or member taken
+# off or changed, no lock added past the inbox's rules, no commitment taken out
+# of a proposal's pile, and no register moved to a new file
+# (method/relay/register-history.mjs). Force-pushes to main are refused, so the
+# history it reads is the whole one.
 #
-# It runs when somebody pushes a change to the register, and once a day for
-# the relay inbox's own commits (a workflow's commits start no workflows).
+# It runs when somebody pushes a change to the records, and once a day for the
+# relay inbox's own commits (a workflow's commits start no workflows).
 
 name: Register history
 
 on:
   push:
     branches: [main]
-    paths: ["crowdlocks/test/registrations.json", "method/register-history.mjs", "method/js/history.mjs", ".github/workflows/register-history.yml"]
+    paths: ["crowdlocks/**", "method/relay/register-history.mjs", "method/relay/accept.mjs", "method/js/history.mjs", ".github/workflows/register-history.yml"]
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -30,4 +32,4 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      - run: node method/register-history.mjs crowdlocks/test/registrations.json
+      - run: node method/relay/register-history.mjs

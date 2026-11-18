@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-18g";
+export const TEMPLATE_VERSION = "2026-11-18h";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -57,14 +57,15 @@ export const CHANGES = [
   { version: "2026-11-18e", change: "A lock record can carry its owner's signature. The phone signs every lock it posts, and your inbox looks at signed locks before unsigned ones naming the same member, so a flood of fake records can't hold a member's real lock up. Unsigned locks are still taken" },
   { version: "2026-11-18f", change: "Your Crowdlock can say where it lives, signed by one of its co-signer keys. Then a copy of its file put up anywhere else sends people to the real one. Sign it from the app: Look after this Crowdlock, then Where it lives" },
   { version: "2026-11-18g", change: "Fixes from the seventh outside review. Where your Crowdlock lives must now be signed by every one of its co-signer keys, over its network too: a home signed the earlier way no longer checks, so sign it again from the app. A target at a price of zero or a price too long to be a number is refused. And a member signing a declaration version in between no longer trips the register-history check" },
+  { version: "2026-11-18h", change: "Your relay inbox now runs its outside libraries as a separate user that holds no permission to change your repository, and commits only changes that add records or swap in a spare relay. A new workflow checks every day that your records have only ever grown. Commitments must come from members who really signed the version a proposal was published under, everywhere they are counted. And completed payments are sent only once together they reach the target, stopping at the first that fails" },
 ];
 
 const FROM_REPO = [
-  "method/js/inbox.mjs", "method/js/append.mjs", "method/js/lockrecord.mjs", "method/js/verify.mjs", "method/js/crowdlock.mjs", "method/js/relayhealth.mjs", "method/js/proposals.mjs", "method/js/release.mjs",
+  "method/js/inbox.mjs", "method/js/history.mjs", "method/js/append.mjs", "method/js/lockrecord.mjs", "method/js/verify.mjs", "method/js/crowdlock.mjs", "method/js/relayhealth.mjs", "method/js/proposals.mjs", "method/js/release.mjs",
   "method/js/vendor/noble-secp256k1.js",
   "method/js/vendor/noble-hashes/_assert.js", "method/js/vendor/noble-hashes/_md.js", "method/js/vendor/noble-hashes/crypto.js",
   "method/js/vendor/noble-hashes/ripemd160.js", "method/js/vendor/noble-hashes/sha256.js", "method/js/vendor/noble-hashes/utils.js",
-  "method/relay/inbox.mjs", "method/relay/check.mjs", "method/relay/nostr.mjs", "method/relay/signed.mjs", "method/relay/package.json", "method/relay/package-lock.json",
+  "method/relay/inbox.mjs", "method/relay/accept.mjs", "method/relay/register-history.mjs", "method/relay/check.mjs", "method/relay/nostr.mjs", "method/relay/signed.mjs", "method/relay/package.json", "method/relay/package-lock.json",
   "LICENSE",
 ];
 
@@ -75,6 +76,8 @@ const founderPath = (p) => p.replace(/^method\//, "");
 const files = {};
 for (const p of FROM_REPO) files[founderPath(p)] = readFileSync(join(REPO, p), "utf8");
 files[".github/workflows/relay-inbox.yml"] = readFileSync(join(APP, "template/relay-inbox.yml"), "utf8");
+// The check that the records only ever grow (OpenAI review 7: new Crowdlocks didn't get it).
+files[".github/workflows/register-history.yml"] = readFileSync(join(APP, "template/register-history.yml"), "utf8");
 files[".github/workflows/check-crowdlock.yml"] = readFileSync(join(APP, "template/check-crowdlock.yml"), "utf8");
 // GitHub Pages would otherwise refuse to publish the vendored files whose
 // names begin with an underscore (_md.js, _assert.js) — the bug that broke

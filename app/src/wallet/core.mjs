@@ -41,7 +41,7 @@ import { messageHash, verifyMembership, memberAddressForOwnerKey, canonicalAddre
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf, lockLine } from "../../../method/js/lockrecord.mjs";
-import { destinationIsPermitted, attestorsOf, stampsFor, SETTLE_MARGIN } from "../../../method/js/proposals.mjs";
+import { destinationIsPermitted, attestorsOf, stampsFor, SETTLE_MARGIN, commitmentEligible } from "../../../method/js/proposals.mjs";
 import { isCosignerOf, homeLine, homeSignatureChecks } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
@@ -988,6 +988,16 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   // A coin that hasn't confirmed can be replaced by its sender and vanish, so
   // it counts toward nothing (17 November 2026: one counted, and could be co-signed).
   if (!coin.confirmed) return fail("the coin it spends hasn't confirmed yet, so it counts toward nothing");
+  // A coin a miner paid itself in its own block can't be spent until 100
+  // blocks have followed: confirmed, but not yet money (OpenAI review 7).
+  if (Number.isInteger(coin.height) && typeof chain.tipHeight === "function" && typeof chain.tx === "function") {
+    let maturing = false;
+    try {
+      const funding = await chain.tx(coin.txid);
+      if (funding?.vin?.[0]?.is_coinbase) maturing = (await chain.tipHeight()) - coin.height + 1 < 100;
+    } catch (e) { return fail(`whether the coin it spends can be spent yet couldn't be checked (${String(e?.message ?? e)})`); }
+    if (maturing) return fail("the coin it spends is a new block's reward, which can't be spent until 100 blocks have followed it");
+  }
   const fee = coin.value - tx.outs.reduce((n, o) => n + Number(o.value), 0);
   if (fee < 0) return fail("outputs exceed the input");
   const feeLimit = Math.min(crowdlock.max_commitment_fee, 0.05); // never more than 5%, whatever the file says
@@ -1064,7 +1074,7 @@ export function commitmentCoin(record) {
  * Returns { ok, still, total, problems }: `ok` only if `total` (what is
  * already paid plus what `still` commits) reaches the proposal's target.
  */
-export async function commitmentsToComplete({ words, records, crowdlock, proposal, destinations, chain, network, alreadyPaid = 0 }) {
+export async function commitmentsToComplete({ words, records, crowdlock, register = null, proposal, destinations, chain, network, alreadyPaid = 0 }) {
   const key = cosignerKeyFromWords(words).publicKey;
   // `records` come in the order they were submitted. They are taken in that
   // order until the target is met, and no further: anything past it is held
@@ -1077,6 +1087,11 @@ export async function commitmentsToComplete({ words, records, crowdlock, proposa
     if (String(record?.lock?.cosigner_pubkey ?? "").toLowerCase() !== key) {
       problems.push("A commitment's lock names a co-signer key these words don't make, so they can't complete it and it isn't counted.");
       continue;
+    }
+    // Given the register, only a commitment that may back this proposal counts.
+    if (register) {
+      const e = commitmentEligible(record, { crowdlock, register, proposal });
+      if (!e.ok) { problems.push(`A commitment can't back this proposal: ${e.reason}`); continue; }
     }
     try {
       const v = await checkCommitment({ record, crowdlock, proposal, destinations, chain, network });
@@ -1130,20 +1145,33 @@ export async function commitmentPaid({ record, chain }) {
  * went live again, and pressing it sent those too: the seller was paid twice
  * the target, from members the settlement rule leaves alone.
  */
-export async function commitmentPayment({ record, chain }) {
+export async function commitmentPayment({ record, chain, crowdlock = null }) {
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch { return null; }
   if (tx.ins.length !== 1) return null;
+  // A lookup that fails is not an answer. Until 18 November 2026 it read the
+  // same as "never paid", so a payment on its way could be overlooked and a
+  // reserve completed in its place, paying twice (OpenAI review 7). Now it
+  // comes back { unknown: true } and the co-signer's screen won't go on.
+  const unknown = (e) => ({ unknown: true, reason: String(e?.message ?? e) });
+  let spent;
   try {
     const L = record.lock ?? {};
     const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
     const from = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
-    const src = Transaction.fromHex(String(await chain.txHex(from)).trim());
-    const spent = src.getId() === from ? src.outs[tx.ins[0].index] : null;
+    let src;
+    try { src = Transaction.fromHex(String(await chain.txHex(from)).trim()); } catch (e) { return unknown(e); }
+    spent = src.getId() === from ? src.outs[tx.ins[0].index] : null;
     if (!spent || toHex(spent.script) !== toHex(lockOutputScript(script))) return null;
   } catch { return null; }
+  // A payment counts only if it kept to the fee limit its commitment had to
+  // keep to while it waited: otherwise its value is not a lawful payment.
+  if (crowdlock) {
+    const fee = Number(spent.value) - tx.outs.reduce((a, o) => a + Number(o.value), 0);
+    if (fee > Number(tx.outs[0].value) * Math.min(crowdlock.max_commitment_fee, 0.05)) return null;
+  }
   let seen;
-  try { seen = await chain.tx(tx.getId()); } catch { return null; }
+  try { seen = await chain.tx(tx.getId()); } catch (e) { return unknown(e); }
   if (!seen) return null;
   return { sats: Number(tx.outs[0].value), confirmed: !!seen.status?.confirmed };
 }

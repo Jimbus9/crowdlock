@@ -24,6 +24,7 @@ import {
   signedVersions, hasSigned, joinedVersion, declarationHash,
 } from "./crowdlock.mjs";
 import { addSignature, addRegistration } from "./append.mjs";
+import { lockAddress, hrpFor } from "./lockrecord.mjs";
 import { applyRecords, recordEventTemplate } from "./inbox.mjs";
 import { proposalLine, proposalHash, fieldsOf, checkProposals, applyCommitments, commitmentEventTemplate, PROPOSALS_FORMAT, emptyPile } from "./proposals.mjs";
 import { proposalLine as referenceLine } from "../lock/commitment.mjs";
@@ -169,8 +170,9 @@ check("…and is refused by one that doesn't",
   !checkProposals({ format: PROPOSALS_FORMAT, instance: v1.declaration.sha256, proposals: [pv2] }, v1).ok);
 
 // Commitments: the guard is on who signed what, not on the lock.
-const lockOf = (m, n) => ({ address: `bc1qlock${n}`, owner_pubkey: m.pubkey, cosigner_pubkey: v1.cosigner_keys[0], locktime: 1900000000, member: m.address });
-const regWithLocks = { ...before, members: [...before.members, { n: 2, address: b.address, signature: "x", signed: today, version: 2 }],
+// Real locks and a real signature for b: the inbox checks both (OpenAI review 7).
+const lockOf = (m, n) => ({ address: lockAddress({ ownerPubkey: m.pubkey, cosignerPubkey: v1.cosigner_keys[0], locktime: 1900000000 + n }, hrpFor(v1.network)), owner_pubkey: m.pubkey, cosigner_pubkey: v1.cosigner_keys[0], locktime: 1900000000 + n, member: m.address });
+const regWithLocks = { ...before, members: [...before.members, { n: 2, address: b.address, signature: b.sign(membershipStatement(v2)), signed: today, version: 2 }],
   locks: [lockOf(a, 1), lockOf(b, 2)] };
 const commit = (lock, p, t) => ({ ...commitmentEventTemplate({ type: "commitment", proposal: p.hash,
   record: { proposal: p.hash, tx: (t % 256).toString(16).padStart(2, "0") + "00", lock: { address: lock.address, owner_pubkey: lock.owner_pubkey, cosigner_pubkey: lock.cosigner_pubkey, locktime: lock.locktime } } },

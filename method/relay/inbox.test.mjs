@@ -504,8 +504,10 @@ const ev = (id, created_at) => ({ id, created_at });
 
     // The pile, with the inbox's own signature check and transaction reader.
     const FP = "cd".repeat(32), member = memberAddressForOwnerKey(lock.owner_pubkey, "tb");
-    const cl = { declaration: { sha256: FP, version: 1 }, cosigner_keys: [lock.cosigner_pubkey], network: "testnet4" };
-    const reg = { members: [{ n: 1, address: member }], locks: [{ ...lock, member }] };
+    const cl = { declaration: { sha256: FP, version: 1, title: "Test declaration" }, cosigner_keys: [lock.cosigner_pubkey], network: "testnet4" };
+    // A member whose own signature checks: the inbox verifies it now (OpenAI review 7).
+    const joinSig = await (async () => { const g = await signAsync(messageHash(membershipStatement(cl, 1)), ownerPriv); return Buffer.concat([Buffer.from([39 + g.recovery]), Buffer.from(g.toCompactRawBytes())]).toString("base64"); })();
+    const reg = { members: [{ n: 1, address: member, signature: joinSig, signed: "2026-12-01" }], locks: [{ ...lock, member }] };
     const prop = { hash: PROPOSAL, opens: "2027-01-01T00:00:00Z", closes: "2027-01-29T00:00:00Z", settles_by: "2027-02-12T00:00:00Z" };
     const t0 = Date.parse(prop.opens) / 1000;
     let n = 0;

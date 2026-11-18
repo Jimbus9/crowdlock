@@ -7,14 +7,15 @@ import {
   proposalLine, proposalHash, documentHash, fieldsOf, checkProposals, phaseOf, pilePath, checkPileShape,
   PROPOSALS_FORMAT, PILE_FORMAT, destinationLine, destinationHash, attestationStatement, attestationsAreValid,
   chainIsIntact, destinationIsPermitted, attestorsOf, nextDestination, stampLine, stampHash, stampScript, stampedAt, stampsFor, ZERO_PREV, commitmentEventTemplate, commitmentFromEvent,
-  applyCommitments, emptyPile, PER_LOCK_LIMIT, applySettlement, dueToSend, noticeStatement, noticeIsGenuine,
+  applyCommitments, emptyPile, PER_LOCK_LIMIT, applySettlement, dueToSend, noticeStatement, noticeIsGenuine, commitmentEligible,
 } from "./proposals.mjs";
 import { memberAddressForOwnerKey } from "./verify.mjs";
 import bitcoinMessage from "../lock/node_modules/bitcoinjs-message/index.js";
 import { ECPair } from "../lock/lock.mjs";
 import * as bitcoin from "../lock/node_modules/bitcoinjs-lib/src/index.js";
 import * as ref from "../lock/commitment.mjs";
-import { checkCrowdlock } from "./crowdlock.mjs";
+import { checkCrowdlock, membershipStatement } from "./crowdlock.mjs";
+import { lockAddress } from "./lockrecord.mjs";
 
 let failures = 0;
 const check = (name, ok, detail = "") => { if (!ok) failures++; console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? "  " + detail : ""}`); };
@@ -165,8 +166,14 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
 
 // The pile the inbox keeps.
 {
-  const lock = { address: "tb1qlockaddress", owner_pubkey: "02" + "a".repeat(64), cosigner_pubkey: "03" + "b".repeat(64), locktime: 1800000000 };
-  const register = { members: [{ n: 1, address: "tb1qmember", signature: "x", signed: "2026-11-01" }], locks: [{ ...lock, member: "tb1qmember" }] };
+  // A real lock and a real member: the inbox checks the lock is genuine and
+  // the member's own signature (OpenAI review 7), not just what the register says.
+  const ownerK = ECPair.makeRandom({ network: bitcoin.networks.testnet });
+  const ownerPub = Buffer.from(ownerK.publicKey).toString("hex");
+  const coPub = crowdlock.cosigner_keys.at(-1);
+  const lock = { address: lockAddress({ ownerPubkey: ownerPub, cosignerPubkey: coPub, locktime: 1800000000 }, "tb"), owner_pubkey: ownerPub, cosigner_pubkey: coPub, locktime: 1800000000 };
+  const memberAddr = memberAddressForOwnerKey(ownerPub, "tb");
+  const register = { members: [{ n: 1, address: memberAddr, signature: bitcoinMessage.sign(membershipStatement(crowdlock, crowdlock.declaration.version), Buffer.from(ownerK.privateKey), true, { segwitType: "p2wpkh" }).toString("base64"), signed: "2026-11-01" }], locks: [{ ...lock, member: memberAddr }] };
   const prop = { ...p, hash };
   const inWindow = Math.floor(Date.parse(p.opens) / 1000) + 60;
   const ev = (tx, at = inWindow, l = lock) => ({ id: tx, ...commitmentEventTemplate({ type: "commitment", proposal: hash, record: { proposal: hash, lock: l, tx } }, instance, at) });
@@ -174,6 +181,15 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   // chain); here every commitment is taken as signed unless a check says not.
   const allSigned = async (records) => records.map(() => ({ ok: true }));
   const run = (pile, events, signed = allSigned) => applyCommitments(pile, events, { crowdlock, proposal: prop, register, nowIso: "2026-11-12T09:00:00Z", signed });
+  {
+    // The member's own signature is checked, not the register's say-so (OpenAI review 7).
+    const forged = { ...register, members: [{ ...register.members[0], signature: "x" }] };
+    const rf = await applyCommitments(emptyPile(hash), [ev("aa")], { crowdlock, proposal: prop, register: forged, nowIso: "2026-11-12T09:00:00Z", signed: allSigned });
+    check("A commitment from a member whose signature on the declaration doesn't check is refused", rf.pile.commitments.length === 0 && /has not signed version/.test(rf.outcome[0]?.reason ?? ""), rf.outcome[0]?.reason);
+    check("…and the same check says so to every reader", !commitmentEligible({ proposal: hash, lock, tx: "aa" }, { crowdlock, register: forged, proposal: prop }).ok && commitmentEligible({ proposal: hash, lock, tx: "aa" }, { crowdlock, register, proposal: prop }).ok);
+    const later = { ...prop, declaration_version: 2 };
+    check("…and one whose owner signed only an earlier version than the proposal needs", !commitmentEligible({ proposal: hash, lock, tx: "aa" }, { crowdlock, register, proposal: later }).ok);
+  }
   const r1 = await run(emptyPile(hash), [ev("aa"), ev("aa"), ev("bb", inWindow + 5)]);
   check("The inbox adds each commitment once, in the order it first saw them, with its own time",
     r1.pile.commitments.length === 2 && r1.pile.commitments[0].record.tx === "aa" && r1.pile.commitments.every((c) => c.submitted === "2026-11-12T09:00:00Z"));

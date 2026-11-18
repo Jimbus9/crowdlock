@@ -77,6 +77,20 @@ for (const name of ["app.yml", "app-mainnet.yml"]) {
   check(`${name}: each build is a new release, made as a draft first`, /gh release create "\$tag"[^\n]*\\\n(?:[^\n]*\\\n)*\s*--draft/.test(t) && /gh release edit "\$tag" --draft=false/.test(t));
 }
 
+// The relay inbox writes the register, so its job holds write permission. Its
+// libraries must run as the unprivileged "inboxer" user, never as the job
+// itself, and what they leave must pass relay/accept.mjs, run from a copy
+// kept apart, before anything is committed (OpenAI review 7).
+for (const [label, file] of [["relay-inbox.yml", new URL("../../.github/workflows/relay-inbox.yml", import.meta.url)], ["the template's relay-inbox.yml", new URL("../../app/template/relay-inbox.yml", import.meta.url)]]) {
+  const t = strip(readFileSync(file, "utf8").replace(/\r\n/g, "\n"));
+  const nodeRuns = t.split("\n").filter((l) => /(^|[\s;&(])node\s/.test(l));
+  check(`${label}: every library run is as the inboxer user`, nodeRuns.length > 0 && nodeRuns.every((l) => /as_inboxer|sudo -u inboxer/.test(l) || /trusted\/relay\/accept\.mjs/.test(l)), nodeRuns.filter((l) => !/as_inboxer|sudo -u inboxer|trusted\/relay\/accept/.test(l)).join(" | ").trim().slice(0, 80));
+  check(`${label}: the inboxer gets a clean environment, without the token`, /as_inboxer\(\) \{ sudo -u inboxer env -i /.test(t));
+  check(`${label}: no token is kept in the checkout`, /persist-credentials:\s*false/.test(t));
+  check(`${label}: a pass is committed only after accept.mjs passes`, t.indexOf("trusted/relay/accept.mjs") > 0 && t.indexOf("trusted/relay/accept.mjs") < t.indexOf("git commit -q"));
+  check(`${label}: the token reaches git through its environment, not its command line`, /GIT_CONFIG_VALUE_0=/.test(t) && !/extraheader=.*GH_TOKEN/.test(t));
+}
+
 console.log("-".repeat(80));
 console.log(failures === 0 ? "No job that runs libraries can write to the repository or see a secret." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

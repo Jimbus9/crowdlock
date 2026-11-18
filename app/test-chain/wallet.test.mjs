@@ -808,6 +808,13 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     // taken in order, and no further than the target needs.
     const twice = await commitmentsToComplete({ words: coWords5, records: [good, good], crowdlock: cl, proposal: { ...appProposal, target: { sats: 100_000 } }, destinations: destFile, chain, network: net });
     check("Once the target is met, a commitment after it is held in reserve and not completed", twice.ok && twice.still.length === 1 && twice.total === 100_000, `${twice.still.length} taken`);
+    {
+      // A lookup that fails says so: it isn't read as "never paid" (OpenAI review 7).
+      const { commitmentPayment } = await import("../src/wallet/core.mjs");
+      const down = { ...chain, txHex: async () => { throw new Error("the explorer timed out"); }, tx: async () => { throw new Error("the explorer timed out"); } };
+      const r = await commitmentPayment({ record: good, chain: down });
+      check("When whether a commitment was paid can't be looked up, it says unknown, not unpaid", r?.unknown === true, JSON.stringify(r));
+    }
     const broken = { ...good, tx: "zz" };
     const fallback = await commitmentsToComplete({ words: coWords5, records: [broken, good], crowdlock: cl, proposal: { ...appProposal, target: { sats: 100_000 } }, destinations: destFile, chain, network: net });
     check("…and one in reserve takes the place of one ahead of it that no longer passes", fallback.ok && fallback.still.length === 1 && fallback.still[0] === good, fallback.problems.join(" ").slice(0, 80));

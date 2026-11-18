@@ -439,8 +439,8 @@ export function locksSeen(loaded, remembered = null) {
 export { RELAY_ONLY_PER_LOCK };
 
 /** Of what the relays hold for a proposal, what this phone goes on to check. */
-export function relayOnlyCommitments(found, { crowdlock, register, inPile = new Set() }) {
-  return relayOnly(found, { crowdlock, register, inPile, hrp: lockHrp(crowdlock) });
+export function relayOnlyCommitments(found, { crowdlock, register, inPile = new Set(), proposal = null }) {
+  return relayOnly(found, { crowdlock, register, inPile, hrp: lockHrp(crowdlock), proposal });
 }
 
 // ---------------------------------------------------------------------------

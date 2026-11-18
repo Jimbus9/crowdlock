@@ -52,7 +52,7 @@ jobs:
 
       - name: The relay inbox
         working-directory: method/relay
-        run: npm ci --no-audit --no-fund && node inbox.test.mjs
+        run: npm ci --no-audit --no-fund && node inbox.test.mjs && node accept.test.mjs
 
       - name: The app — key module on a private chain, loader, starting a Crowdlock, template up to date
         run: |
