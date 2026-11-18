@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-18b";
+export const TEMPLATE_VERSION = "2026-11-18c";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -52,6 +52,7 @@ export const CHANGES = [
   { version: "2026-11-17l", change: "A lock's keys must be compressed public keys (33 bytes, starting 02 or 03) for the checking code to make a lock from them at all. No change to what your inbox accepts: it already checked this before adding a lock" },
   { version: "2026-11-18", change: "A new lock must name your newest co-signer key. Locks already naming an older key keep counting, but once you retire a key nothing new can be put under it" },
   { version: "2026-11-18b", change: "Three rules decided with the security review. A lock shorter than the shortest length your Crowdlock offers is refused. A Crowdlock may let a commitment leave at most 5% as fee. And a lock backs a proposal only if it stays shut at least a week after the proposal finishes settling, so a slow payment has time to confirm. Check your Crowdlock file: a max_commitment_fee above 0.05 now fails its checks" },
+  { version: "2026-11-18c", change: "Your workflows now run each GitHub action from an exact, fixed version, so nobody can change the code they run by moving a version tag. No change to what is collected" },
 ];
 
 const FROM_REPO = [

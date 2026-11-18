@@ -150,14 +150,28 @@ jobs:
           echo "FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
           echo "Signed. Certificate SHA-256: $fingerprint"
 
-      - name: Publish it as the app-mainnet release
+      # A new release for every build, each with its own tag, never one release
+      # replaced in place. With GitHub's immutable releases switched on (the
+      # repository's Settings, General, Releases), nothing can then change a
+      # published app: not the file, not its tag, not even this repository's
+      # own jobs. The link people use is the newest one's:
+      #   https://github.com/Jimbus9/crowdlock/releases/latest/download/crowdlock-mainnet.apk
+      # (security loop, "Needs James" item 1, 18 November 2026). It is made as
+      # a draft first and published once the file is attached, because an
+      # immutable release takes no file after it is published.
+      - name: Publish it as a new real-bitcoin release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete app-mainnet --yes --cleanup-tag || true
-          gh release create app-mainnet crowdlock-mainnet.apk \
+          tag="app-mainnet-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}"
+          gh release create "$tag" crowdlock-mainnet.apk \
             --target "$GITHUB_SHA" \
-            --title "Crowdlock app — REAL BITCOIN build" \
-            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Signed with the app's own key, certificate SHA-256 ${FINGERPRINT} — the same as app/signing-certificate.sha256 in the repository. Check it before installing. Install on Android by opening this file on the phone." \
-            --prerelease
+            --draft \
+            --title "Crowdlock app — REAL BITCOIN build, $(date -u '+%-d %B %Y')" \
+            --notes "Real bitcoin (mainnet). Early build, not independently reviewed. Built from ${GITHUB_SHA::7}. Signed with the app's own key, certificate SHA-256 ${FINGERPRINT} — the same as app/signing-certificate.sha256 in the repository. Check it before installing. Install on Android by opening this file on the phone."
+          gh release edit "$tag" --draft=false --latest
+          echo "Published $tag: https://github.com/${GH_REPO}/releases/latest/download/crowdlock-mainnet.apk"
+          # The one release made the old way, replaced in place on every build,
+          # goes once the new kind exists (nothing has linked to it but this).
+          gh release delete app-mainnet --yes --cleanup-tag 2>/dev/null || true

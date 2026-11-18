@@ -426,7 +426,7 @@ export function TestApp() {
   return (
     <View>
       <Text style={s.note}>The test app is a separate app with its own wallet. It uses test bitcoin, which has no value, so nothing in it can touch real money.</Text>
-      <Btn kind="second" label={copied ? "Copied. Paste it into your browser" : "Copy the test app's download link"} onPress={async () => { await Clipboard.setStringAsync(TEST_APP_URL); setCopied(true); }} />
+      <Btn kind="second" label={copied ? "Copied. Paste it into your browser" : "Copy the link to the test app"} onPress={async () => { await Clipboard.setStringAsync(TEST_APP_URL); setCopied(true); }} />
     </View>
   );
 }

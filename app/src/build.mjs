@@ -42,4 +42,5 @@ export const COUNTING_RULE_URL = "https://github.com/Jimbus9/crowdlock/blob/main
  * Where the test app is downloaded from. The app for real bitcoin shows this
  * only to founders, maintainers and co-signers, for practising with test money.
  */
-export const TEST_APP_URL = "https://github.com/Jimbus9/crowdlock/releases/download/app-test/crowdlock-test.apk";
+// Each test build is a release of its own (app.yml), so this lists the newest.
+export const TEST_APP_URL = "https://github.com/Jimbus9/crowdlock/releases?q=app-test";

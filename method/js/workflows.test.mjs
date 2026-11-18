@@ -58,6 +58,25 @@ for (const name of ["app.yml", "app-mainnet.yml"]) {
   check("app-mainnet.yml: it is started by hand only", /\non:\n  workflow_dispatch:\n/.test(read("app-mainnet.yml")) && !/\n  push:/.test(strip(read("app-mainnet.yml"))));
 }
 
+// Every action, in every workflow here and in the template a Crowdlock copies,
+// is pinned to an exact commit: a version tag can be moved to other code
+// (security loop, "Needs James" item 11, 18 November 2026).
+{
+  const { readdirSync } = await import("node:fs");
+  const dirs = [new URL("../../.github/workflows/", import.meta.url), new URL("../../app/template/", import.meta.url)];
+  for (const dir of dirs) for (const f of readdirSync(dir).filter((n) => n.endsWith(".yml"))) {
+    const t = readFileSync(new URL(f, dir), "utf8");
+    const loose = [...t.matchAll(/^\s*-?\s*uses:\s*(\S+)/gm)].map((m) => m[1]).filter((u) => !/@[0-9a-f]{40}$/.test(u));
+    check(`${f}: every action pinned to a commit`, loose.length === 0, loose.join(" "));
+  }
+}
+// A published app is never replaced in place: each build is a new release
+// with a tag of its own, so immutable releases can protect every one.
+for (const name of ["app.yml", "app-mainnet.yml"]) {
+  const t = strip(read(name));
+  check(`${name}: each build is a new release, made as a draft first`, /gh release create "\$tag"[^\n]*\\\n(?:[^\n]*\\\n)*\s*--draft/.test(t) && /gh release edit "\$tag" --draft=false/.test(t));
+}
+
 console.log("-".repeat(80));
 console.log(failures === 0 ? "No job that runs libraries can write to the repository or see a secret." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
