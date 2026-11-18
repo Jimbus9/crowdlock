@@ -191,9 +191,8 @@ export function chainIsIntact(entries, instance = null) {
  * block time of a payment carrying the entry and its attestations. `stamps`
  * holds those payments as the explorer describes them, { txid: tx }. It is
  * deliberately NOT the `added` field, which the attestor writes and could set
- * to any date they liked. Until 17 November 2026 it was `firstSeen`, which was
- * no better: also a date written into the file by whoever added the entry.
- * Either handed an attestor exactly the backdating the waiting period exists
+ * to any date they liked, nor any other date written into the file. Either
+ * would hand an attestor exactly the backdating the waiting period exists
  * to prevent: add an address today, write last month's date, propose it this
  * afternoon. An entry with no stamp, or one not in a block yet, is refused.
  */
@@ -459,7 +458,7 @@ export function verifyCommitment({
   network,
   crowdlock = null,
 }) {
-  // Never more than 5%, whatever a Crowdlock file says (James, 18 November 2026).
+  // Never more than 5%, whatever a Crowdlock file says.
   const maxFee = Math.min(crowdlock ? crowdlock.max_commitment_fee : MAX_FEE_FRACTION, 0.05);
   const minimumAgeDays = crowdlock ? crowdlock.destination_wait_days : MINIMUM_AGE_DAYS;
   const checks = [];
@@ -495,9 +494,9 @@ export function verifyCommitment({
   // opens sooner can be taken home by its owner alone, at any moment up to
   // and after the co-signer completes it, so its money is not committed.
   // A lock dated by block height is for a private test chain only. On any
-  // other network it is refused: until the security loop of 17 November 2026
-  // it was simply not compared, so a lock dated by a height already passed,
-  // which its owner can take home alone today, counted as committed money.
+  // other network it is refused: not compared, a lock dated by a height
+  // already passed, which its owner can take home alone today, would count as
+  // committed money.
   if (record.lock.locktime < 500_000_000) {
     if (network?.bech32 !== "bcrt") return fail("the lock is dated by block height, which only a private test chain uses — on a real network it may already be open, so its money isn't committed");
   } else {
@@ -519,7 +518,7 @@ export function verifyCommitment({
   // The input's own script (scriptSig) must be empty. The owner's signature
   // does not cover it, so anybody can add one to a commitment; the result has
   // another id, still carries the owner's signature, and can never be mined
-  // (security loop, 17 November 2026).
+  //.
   if (tx.ins[0].script.length !== 0) return fail("its input carries a script, which a spend of a lock never does — the network would not take it");
 
   // 3. the witness is the purchase branch, co-signer's slot empty

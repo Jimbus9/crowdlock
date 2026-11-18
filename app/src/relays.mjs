@@ -108,9 +108,8 @@ export async function fetchCommitments(crowdlock, proposalHash, since = 0) {
             if (!item) return;
             // The whole record, not its payment alone: a copy with another
             // lock or remainder beside the same payment, dated earlier, must
-            // not take the real one's place (security loop, 17 November 2026).
-            // (A notice has no payment: until round 4 every notice shared one key, so
-            // an early-dated junk notice took a genuine one's place in what was read.)
+            // not take the real one's place. A notice is told apart by its
+            // whole self too, so a junk one can't take a genuine one's place.
             const key = item.type === "commitment" ? JSON.stringify(cleanRecord(item.record) ?? item.record) : item.type === "notice" ? `notice ${JSON.stringify(item.notice)}` : item.tx;
             if (!seen.has(key) || seen.get(key).at > item.at) seen.set(key, item);
           },

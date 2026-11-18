@@ -194,7 +194,7 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
         // Public explorers refuse to list the coins at an address holding
         // more than 500 (they answer 400). Anybody can send 501 tiny coins to
         // a published address. The address's history says the same thing, a
-        // page at a time (security loop, 17 November 2026).
+        // page at a time.
         if (!/answered 400/.test(String(e?.message ?? e))) throw e;
         const h = await readHistory(() => get(`/address/${address}/txs`), (last) => get(`/address/${address}/txs/chain/${last}`));
         if (!h.complete) throw e;
@@ -314,10 +314,8 @@ export const PREFER_MS = 600000;
  * balances and the chain's clock while it is the one answering. A caller opts
  * in by passing `backup`; nothing gets one by default.
  *
- * The test network has one too (16 November 2026): James's mobile network
- * could not reach mempool.space at all, in the app or in a browser, while it
- * was up for everyone else. An app with one explorer is an app that doesn't
- * work on whichever networks can't reach that one.
+ * The test network has one too: some mobile networks can't reach a given
+ * explorer at all, and an app with one explorer doesn't work on them.
  * @type {Record<string, string>}
  */
 export const BACKUP_EXPLORERS = {

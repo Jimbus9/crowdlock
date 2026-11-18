@@ -208,6 +208,21 @@ OpenAI's seventh review then found, at crowdlock `b2f6a2f` and the-kop-fund `a0c
 - **The relay inbox ran its libraries holding the repository's write permission.** They now run as a separate user with no token; what they leave comes back as a patch, and `relay/accept.mjs`, run from a copy kept apart, commits it only if it just adds records or swaps in a spare relay.
 - **Smaller:** money sent after a dead notice now reads as the notice broken; revocations are judged as of each spend; fees are judged against what left the lock itself, and carried across a member's own locks; a block reward that can't be spent yet isn't counted; an unreadable total isn't shown as nothing; a malformed lock signature is refused, not dropped; the Join page builds its messages as text; an upgraded anchor proof isn't called complete until checked.
 
+## A tidy-up before the third review, 18 November 2026
+
+Nothing in what the code does changed; every existing test passes unchanged.
+
+- `app/src/wallet/core.mjs` is split into five parts by job (`base`, `keys`,
+  `sending`, `locks`, `commitments`). `core.mjs` still exports everything, so
+  nothing that imports it changed.
+- The pile of commitments is added up by one module, `method/js/pile.mjs`,
+  used by both the app and the website's commit page. Before, each had its own
+  copy of the same rules. It has its own test, `pile.test.mjs`.
+- Comments say what the code does and why. The dated history that used to sit
+  in them ("until 17 November this…", "OpenAI review 7") is kept here, in the
+  sections above, and in the git history. Test files keep theirs, since a test
+  named for the problem it guards against is easier to follow.
+
 ## Limits we already know about
 
 - **A commitment's fee is fixed when it is signed.** If the network's floor has risen by settlement, it cannot be sent. A lock must stay shut more than a week after settling, so its owner can't take it home in the meantime; and the co-signer and the inbox stop at the first payment that fails, but the payments before it have gone.

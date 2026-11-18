@@ -7,11 +7,12 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import {
   wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith, commitmentsToComplete, commitmentCoin, commitmentPayment,
 } from "../wallet/core.mjs";
-import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
-import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments, settleMargin, commitmentEligible } from "../../../method/js/proposals.mjs";
+import { phaseOf, pilePath, checkPileShape, noticeStatement, proposalVersion, settleMargin } from "../../../method/js/proposals.mjs";
+// @ts-ignore — plain module shared with the website
+import { readPile as readPileShared, settleOrder, planFor } from "../../../method/js/pile.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges, relayOnlyCommitments,
+  loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges,
 } from "../crowdlocks.mjs";
 import { loadSeenRules, saveSeenRules } from "../storage";
 // @ts-ignore — plain module
@@ -45,100 +46,23 @@ const PHASE_TEXT: Record<string, string> = {
 
 // `sent`: completed by the co-signer and on the network, waiting for a block.
 // It counts toward the target, with what is waiting and what is paid, so a
-// payment in flight is never added up as missing (security loop, round 4).
+// payment in flight is never added up as missing.
 type Pile = { sent: number; sentCount: number; count: number; sats: number; mine: { sats: number; record: any; paid?: boolean; sent?: boolean }[]; good: { record: any; at: number; seq?: number; sats: number }[]; completed: number; refused: string[]; paid: number; paidCount: number; notice: any | null; noticeContradicted?: boolean;
   // What couldn't be read: payments whose state is unknown, and the
-  // repository's pile itself. Either stops the co-signer (OpenAI review 7).
+  // repository's pile itself. Either stops the co-signer.
   uncertain: number; unreadable: string | null };
 
-async function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
-  // The repository's pile first — the lasting record, in the order the
-  // Crowdlock received them — then anything on the relays it hasn't taken yet.
-  const items: any[] = [];
-  const inPile = new Set<string>();
-  const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
-  let notice: any = null;
-  // No pile yet (404) is an empty pile. Anything else that stops it being read
-  // is said, not shown as nothing committed (OpenAI review 7).
-  let unreadable: string | null = null;
-  const genuine = (n: any) => noticeIsGenuine(n, { crowdlock: c.crowdlock, hash: p.hash, hrp, addressOf: memberAddressForOwnerKey }).ok;
-  try {
-    const r = await fetch(resolvePath(pilePath(c.crowdlock.register.proposals, p.hash), baseFor(c.url)), { cache: "no-store" });
-    if (r.ok) {
-      const file = await r.json();
-      const shape = checkPileShape(file, p.hash);
-      if (shape.ok) {
-        for (const x of file.commitments) { items.push({ type: "commitment", record: x.record, at: Date.parse(x.submitted) / 1000, seq: items.length }); inPile.add(x.record.tx); }
-        if (file.notice && genuine(file.notice)) notice = file.notice;
-      } else unreadable = `the Crowdlock's record of commitments isn't in its format (${shape.reason})`;
-    } else if (r.status !== 404) unreadable = `the Crowdlock's record of commitments couldn't be read (${r.status})`;
-  } catch (e: any) { unreadable = `the Crowdlock's record of commitments couldn't be read (${String(e?.message ?? e)})`; }
-  // Commitments only on the relays count until an hour after closing. After
-  // that only the repository's record does: a late one could carry any date.
-  const relaysCount = stillTakingCommitments(p, Date.now() / 1000);
-  // And only from a real lock on the register, a few per lock: what the
-  // repository's inbox could take. Anything else is a stranger's, and is not
-  // worth a question to the block explorer (security loop, 17 November 2026).
-  for (const it of relayOnlyCommitments(await fetchCommitments(c.crowdlock, p.hash), { crowdlock: c.crowdlock, register: c.register, inPile, proposal: p })) {
-    if (it.type === "commitment" && !relaysCount) continue;
-    // Not yet in the repository: ordered after everything that is.
-    items.push(it.type === "commitment" ? { ...it, at: Math.max(it.at, ...items.map((x) => x.at ?? 0)) + 1 } : it);
-  }
-  const pile: Pile = { sent: 0, sentCount: 0, count: 0, sats: 0, mine: [], good: [], completed: 0, refused: [], paid: 0, paidCount: 0, notice, uncertain: 0, unreadable };
-  // One coin, one commitment, per proposal: a second commitment spending the
-  // same coin is ignored and the earlier one stands (spec/commitment-format.md,
-  // "Counting the pile"). Only one of them could ever be paid, so counting
-  // both showed a proposal nearer its target than it was.
-  const counted = new Set<string>();
-  // One payment counts once, however many copies of its commitment were
-  // posted: a payment's id leaves out the signatures, so every copy shares it
-  // (OpenAI review, H-05).
-  const paidIds = new Set<string>();
-  for (const it of items) {
-    if (it.type === "completed") { pile.completed++; continue; }
-    if (it.type === "notice") { if (!pile.notice && genuine(it.notice)) pile.notice = { ...it.notice, published: new Date(it.at * 1000).toISOString() }; continue; }
-    let v: any;
-    try { v = await checkCommitment({ record: it.record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK }); }
-    catch (e) {
-      // The repository's own pile must be read in full or not at all. One
-      // that is only on the relays is left out if it can't be checked now.
-      if (!it.relayOnly) throw e;
-      pile.refused.push("a commitment that is only on the relays couldn't be checked just now"); continue;
-    }
-    if (!v.valid) {
-      // A commitment whose coin is gone may be one the co-signer completed:
-      // then it was paid, not refused.
-      if (/already been spent/.test(v.reason)) {
-        const id = commitmentTxid(it.record);
-        if (id && paidIds.has(id)) continue;
-        const pay: any = await commitmentPayment({ record: it.record, chain, crowdlock: c.crowdlock });
-        if (pay?.unknown) { pile.uncertain++; pile.refused.push(`whether a commitment was paid couldn't be checked just now (${pay.reason})`); continue; }
-        if (pay && pay.sats > 0) {
-          if (id) paidIds.add(id);
-          if (pay.confirmed) { pile.paid += pay.sats; pile.paidCount++; } else { pile.sent += pay.sats; pile.sentCount++; }
-          if (it.record.lock?.owner_pubkey === account.publicKey) pile.mine.push({ sats: pay.sats, record: it.record, paid: pay.confirmed, sent: !pay.confirmed });
-          continue;
-        }
-      }
-      pile.refused.push(v.reason); continue;
-    }
-    // The same eligibility the inbox applies, for the repository's own record
-    // too: a valid payment from someone who may not back this proposal is not
-    // counted towards it (OpenAI review 7).
-    const eligible: any = commitmentEligible(it.record, { crowdlock: c.crowdlock, register: c.register, proposal: p });
-    if (!eligible.ok) { pile.refused.push(eligible.reason); continue; }
-    if (v.coin && counted.has(v.coin)) { pile.refused.push("an earlier commitment already spends the same coin, and only one can be paid"); continue; }
-    if (v.coin) counted.add(v.coin);
-    pile.count++; pile.sats += v.committedSats;
-    pile.good.push({ record: it.record, at: it.at, seq: it.seq, sats: v.committedSats });
-    if (v.ownerPubkey === account.publicKey) pile.mine.push({ sats: v.committedSats, record: it.record });
-  }
-  // A notice says the proposal failed. While it is still gathering it can't
-  // have, so a notice then is ignored (OpenAI review H-04). One against a
-  // pile that reaches its target is shown for what it is: contradicted.
-  if (pile.notice && (phaseOf(p) === "soon" || phaseOf(p) === "gathering")) pile.notice = null;
-  if (pile.notice && pile.sats + pile.paid + pile.sent >= p.target.sats) pile.noticeContradicted = true;
-  return pile;
+/** A proposal's pile, added up by the shared module the website uses too (method/js/pile.mjs). */
+function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promise<Pile> {
+  return readPileShared({
+    crowdlock: c.crowdlock, register: c.register, destinations: c.destinations, proposal: p,
+    fetchPile: () => fetch(resolvePath(pilePath(c.crowdlock.register.proposals, p.hash), baseFor(c.url)), { cache: "no-store" }),
+    relayItems: () => fetchCommitments(c.crowdlock, p.hash),
+    check: (record: any) => checkCommitment({ record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK }),
+    payment: (record: any) => commitmentPayment({ record, chain, crowdlock: c.crowdlock }),
+    txidOf: commitmentTxid,
+    ownerPubkey: account?.publicKey ?? null,
+  }) as Promise<Pile>;
 }
 
 /** Has this wallet already committed to this proposal? Read from the Crowdlock's own published pile. */
@@ -195,7 +119,7 @@ function ProposalStatus({ c, p, account }: { c: Extract<Loaded, { ok: true }>; p
   const [dead, setDead] = useState(false);
   useEffect(() => { readPile(c, p, account).then((x) => { setPaid(x.paid); setMoved(x.paid + x.sent); setDead(!!x.notice); }).catch(() => setPaid(null)); }, [c, p]);
   if (paid !== null && paid >= p.target.sats) return <Text style={s.good}>Funded and paid · {btc(BigInt(paid))} sent to the seller · closed</Text>;
-  // Money that moved after the co-signer declared it dead is a broken promise, and says so (OpenAI review 7a).
+  // Money that moved after the co-signer declared it dead is a broken promise, and says so.
   if (dead && moved > 0) return <Text style={s.error}>Declared dead, yet {btc(BigInt(moved))} of its commitments has been sent · the co-signer broke its notice</Text>;
   if (dead) return <Text style={s.note}>Declared dead · didn't reach its target · closed · nothing will move</Text>;
   return <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}{paid ? ` · ${btc(BigInt(paid))} paid so far` : ""}</Text>;
@@ -412,7 +336,7 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
     try {
       // The rules read again now: if who approves destinations, the list
       // itself, the fee limit or the target changed while this screen was
-      // open, nothing is signed (OpenAI review 7: an open screen kept the old).
+      // open, nothing is signed.
       const fresh = await loadCrowdlock(c.url);
       if (!fresh.ok) throw new Error(`this Crowdlock couldn't be read again just now, so nothing was signed (${fresh.problems?.[0] ?? "it didn't load"})`);
       const moved = rulesChanges(rulesOf(c), rulesOf(fresh));
@@ -531,21 +455,6 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
 }
 
 /** The order commitments are settled in: as the repository received them (oldest first, then its own order). */
-// The repository's pile only ever grows at its end (relay/accept.mjs refuses
-// anything else, and its history is public), so its order is the receipt
-// order: that is the order used, not the time a poster put on a record.
-// Those only on the relays come after, by the time they carry (OpenAI review 7).
-const settleOrder = (good: Pile["good"]) => good.slice().sort((a: any, b: any) => ((a.seq ?? 1e9) - (b.seq ?? 1e9)) || (a.at - b.at));
-
-/** Which commitments, in order, take a pile to its target, counting what is already paid or sent. */
-function planFor(pile: Pile, target: number) {
-  const settled = pile.paid + pile.sent;
-  const take: Pile["good"] = [];
-  let sum = settled;
-  for (const g of settleOrder(pile.good)) { if (sum >= target) break; take.push(g); sum += g.sats; }
-  return { settled, take, sum };
-}
-
 function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; pile: Pile; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [words, setWords] = useState("");
@@ -571,7 +480,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
     // Everything is read again now, not taken from the screen: the Crowdlock's
     // file, its proposals and destinations, the pile, any failure notice and
     // the clock. If any of it changed what would be done, nothing is done and
-    // the new plan is shown to confirm afresh (OpenAI review 7).
+    // the new plan is shown to confirm afresh.
     let fresh: any, fp: any, fpile: Pile;
     try {
       fresh = await loadCrowdlock(c.url);
@@ -590,7 +499,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
     // order; the total added up again. Short of the target, nothing is done.
     let recheck: { ok: boolean; still: any[]; total: number; problems: string[] };
     try {
-      recheck = await commitmentsToComplete({ words, records: settleOrder(fpile.good).map((g) => g.record), crowdlock: fresh.crowdlock, register: fresh.register, proposal: fp, destinations: fresh.destinations, chain, network: NETWORK, alreadyPaid: plan.settled });
+      recheck = await commitmentsToComplete({ words, records: settleOrder(fpile.good).map((g: any) => g.record), crowdlock: fresh.crowdlock, register: fresh.register, proposal: fp, destinations: fresh.destinations, chain, network: NETWORK, alreadyPaid: plan.settled });
     } catch (e: any) { recheck = { ok: false, still: [], total: plan.settled, problems: [String(e.message ?? e)] }; }
     if (!recheck.ok) return stop(`Nothing was completed. Checked again just now, the commitments add up to ${btc(BigInt(recheck.total))}, short of the ${btc(BigInt(fp.target.sats))} target.${recheck.problems[0] ? ` ${recheck.problems[0]}` : ""}`);
     // The plan must be the one confirmed: the same commitments, nothing swapped in.
@@ -610,8 +519,8 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         const hex = await completeCommitmentWith({ words, record, chain });
         // Sent from here: to the network first. If it refuses one, stop:
         // that payment will not arrive, so the purchase is now short, and
-        // every further one sent would be money paid toward it for nothing
-        // (security loop, round 4). The ones already sent cannot be recalled.
+        // every further one sent would be money paid toward it for nothing.
+        // The ones already sent cannot be recalled.
         if (sendHere) await chain.broadcast(hex);
         const posted = await postCommitment(c.crowdlock, { type: "completed", proposal: p.hash, tx: hex });
         // Published only: if no relay took it, it has gone nowhere, and saying
@@ -620,7 +529,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         sent++;
       } catch (e: any) {
         // Either way, stop at the first that fails: a later payment must not
-        // go while an earlier one hasn't (OpenAI review 7).
+        // go while an earlier one hasn't.
         failed.push(`Stopped there, and did no more: ${String(e.message ?? e)}`);
         break;
       }

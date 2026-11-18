@@ -80,7 +80,7 @@ export function lockScript({ fanPubkey, cosignerPubkey, locktime }) {
   if (fanPubkey.length !== 33) throw new Error("fan pubkey must be 33 bytes (compressed)");
   if (cosignerPubkey.length !== 33) throw new Error("co-signer pubkey must be 33 bytes (compressed)");
   // A compressed key starts 02 or 03. Anything else is 33 bytes of something that is not a key
-  // (security loop, round 5: the register's own builder now refuses the same).
+  //.
   for (const k of [fanPubkey, cosignerPubkey]) if (k[0] !== 2 && k[0] !== 3) throw new Error("a public key must be compressed: it starts 02 or 03");
   if (!Number.isInteger(locktime) || locktime <= 0) throw new Error("locktime must be a positive integer");
   // A transaction's own locktime field holds 32 bits: a lock dated beyond it could never go home.

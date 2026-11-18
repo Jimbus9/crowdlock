@@ -21,7 +21,7 @@
 # The signed APK must carry the certificate whose SHA-256 is committed in
 # app/signing-certificate.sha256, or nothing is published. Without the key,
 # or without that file, the build stops: it never falls back to Expo's public
-# development key, which signed it until 17 November 2026.
+# development key.
 
 name: App (real bitcoin)
 
@@ -38,8 +38,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       # Every action is pinned to an exact commit, not a version tag: a tag can be
-      # moved to other code, and this build makes the real-bitcoin app (security
-      # loop, "Needs James" item 11, 18 November 2026).
+      # moved to other code, and this build makes the real-bitcoin app.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -156,7 +155,7 @@ jobs:
       # published app: not the file, not its tag, not even this repository's
       # own jobs. The link people use is the newest one's:
       #   https://github.com/Jimbus9/crowdlock/releases/latest/download/crowdlock-mainnet.apk
-      # (security loop, "Needs James" item 1, 18 November 2026). It is made as
+      # It is made as
       # a draft first and published once the file is attached, because an
       # immutable release takes no file after it is published.
       - name: Publish it as a new real-bitcoin release

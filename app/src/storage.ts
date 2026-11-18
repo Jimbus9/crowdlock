@@ -172,9 +172,8 @@ export async function saveLock(lock: SavedLock): Promise<void> {
  * Never removes or changes a lock's own terms. Never throws: reading a
  * Crowdlock must not fail because the phone's store is full. But it says
  * whether every lock is now kept, read back to be sure, so the screen can say
- * when one isn't. Until 17 November 2026 a failed save went unnoticed, and a
- * website-made lock could not be taken home while the site was down
- * (OpenAI review, M-03).
+ * when one isn't: a lock whose terms aren't kept here can't be taken home
+ * while its site is down.
  */
 export async function rememberLocks(locks: SavedLock[]): Promise<boolean> {
   try {

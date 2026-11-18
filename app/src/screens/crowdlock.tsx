@@ -509,7 +509,7 @@ export function FindCrowdlocks({ words, go }: { words: string; go: Go }) {
       await Promise.all(announced.map(async (a: any) => {
         const c: Loaded = await loadCrowdlock(a.url);
         if (!c.ok || c.crowdlock.network !== NETWORK) return;   // fails its checks: never shown
-        // A total that couldn't be read is said, not shown as nothing (OpenAI review 7).
+        // A total that couldn't be read is said, not shown as nothing.
         let t = { sats: 0n, members: 0 }, unread = false;
         try { t = await committedTotal(c); } catch { unread = true; }
         results.push({ url: c.url, name: c.crowdlock.name, about: c.crowdlock.about ?? "", sats: t.sats, members: t.members, declaration: c.crowdlock.declaration.sha256, cosigners: c.crowdlock.cosigner_keys ?? [], unread });

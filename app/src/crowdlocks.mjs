@@ -125,8 +125,8 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs
   // Where it lives. The Crowdlocks this app ships with are pinned: their
   // declaration's fingerprint is tied here to the one link they live at, so a
   // copy of one, whatever its file says and whoever its co-signer, opens the
-  // real one instead (OpenAI review 7: a copy could otherwise bring its own
-  // co-signer and sign its own address). Any other Crowdlock that says where
+  // real one instead: a home signature alone can't stop a copy that brings its
+  // own co-signer and signs its own address. Any other Crowdlock that says where
   // it lives, signed by every one of its co-signer keys (checkHome), is
   // opened from there. Either way the phone goes to the real one, once.
   // Decided before anything else of the file is fetched, so a copy missing
@@ -421,7 +421,7 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
 
 // ---------------------------------------------------------------------------
 // Locks this phone has seen on a register, and commitments that are only on
-// the relays (security loop, 17 November 2026). The rules are the method's
+// the relays. The rules are the method's
 // own (method/js/release.mjs, method/js/proposals.mjs), shared with the
 // website; here they are given the app's address prefix for the network.
 // ---------------------------------------------------------------------------
@@ -444,13 +444,13 @@ export function relayOnlyCommitments(found, { crowdlock, register, inPile = new 
 }
 
 // ---------------------------------------------------------------------------
-// Copies (security loop, 17 November 2026).
+// Copies.
 //
 // A lock counts for the Crowdlock whose co-signer key it names. Nothing stops
 // a second Crowdlock's file naming the same key, or the same declaration, and
-// every lock of the first then counts for the copy too: a stranger's file
-// showed The Kop Fund's locked bitcoin and members as its own, level with it
-// in Find. Which of two such files is the real one cannot be read from the
+// every lock of the first then counts for the copy too, so a stranger's file
+// could show The Kop Fund's money as its own in Find. Which of two such files
+// is the real one cannot be read from the
 // files. So: one the app or the person already has is believed over one that
 // is merely announced, and where neither is, both are marked.
 // ---------------------------------------------------------------------------
@@ -520,10 +520,8 @@ export function shortBtc(sats) {
  * This member's locks on the register, as the app's lock terms. Only records
  * that really are a lock of this Crowdlock whose owner key is this member's
  * own: the address is rebuilt from the terms, and the owner is worked out
- * from the key, never read from the record's `member` label. Until
- * 17 November 2026 the label was believed, so a register could show any
- * funded address as a member's lock, or a member's real lock with another
- * date, which then could not be taken home from the app.
+ * from the key, never read from the record's `member` label, which a
+ * register could set to show any funded address as a member's lock.
  */
 export function locksOnRegister(register, memberAddress, crowdlock) {
   const a = String(memberAddress).toLowerCase();
@@ -540,7 +538,7 @@ export function locksOnRegister(register, memberAddress, crowdlock) {
 // today. Whoever can write to it could name an attestor of their own, set the
 // wait to none, or cut a revocation off the end of the list. So the phone
 // keeps what it saw, says when any of it changes, and pauses committing and
-// co-signing until the person has looked (second review, 17 November 2026).
+// co-signing until the person has looked.
 // ---------------------------------------------------------------------------
 
 /** What this phone remembers of a loaded Crowdlock's destination rules. */
@@ -556,8 +554,8 @@ export function rulesOf(loaded) {
     entries: entries.length,
     head,
     hashes: entries.map((e) => { try { return destinationHash(e); } catch { return "unreadable"; } }),
-    // Two more numbers the file's writer could change unseen (security loop,
-    // round 3): the largest fee a commitment may leave, which also decides
+    // Two more numbers the file's writer could change unseen: the largest fee
+    // a commitment may leave, which also decides
     // what the early-release record lets pass as a purchase; and each
     // proposal's target, which is outside its hash and decides "the target
     // is met" and whether the co-signer's button is live.

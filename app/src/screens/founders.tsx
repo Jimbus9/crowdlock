@@ -473,8 +473,7 @@ function useGitHub(step: (text: string) => void = () => {}) {
 
 // After signing in to GitHub the founder comes back to the app, and a Ledger
 // needs unlocking (PIN) and its Bitcoin app opening before it can sign. The
-// app waits for them to say it's ready rather than reaching for it at once
-// (James, 17 November 2026: it failed within seconds of coming back).
+// app waits for them to say it's ready rather than reaching for it at once.
 function useLedgerReady(account: any) {
   const [go, setGo] = useState<null | (() => void)>(null);
   const ready = () => account?.kind !== "ledger" ? Promise.resolve()

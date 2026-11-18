@@ -28,10 +28,9 @@ on:
 #   publish  runs no code from the repository or from any library. It takes
 #            the APK the build handed on and publishes it as "app-test".
 #
-# Until 17 November 2026 this was one job with a token that could write. Any
-# library it installed could have used that token to replace the REAL-bitcoin
-# release ("app-mainnet") with an app of its own, or to change this
-# repository's code (security loop, round 1).
+# Two jobs, so that no library the build installs ever holds a token that
+# could write: with one, it could publish an app of its own as a release, or
+# change this repository's code.
 permissions:
   contents: read
 
