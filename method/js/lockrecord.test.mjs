@@ -74,6 +74,26 @@ for (const net of ["mainnet", "testnet4"]) {
   check(`Address on ${net}`, ours === theirs, ours.slice(0, 18) + "…");
 }
 
+// A key that is not a compressed public key makes no script, from either
+// (security loop, round 5). The proven code always refused one; this one
+// wrote "33 bytes follow" and then whatever it was given, so a 65-byte key
+// still made "a lock", with an address, which the app's commitment checker
+// went on to accept where the reference checker refused.
+{
+  const throws = (f) => { try { f(); return false; } catch { return true; } };
+  const long = "04" + "11".repeat(64);          // an uncompressed key, 65 bytes
+  for (const [label, owner, cosigner] of [
+    ["an uncompressed owner key", long, COSIGNER], ["an uncompressed co-signer key", OWNER, long],
+    ["a key cut short", OWNER.slice(0, 64), COSIGNER], ["a key that is not hex", "02" + "zz".repeat(32), COSIGNER],
+    ["a key that starts 05", "05" + OWNER.slice(2), COSIGNER], ["no key at all", undefined, COSIGNER],
+  ]) {
+    const ours = throws(() => lockScript({ ownerPubkey: owner, cosignerPubkey: cosigner, locktime: NOW + 31557600 }));
+    const theirs = throws(() => proven.lockScript({ fanPubkey: Buffer.from(String(owner ?? ""), "hex"), cosignerPubkey: Buffer.from(String(cosigner ?? ""), "hex"), locktime: NOW + 31557600 }));
+    check(`No script for ${label}, from either`, ours && theirs, ours ? "" : "THIS ONE MADE A SCRIPT");
+  }
+  check("…nor an address", throws(() => lockAddress({ ownerPubkey: long, cosignerPubkey: COSIGNER, locktime: NOW + 31557600 }, "bc")));
+}
+
 // Outside what a locktime can be, both refuse: nothing is quietly cut short.
 for (const [label, t] of [["nought", 0], ["a negative number", -5], ["more than a locktime can hold (2^32)", 4294967296], ["a fraction", 1.5]]) {
   const throws = (f) => { try { f(); return false; } catch { return true; } };

@@ -179,6 +179,14 @@ A fourth fresh AI reviewer read both repositories after round 3's fixes. Each wa
 - **The fund's pages wrote text from a Crowdlock's file into the page as HTML.** With `?c=kop-fund-testnet4` the Join and Register pages read the method repository's test Crowdlock, so whoever could write that file could put a page of their own on the fund's address. That text is now escaped.
 - **Smaller:** every "declared dead" notice read from the relays by the app shared one key, so an early-dated junk notice took a genuine one's place there.
 
+## What the security loop found, and what changed (17 November 2026, round 5)
+
+A fifth fresh AI reviewer read both repositories after round 4's fixes and found nothing at medium or above. One smaller thing, reproduced and fixed with a test that fails on the old code:
+
+- **The register's lock builder made a "lock" from a key that is not a key.** `lockScript` in `method/js/lockrecord.mjs` wrote "33 bytes follow" and then whatever it was given, so a 65-byte uncompressed key still made a script and an address, and the app's commitment checker went on with it where the reference checker refused. Nothing reached it: the register and the pile both check a key's shape first. Both builders now refuse any key that is not 33 bytes starting 02 or 03.
+
+That is one clean round, by one reviewer of the same kind as the four before it. It is not an outside review.
+
 ## Limits we already know about
 
 - **A lock record carries no signature,** so anybody can post lock records naming a member's key. The inbox's limits keep such a flood from stopping it or holding up other members, but the member whose key is named can have their next lock delayed on this route for as long as the flood lasts. A pull request still works. A lock record signed by its owner would close this.

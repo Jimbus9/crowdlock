@@ -774,6 +774,17 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     byHeight.address = lockAddress({ ownerPubkey: fan.publicKey, cosignerPubkey: coKey5, locktime: 800000 }, "tb");
     const vHeight = await checkCommitment({ record: { ...onShort, lock: byHeight }, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: "testnet4" });
     check("A commitment from a lock dated by block height is refused on a real network", !vHeight.valid && /dated by block height/.test(vHeight.reason), vHeight.reason);
+    // A record whose owner key is not a compressed key (security loop, round 5):
+    // the reference checker always refused it; the app's made a "lock" from it.
+    const longKey = "04" + "11".repeat(64);
+    const badKey = { ...onShort, lock: { ...onShort.lock, owner_pubkey: longKey } };
+    let madeAddress = null;
+    try { madeAddress = lockAddress({ ownerPubkey: longKey, cosignerPubkey: coKey5, locktime: onShort.lock.locktime }, net.bech32 ?? "rb"); } catch {}
+    const vKey = await checkCommitment({ record: madeAddress ? { ...badKey, lock: { ...badKey.lock, address: madeAddress } } : badKey, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    const rKey = C.verifyCommitment({ record: badKey, utxoValue: sc.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
+      proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry] });
+    check("A commitment whose lock names a key that is not a compressed key is no lock, to the app and the reference alike",
+      madeAddress === null && !vKey.valid && !rKey.valid && /not a valid lock/.test(vKey.reason) && /not a valid lock/.test(rKey.reason), madeAddress ? "THE APP MADE A LOCK OF IT" : vKey.reason);
   }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");
