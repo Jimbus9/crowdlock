@@ -223,12 +223,57 @@ Nothing in what the code does changed; every existing test passes unchanged.
   sections above, and in the git history. Test files keep theirs, since a test
   named for the problem it guards against is easier to follow.
 
+## What changed on 18 November 2026, later: OpenAI's eighth review
+
+Read against crowdlock `c9cad6f` and the-kop-fund `b20b58e`, blind first and
+then directed at the seventh review's fixes. Every finding was checked against
+the code; all that were real are fixed.
+
+- **The inbox read two of the libraries' files with full permissions.** A bad
+  library could have left a link in their place pointing at the runner's own
+  environment, which holds the job's token, and the inbox would have put it in
+  its published health file. Both are now read as the libraries' own user, and
+  only if they are ordinary files.
+- **The Kop Fund's anchoring job ran its library while holding write
+  permission.** It is two jobs now, like the app build: the library runs with
+  read permission only, and a second job that runs no library checks it was
+  handed only proofs and a snapshot identical to the register, then commits.
+- **What a pass may change, tightened (relay/accept.mjs).** Relays may only be
+  swapped one for one, each for the next spare, as the inbox does. A completed
+  payment may only be added for a commitment already in the pile, and must be
+  the same transaction (its txid is worked out here, without a library). A
+  payment may be marked sent only if the block explorer knows it, so a pass
+  can't stop the inbox ever sending one. A new pile only for a published
+  proposal.
+- **Payments completed after a proposal was declared dead counted toward the
+  target that lets the inbox start sending the rest,** though they are never
+  sent themselves. Only those it would send count now. And none is sent while
+  any still waiting pays below the network's lowest fee rate today, so a
+  low-fee commitment can't leave the others paying part of a purchase (this
+  helps before sending starts; it can't once some have gone and fees then rise).
+- **A retired co-signer key could declare a proposal dead.** Only the newest
+  key can now, and the app signs a notice only with it.
+- **A commitment posted after closing counted for an hour** on phones and the
+  website, though the inbox never takes it, and the co-signer's screen could
+  have completed it. Readers now use the inbox's own window, to the second.
+- **A payment disappeared from the total when its destination was later
+  revoked.** It is counted as paid; revoking stops new payments only.
+- **An early spend to a listed destination that named no proposal** was read
+  as a purchase. A payment to a destination must now name exactly one
+  proposal, as every commitment does; a move that only keeps money locked must
+  name none.
+- **A proposal's target could be cut after closing** by whoever writes the
+  repository, stating a wrong rate. The daily history check now goes red if a
+  target changes after its proposal has closed.
+- **The commit screens now say** that a signed commitment stays valid until
+  the lock opens, even after its proposal closes or fails.
+
 ## Limits we already know about
 
-- **A commitment's fee is fixed when it is signed.** If the network's floor has risen by settlement, it cannot be sent. A lock must stay shut more than a week after settling, so its owner can't take it home in the meantime; and the co-signer and the inbox stop at the first payment that fails, but the payments before it have gone.
+- **Settlement is not all or nothing.** Each commitment is its own transaction, and its fee is fixed when it is signed. The inbox sends none while any pays below the network's lowest rate, but if fees rise after sending has started, the payments already gone stay gone. A design where every commitment goes into one transaction, valid only once it adds up to the target, would fix this at the root; it needs each member to commit a coin of the exact amount, and one transaction holds a few hundred members. Not decided.
 - **Unsigned lock records can still be delayed.** A Ledger's lock, and one made on the website, go unsigned; a flood of records naming that member's key can delay them on the relay route.
 - **A lock first registered more than a month after it was made, or after its co-signer key was replaced, is refused by the inbox** even though its money is locked; its owner can still take it home on its date, or lock it again.
-- **What a pass of the inbox adds is checked for its kind, not its truth.** relay/accept.mjs lets through only added records and swapped relays; a bad library could still add records that are well formed but wrong. Every reader checks each record in full, so such records don't count.
+- **What a pass of the inbox adds is checked for its kind, not its truth.** relay/accept.mjs lets through only added records, swapped relays, and payments the explorer knows were sent; a bad library could still add commitments or registrations that are well formed but wrong, or write misleading relay health (which can only lead to a spare being swapped in). Every reader checks each record in full, so such records don't count. A bad library also runs the sending, so it can always decline to send.
 - **A member's signature can be re-posted as a second member.** A signature made with a compressed key, with its first byte changed, verifies for the address of the same key written uncompressed, and the inbox adds it. It can own no lock, so no counted figure moves; the signatory count, which is never a headline, grows.
 - **Twenty junk commitments naming a member's lock hide that member's commitment from phones** until the inbox has taken it into the pile, a few minutes later. The inbox is not fooled.
 - **A lock holding more than five coins can have only five commitments taken** for one proposal, and somebody re-posting them can choose which five.
@@ -243,7 +288,7 @@ Nothing in what the code does changed; every existing test passes unchanged.
 - **Somebody who can write to the repository can publish a new "latest" release.** Published releases can no longer be changed, and no job that runs outside libraries holds write permission, but the founder's account (or a stolen session of it) could publish another app as latest. A phone that already has the genuine app refuses it as an update; a new install checks nothing. The release notes give the signing certificate's fingerprint to compare.
 
 - **One block explorer is believed at a time.** The register adds a lock when the explorer its Crowdlock's file names (`chain_api`) reports confirmed coins at the lock's address, so a lying explorer could make a lock count without the money being there. The app is in a better place than it was: it reads the chain for every Crowdlock from its own explorer for the network, never the one the Crowdlock names, and before signing anything it checks each coin's amount against the transaction the coin came from. Its backup explorer is only asked when the first is silent or broken. Nothing anywhere compares two explorers, or asks a node.
-- **The co-signer is trusted not to complete a commitment early.** A dishonest co-signer can complete a commitment from a proposal that was never funded, while the coin is still unspent. The money can only go where the owner already signed for it to go, to a destination on the published list. It cannot go anywhere else, and the co-signer cannot move a coin alone.
+- **The co-signer is trusted not to complete a commitment early, or late.** A dishonest co-signer can complete a commitment from a proposal that was never funded, or one that failed long ago, while the coin is still unspent, which is until the lock opens. The money can only go where the owner already signed for it to go, to a destination on the published list. It cannot go anywhere else, and the co-signer cannot move a coin alone.
 - **The co-signer can let a member out early.** Owner and co-signer together can spend a lock at any time, to anywhere. Bitcoin does not stop it; the chain records it, and `method/js/release.mjs` reads that record.
 - **Today the co-signer is one key held by the founder.** Two of three is the direction once there is a second person.
 - **Every lock's public keys are published.** The register lists each lock's owner key and co-signer key so that anyone can rebuild its address. A lock therefore has none of the protection a hidden key gives: if quantum computers one day work a private key out from a public one, these locks are exposed sooner than most. Locks renew within five years, which is the route to a safer address type once Bitcoin has one. Nobody has planned that move.

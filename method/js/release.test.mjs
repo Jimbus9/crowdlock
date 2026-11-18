@@ -42,6 +42,9 @@ const spend = (route, destination) => {
 const home = spend("home", elsewhere);
 const coSignedAway = spend("purchase", elsewhere);
 const coSignedToShop = spend("purchase", shop);
+// A commitment completed: its payment names its proposal in one marker output.
+const MARK = { value: 0, scriptpubkey: "6a20" + "ab".repeat(32), scriptpubkey_address: null };
+const marked = (tx) => ({ ...tx, vout: [...tx.vout, MARK] });
 
 check("A spend on its date is not read as co-signed", !isCoSigned(asExplorer(home, locktime + 10).vin[0]));
 check("A co-signed spend is read as co-signed", isCoSigned(asExplorer(coSignedAway, 1).vin[0]));
@@ -114,9 +117,11 @@ const longAgo = before - 30 * 86400;
 const list = await makeList([{ op: "add", address: shop, stampedAt: longAgo }]);
 const lctx = { destinations: list, crowdlock, stamps };
 check("Co-signed to a listed destination is a purchase, not a release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], lctx).length === 0);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], lctx).length === 0);
+check("Co-signed to a listed destination naming no proposal: an early release",
+  earlyReleases(L, [asExplorer(coSignedToShop, before)], lctx).length === 1);
 check("With the list empty, as it is today, every co-signed early spend is a release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...lctx, destinations: { entries: [] } }).length === 1);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], { ...lctx, destinations: { entries: [] } }).length === 1);
 const revoked = await makeList([{ op: "add", address: shop, stampedAt: longAgo }, { op: "revoke", address: shop }]);
 const readded = await makeList([{ op: "add", address: shop, stampedAt: longAgo }, { op: "revoke", address: shop }, { op: "add", address: shop, stampedAt: longAgo }]);
 const listed = (l, at = before) => isListedDestination(shop, l, { crowdlock, stamps, at });
@@ -146,9 +151,11 @@ check("330 sats to a listed destination and the rest to a wallet: an early relea
   hidden.length === 1 && hidden[0].paidTo === elsewhere);
 check("To a listed destination, the rest back into the same lock, and the proposal marker: a purchase",
   earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 399000), marker])], ctx).length === 0);
+check("Moved into another of the owner's locks with a proposal marker: an early release",
+  earlyReleases(L, [withOuts([pay(sameLock, 499000), MARK])], ctx).length === 1);
 check("The rest into a lock of the same owner with a later date, on the register: a purchase",
   // (399,000 back, not 398,000: a purchase leaves at most 1% of what it pays its destination as fee, as a commitment must.)
-  earlyReleases(L, [withOuts([pay(shop, 100000), pay(later, 399000)])],
+  earlyReleases(L, [withOuts([pay(shop, 100000), pay(later, 399000), marker])],
     { ...ctx, register: { members: [], locks: [{ address: later, owner_pubkey: ownerHex, cosigner_pubkey: cosHex, locktime: locktime + 86400 }] } }).length === 0);
 check("The rest into a lock of the same owner with an EARLIER date: an early release",
   earlyReleases(L, [withOuts([pay(shop, 100000), pay(earlier, 398000)])],
@@ -183,19 +190,19 @@ check("Paid to an address the file lists but nobody attested: an early release",
   earlyReleases(L, [withOuts([pay(elsewhere, 498000)])], { ...ctx, destinations: unattested }).length === 1);
 const lateStamp = await makeList([{ op: "add", address: shop, stampedAt: before + 86400 }]);
 check("Paid to a destination stamped only after the payment: an early release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: lateStamp }).length === 1);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], { ...ctx, destinations: lateStamp }).length === 1);
 const young = await makeList([{ op: "add", address: shop, stampedAt: before - 86400 }]);
 check("Paid to a destination still inside its waiting period: an early release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: young }).length === 1);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], { ...ctx, destinations: young }).length === 1);
 // One address, two spellings (OpenAI review M-02): a destination listed in capitals is the same destination.
 const shouted = await makeList([{ op: "add", address: shop.toUpperCase(), stampedAt: longAgo }]);
 check("A destination listed in capital letters is the same destination as the payment's small-letter address",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: shouted }).length === 0);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], { ...ctx, destinations: shouted }).length === 0);
 const unstamped = await makeList([{ op: "add", address: shop }]);
 check("Paid to an attested destination with no stamp: an early release",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { ...ctx, destinations: unstamped }).length === 1);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], { ...ctx, destinations: unstamped }).length === 1);
 check("Without the Crowdlock's own file, nothing counts as listed",
-  earlyReleases(L, [asExplorer(coSignedToShop, before)], { destinations: list, stamps }).length === 1);
+  earlyReleases(L, [marked(asExplorer(coSignedToShop, before))], { destinations: list, stamps }).length === 1);
 const cos2 = ECPair.makeRandom({ network });
 const hop = recordAddress({ ownerPubkey: ownerHex, cosignerPubkey: Buffer.from(cos2.publicKey).toString("hex"), locktime }, "bc");
 check("Moved to the same owner's lock under a second co-signer key, not on the register: an early release",

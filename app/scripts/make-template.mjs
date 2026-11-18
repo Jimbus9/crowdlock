@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-18i";
+export const TEMPLATE_VERSION = "2026-11-18j";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -59,6 +59,7 @@ export const CHANGES = [
   { version: "2026-11-18g", change: "Fixes from the seventh outside review. Where your Crowdlock lives must now be signed by every one of its co-signer keys, over its network too: a home signed the earlier way no longer checks, so sign it again from the app. A target at a price of zero or a price too long to be a number is refused. And a member signing a declaration version in between no longer trips the register-history check" },
   { version: "2026-11-18h", change: "Your relay inbox now runs its outside libraries as a separate user that holds no permission to change your repository, and commits only changes that add records or swap in a spare relay. A new workflow checks every day that your records have only ever grown. Commitments must come from members who really signed the version a proposal was published under, everywhere they are counted. And completed payments are sent only once together they reach the target, stopping at the first that fails" },
   { version: "2026-11-18i", change: "Tidier code, with nothing changed in what it does: comments now say what each part does and why, and the history of how it got there is kept in the method's REVIEWING.md" },
+  { version: "2026-11-18j", change: "Fixes from the eighth outside review. Your inbox reads its libraries' messages as their own user, never with full permissions; a pass may mark a payment sent only once the block explorer knows it, add a completed payment only for a commitment in the pile, start a pile only for a published proposal, and swap relays only one for one. Payments completed after a proposal was declared dead no longer count toward sending the rest, and none is sent while any pays below the network's lowest fee rate. Only your newest co-signer key can declare a proposal dead. A commitment posted after closing never counts. A payment stays counted after its destination is revoked. A proposal's target can't change once it has closed" },
 ];
 
 const FROM_REPO = [

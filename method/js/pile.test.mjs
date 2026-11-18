@@ -67,6 +67,19 @@ p = await read([rec(0, "aa")], { relay: [relayOnly], now: Date.parse("2027-01-10
 check("A relay-only commitment is counted while gathering, after the repository's", p.count === 2 && settleOrder(p.good)[1].record.tx === "dd");
 p = await read([rec(0, "aa")], { relay: [relayOnly] });
 check("…and not once relay-only commitments have stopped counting", p.count === 1);
+// Posted ten minutes after closing: the inbox never takes it, so neither does
+// anyone counting, even in the hour relay-only commitments still count.
+const late = { type: "commitment", record: rec(1, "ee"), at: Date.parse("2027-01-29T00:10:00Z") / 1000 };
+p = await read([rec(0, "aa")], { relay: [late], now: Date.parse("2027-01-29T00:30:00Z") });
+check("A commitment posted after closing doesn't count, even within the hour", p.count === 1);
+const lastMinute = { ...late, record: rec(1, "ef"), at: Date.parse("2027-01-28T23:59:00Z") / 1000 };
+p = await read([rec(0, "aa")], { relay: [lastMinute], now: Date.parse("2027-01-29T00:30:00Z") });
+check("…one posted a minute before closing does, until the inbox has it", p.count === 2);
+// A destination taken off the list after a payment was made to it.
+p = await read([rec(0, "aa")], { results: { aa: { valid: false, reason: "destination not permitted: it was revoked" } }, payments: { aa: { sats: 40000, confirmed: true } } });
+check("A payment made before its destination was revoked still counts as paid", p.paid === 40000 && p.paidCount === 1 && p.refused.length === 0);
+p = await read([rec(0, "aa")], { results: { aa: { valid: false, reason: "destination not permitted: it was revoked" } } });
+check("…and a commitment to it never paid is refused, not counted", p.paid === 0 && p.count === 0 && p.refused.length === 1);
 
 console.log("-".repeat(80));
 console.log(failures === 0 ? "A pile is added up the same way for the app and the website." : `${failures} check(s) failed.`);

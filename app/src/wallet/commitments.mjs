@@ -325,7 +325,10 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
   if (!wordsAreValid(tidy)) throw new Error("those are not valid backup words — check the spelling and the order");
   const node = BIP32.fromSeed(mnemonicToSeedSync(tidy), networks.bitcoin).derivePath(COSIGNER_PATH);
   const pub = toHex(node.publicKey);
-  if (!(crowdlock.cosigner_keys ?? []).includes(pub)) throw new Error("these words don't make this Crowdlock's co-signer key");
+  const keys = crowdlock.cosigner_keys ?? [];
+  if (!keys.includes(pub)) throw new Error("these words don't make this Crowdlock's co-signer key");
+  // Only the newest key speaks for proposals (noticeIsGenuine).
+  if (pub !== keys[keys.length - 1]) throw new Error("these words make an older co-signer key; a notice must be signed with the newest one");
   const net = typeof network === "string" ? NETWORKS[network].network : (network.network ?? network);
   const address = memberAddressForOwnerKey(pub, net.bech32);
   const { signature, recoveryId } = ecc.signRecoverable(messageHash(statement), node.privateKey);

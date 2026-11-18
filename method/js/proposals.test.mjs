@@ -248,6 +248,12 @@ check("A completed transaction event reads back", commitmentFromEvent(done, inst
   check("The notice is a fixed sentence naming the proposal", noticeStatement(hash) === `I declare proposal ${hash} dead: it did not reach its target, and I will complete none of its commitments.`);
   check("A notice signed by the co-signer is genuine; one signed by anyone else is not",
     noticeIsGenuine(signNotice(cosignerKey), args).ok && !noticeIsGenuine(signNotice(key), args).ok);
+  // The co-signer key replaced: the old one stays listed for the locks made
+  // with it, but no longer speaks for proposals.
+  const newKey = ECPair.makeRandom({ network: NET });
+  const rotated = { ...args, crowdlock: { ...cl, cosigner_keys: [...cl.cosigner_keys, Buffer.from(newKey.publicKey).toString("hex")] } };
+  check("Once the key is replaced, a notice signed by the old one is not genuine; the new one's is",
+    !noticeIsGenuine(signNotice(cosignerKey), rotated).ok && noticeIsGenuine(signNotice(newKey), rotated).ok);
   // A copy with a made-up co-signer signature has the real completion's id.
   // Posted first, it used to be recorded and the real one then ignored.
   const fake = (n) => mk(n, [Buffer.from("dead", "hex"), Buffer.alloc(0), Buffer.from("aa", "hex"), Buffer.from("bb", "hex")]);

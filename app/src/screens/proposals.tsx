@@ -407,7 +407,7 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
         ? <Btn kind="link" label="Change the fee speed" onPress={() => setShowSpeeds(true)} />
         : <FeeChoice onChange={readRate} />}
       <Warning level="stop" title="A commitment can't be withdrawn">
-        A commitment holds until the proposal closes, and can't be withdrawn. Nothing moves unless the proposal reaches its target and the co-signer completes it. If it doesn't, your money stays locked and comes home on its date. One catch: until then your signed commitment stays valid, so a dishonest co-signer could still complete it, but only to that same listed seller.
+        A commitment holds until the proposal closes, and can't be withdrawn. Nothing moves unless the proposal reaches its target and the co-signer completes it. If it doesn't, your money stays locked and comes home on its date. One catch: until your lock opens, your signed commitment stays valid, even after the proposal closes or fails, so a dishonest co-signer could still complete it, but only to that same listed seller and only for the amount you signed.
       </Warning>
       <LedgerHint account={account} />
       {several && <Text style={s.p}>Each lock is signed as its own commitment, one after another.{account.kind === "ledger" ? ` Your Ledger will ask you to approve ${chosen.length} times.` : ""}</Text>}

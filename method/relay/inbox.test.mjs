@@ -638,6 +638,36 @@ const ev = (id, created_at) => ({ id, created_at });
   }
 }
 
+
+// When the inbox may start sending a proposal's completed payments.
+{
+  const { readyToSend, feeFloor } = await import("./signed.mjs");
+  const { Transaction } = await import("bitcoinjs-lib");
+  const pile = JSON.parse(readFileSync(joinPath(ROOT, "crowdlocks/test/commitments/10abbe26c46a13d0ced41ec8655ab343a60e85dbfb6becaffbc2fc3cc850d1e6.json"), "utf8"));
+  const c = { txid: pile.completed[0].txid, tx: pile.completed[0].tx };
+  const t = Transaction.fromHex(c.tx);
+  const pays = Number(t.outs[0].value), out = t.outs.reduce((a, o) => a + Number(o.value), 0), vsize = t.virtualSize();
+  const worth = (feeRate) => async () => out + Math.ceil(feeRate * vsize);
+  let r = await readyToSend([c], pays, { floor: 1, valueOf: worth(5) });
+  check("Payments that reach the target, each above the fee floor: sent", r.ok, r.reason);
+  r = await readyToSend([{ ...c, after_notice: true }], pays, { floor: 1, valueOf: worth(5) });
+  check("One completed after the proposal was declared dead doesn't count", !r.ok && r.sats === 0, r.reason);
+  r = await readyToSend([c], pays + 1, { floor: 1, valueOf: worth(5) });
+  check("Short of the target: none sent", !r.ok, r.reason);
+  r = await readyToSend([c], pays, { floor: 10, valueOf: worth(5) });
+  check("One paying below the network's floor today: none sent", !r.ok && /below/.test(r.reason), r.reason);
+  r = await readyToSend([c], pays, { floor: null, valueOf: worth(5) });
+  check("The floor unknown: none sent", !r.ok, r.reason);
+  r = await readyToSend([c], pays, { floor: 1, valueOf: async () => null });
+  check("What a payment spends unknown: none sent", !r.ok, r.reason);
+  r = await readyToSend([{ ...c, sent: "2026-11-18T00:00:00Z" }], pays, { floor: 10, valueOf: async () => null });
+  check("Ones already sent aren't asked about again", r.ok, r.reason);
+  const answer = (status, body) => ({ ok: status === 200, status, json: async () => body, text: async () => JSON.stringify(body) });
+  check("The floor read from mempool.space's figure", await feeFloor("https://x", async (u) => u.endsWith("/v1/fees/recommended") ? answer(200, { minimumFee: 2 }) : answer(404, {})) === 2);
+  check("The floor read from Esplora's estimates", await feeFloor("https://x", async (u) => u.endsWith("/fee-estimates") ? answer(200, { 1: 30, 144: 3, 1008: 1.5 }) : answer(404, {})) === 1.5);
+  check("No floor when the explorer answers neither", await feeFloor("https://x", async () => answer(500, {})) === null);
+}
+
 console.log("-".repeat(80));
 console.log(failures === 0 ? "The relay inbox takes in valid records and only those." : `${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
