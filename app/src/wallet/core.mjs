@@ -41,7 +41,7 @@ import { messageHash, verifyMembership, memberAddressForOwnerKey, canonicalAddre
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
-import { destinationIsPermitted, attestorsOf, stampsFor } from "../../../method/js/proposals.mjs";
+import { destinationIsPermitted, attestorsOf, stampsFor, SETTLE_MARGIN } from "../../../method/js/proposals.mjs";
 import { isCosignerOf } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
@@ -893,7 +893,7 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   } else {
     const settles = Date.parse(proposal.settles_by ?? proposal.settlesBy ?? "");
     if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
-    if (!(L.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");
+    if (!(L.locktime > settles / 1000 + (hrp === "bcrt" ? 0 : SETTLE_MARGIN))) return fail("the lock opens before the proposal's settling ends, or within a week of it, so its owner could take the money home before the payment confirms");
   }
 
   let tx;
@@ -990,8 +990,9 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (!coin.confirmed) return fail("the coin it spends hasn't confirmed yet, so it counts toward nothing");
   const fee = coin.value - tx.outs.reduce((n, o) => n + Number(o.value), 0);
   if (fee < 0) return fail("outputs exceed the input");
-  if (fee > committedSats * crowdlock.max_commitment_fee) {
-    return fail(`fee of ${fee} sats is more than ${crowdlock.max_commitment_fee * 100}% of the ${committedSats} committed — refusing in case of a client bug`);
+  const feeLimit = Math.min(crowdlock.max_commitment_fee, 0.05); // never more than 5%, whatever the file says
+  if (fee > committedSats * feeLimit) {
+    return fail(`fee of ${fee} sats is more than ${feeLimit * 100}% of the ${committedSats} committed — refusing in case of a client bug`);
   }
   const least = completedVsize(tx);
   if (fee < least) return fail(`fee of ${fee} sats is below the ${least} the network needs to pass this payment on`);

@@ -658,7 +658,8 @@ rejects("A list attested by somebody the Crowdlock's file does not name, even wh
   const settles = Date.parse(PROPOSAL.settlesBy) / 1000;
   rejects("A lock that opens before settling ends", verifyWith(dated(settles - 86400)), "opens before the proposal's settling ends");
   rejects("A lock that opens the moment settling ends", verifyWith(dated(settles)), "opens before the proposal's settling ends");
-  check("A lock that opens after settling ends is accepted", verifyWith(dated(settles + 86400)).valid, true, verifyWith(dated(settles + 86400)).reason);
+  rejects("A lock that opens six days after settling ends (a week's margin is needed)", verifyWith(dated(settles + 6 * 86400)), "within a week of it");
+  check("A lock that opens eight days after settling ends is accepted", verifyWith(dated(settles + 8 * 86400)).valid, true, verifyWith(dated(settles + 8 * 86400)).reason);
   // A lock dated by block height was never compared with the settling date.
   // On a public network a height in the past is a lock its owner can already
   // take home alone, so its money was counted and could be co-signed while

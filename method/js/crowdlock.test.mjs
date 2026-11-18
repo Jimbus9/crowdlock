@@ -122,6 +122,12 @@ refuses("A title that could break the signed statement",
   checkCrowdlock({ ...kop, declaration: { ...kop.declaration, title: "Thing (v9)" } }), "brackets");
 refuses("A fee cap of 100%",
   checkCrowdlock({ ...kop, max_commitment_fee: 1 }), "max_commitment_fee");
+refuses("A fee cap of 6%: no Crowdlock may set more than 5%",
+  checkCrowdlock({ ...kop, max_commitment_fee: 0.06 }), "at most 0.05");
+{
+  const r = checkCrowdlock({ ...kop, max_commitment_fee: 0.05 });
+  check("A fee cap of exactly 5% is accepted", r.ok, r.ok ? "" : r.problems[0]);
+}
 refuses("A fraction of a year on real bitcoin",
   checkCrowdlock({ ...kop, lock_lengths_years: [0.5, 1] }), "whole numbers of years");
 check("A test Crowdlock may offer an hour",

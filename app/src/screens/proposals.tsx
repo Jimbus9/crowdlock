@@ -8,7 +8,7 @@ import {
   wordsAreValid, tidyWords, xpubForKey, buildCommitment, checkCommitment, completeCommitmentWith, commitmentPaid, commitmentTxid, signNoticeWith, commitmentsToComplete, commitmentCoin, commitmentPayment,
 } from "../wallet/core.mjs";
 import { memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
-import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments } from "../../../method/js/proposals.mjs";
+import { phaseOf, pilePath, checkPileShape, noticeStatement, noticeIsGenuine, proposalVersion, stillTakingCommitments, settleMargin } from "../../../method/js/proposals.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
   loadCrowdlock, membershipOf, shortBtc, locksOnRegister, baseFor, resolvePath, mayCommitTo, rulesOf, rulesChanges, relayOnlyCommitments,
@@ -318,9 +318,9 @@ export function CommitFlow({ words, url, hash, go }: { words: string; url: strin
       try { for (const m of (await readPile(c, p, account)).mine) { const k = commitmentCoin(m.record); if (k) committed.add(k); } } catch {}
       let skipped = 0;
       for (const l of locksOnRegister(c.register, account.address, c.crowdlock)) {
-        // A lock that opens before this proposal's settling ends can't back it:
-        // its owner could take the money home first.
-        if (l.locktime <= now || l.locktime <= Date.parse(p.settles_by) / 1000) continue;
+        // A lock that opens before this proposal's settling ends, or within a
+        // week after, can't back it: its owner could take the money home first.
+        if (l.locktime <= now || l.locktime <= Date.parse(p.settles_by) / 1000 + settleMargin(c.crowdlock.network)) continue;
         for (const coin of (await chain.utxos(l.address)).filter((u: any) => u.confirmed)) {
           if (committed.has(`${coin.txid}:${coin.vout}`)) { skipped++; continue; }
           out.push({ lock: { ...l, cosignerXpub: xpubForKey(c.crowdlock, l.cosignerPubkey) }, coin });

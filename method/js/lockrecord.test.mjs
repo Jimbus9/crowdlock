@@ -181,6 +181,8 @@ refuses("A date already passed",
   prepareLock({ ...good, locktime: NOW - 1 }, ctx), "already passed");
 refuses("A lock longer than the longest offered",
   prepareLock({ ...good, locktime: NOW + 6 * 31557600 }, ctx), "longer than this Crowdlock offers");
+refuses("A lock shorter than the shortest length offered (a week, where a year is the least)",
+  prepareLock({ ...good, locktime: NOW + 7 * 86400 }, { ...ctx, crowdlock: { ...crowdlock, lock_lengths_years: [1, 3, 5] } }), "shorter than this Crowdlock offers");
 refuses("An owner who has not signed the declaration",
   prepareLock({ ...good, owner_pubkey: STRANGER }, { ...ctx, crowdlock: { ...crowdlock, cosigner_keys: [COSIGNER] } }),
   "not on the register");

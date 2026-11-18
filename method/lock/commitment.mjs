@@ -459,7 +459,8 @@ export function verifyCommitment({
   network,
   crowdlock = null,
 }) {
-  const maxFee = crowdlock ? crowdlock.max_commitment_fee : MAX_FEE_FRACTION;
+  // Never more than 5%, whatever a Crowdlock file says (James, 18 November 2026).
+  const maxFee = Math.min(crowdlock ? crowdlock.max_commitment_fee : MAX_FEE_FRACTION, 0.05);
   const minimumAgeDays = crowdlock ? crowdlock.destination_wait_days : MINIMUM_AGE_DAYS;
   const checks = [];
   const fail = (reason) => ({ valid: false, reason, committedSats: 0, checks });
@@ -502,7 +503,10 @@ export function verifyCommitment({
   } else {
     const settles = Date.parse(proposal.settlesBy ?? "");
     if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
-    if (!(record.lock.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");
+    // A week's margin after settling (none on a private test chain): the
+    // payment's fee is fixed when it is signed, so it may confirm slowly.
+    const margin = network?.bech32 === "bcrt" ? 0 : 7 * 86400;
+    if (!(record.lock.locktime > settles / 1000 + margin)) return fail("the lock opens before the proposal's settling ends, or within a week of it, so its owner could take the money home before the payment confirms");
     note("the lock stays shut until settling ends", true);
   }
 
