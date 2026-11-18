@@ -6,8 +6,10 @@
 import { readFileSync } from "node:fs";
 import {
   canonicalise, declarationHash, membershipStatement,
-  checkCrowdlock, checkRegisterFiles, checkSeparate, isCosignerOf,
+  checkCrowdlock, checkRegisterFiles, checkSeparate, isCosignerOf, homeLine, checkHome,
 } from "./crowdlock.mjs";
+import { signAsync, getPublicKey, utils } from "./vendor/noble-secp256k1.js";
+import { messageHash } from "./verify.mjs";
 
 const root = new URL("../../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -173,6 +175,26 @@ check("A lock is recognised by its own Crowdlock", isCosignerOf({ cosigner_keys:
 check("…and not by another", !isCosignerOf({ cosigner_keys: [K("cd")] }, K("ab")));
 
 console.log();
+// Where it lives (Needs James item 4, 18 November 2026).
+{
+  const kop = jsonFix("crowdlocks/kop-fund.json");
+  const priv = utils.randomSecretKey ? utils.randomSecretKey() : utils.randomPrivateKey();
+  const pub = Buffer.from(getPublicKey(priv, true)).toString("hex");
+  const c = { ...kop, cosigner_keys: [...kop.cosigner_keys, pub] };
+  const url = "https://thekopfund.org/crowdlocks/kop-fund.json";
+  const sign = async (line, key = priv) => { const g = await signAsync(messageHash(line), key); return Buffer.concat([Buffer.from([39 + g.recovery]), Buffer.from(g.toCompactRawBytes())]).toString("base64"); };
+  const home = { url, key: pub, signature: await sign(homeLine(url, kop.declaration.sha256)) };
+  check("A Crowdlock signed where it lives by one of its co-signer keys passes", checkHome({ ...c, home }).ok, checkHome({ ...c, home }).problems[0] ?? "");
+  check("…and its file still checks out", checkCrowdlock({ ...c, home }, { declarationText: readFix(kop.declaration.file) }).ok);
+  refuses("One signed over another link", checkHome({ ...c, home: { ...home, url: "https://kopfund.example/crowdlocks/kop-fund.json" } }), "doesn't check");
+  refuses("One signed by a key that isn't its co-signer's", checkHome({ ...kop, home }), "one of this Crowdlock's co-signer keys");
+  const other = utils.randomSecretKey ? utils.randomSecretKey() : utils.randomPrivateKey();
+  refuses("One whose signature another key made", checkHome({ ...c, home: { ...home, signature: await sign(homeLine(url, kop.declaration.sha256), other) } }), "doesn't check");
+  refuses("A link that isn't https", checkHome({ ...c, home: { ...home, url: "http://thekopfund.org/x.json" } }), "https://");
+  const later = { ...c, cosigner_keys: [...c.cosigner_keys, "02" + "11".repeat(32)], home };
+  check("Adding a co-signer key later leaves it good", checkHome(later).ok);
+}
+
 rule();
 console.log(failures === 0 ? "Every Crowdlock checks out, and the checks refuse what they should." : `${failures} check(s) failed.`);
 rule();

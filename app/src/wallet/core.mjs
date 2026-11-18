@@ -42,7 +42,7 @@ import { messageHash, verifyMembership, memberAddressForOwnerKey, canonicalAddre
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf, lockLine } from "../../../method/js/lockrecord.mjs";
 import { destinationIsPermitted, attestorsOf, stampsFor, SETTLE_MARGIN } from "../../../method/js/proposals.mjs";
-import { isCosignerOf } from "../../../method/js/crowdlock.mjs";
+import { isCosignerOf, homeLine, checkHome } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
 export const NETWORKS = {
@@ -1019,6 +1019,30 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
   const sig = toBase64(out);
   if (!verifyMembership({ address, signature: sig, message: statement, hrp: net.bech32 }).valid) throw new Error("the notice did not verify — refusing");
   return { address, signature: sig };
+}
+
+/**
+ * Where this Crowdlock lives, signed with the co-signer key these words make:
+ * the `home` its file carries (method/js/crowdlock.mjs, checkHome). `url` is
+ * the link to the Crowdlock's file, exactly as people open it.
+ */
+export function signHomeWith({ words, crowdlock, url, network }) {
+  const tidy = tidyWords(words);
+  if (!wordsAreValid(tidy)) throw new Error("those are not valid backup words — check the spelling and the order");
+  if (!/^https:\/\/[^\s]+$/.test(String(url))) throw new Error("the Crowdlock's link must start with https://");
+  const node = BIP32.fromSeed(mnemonicToSeedSync(tidy), networks.bitcoin).derivePath(COSIGNER_PATH);
+  const pub = toHex(node.publicKey);
+  if (!(crowdlock.cosigner_keys ?? []).includes(pub)) throw new Error("these words don't make one of this Crowdlock's co-signer keys");
+  const net = typeof network === "string" ? NETWORKS[network].network : (network.network ?? network);
+  const line = homeLine(url, crowdlock.declaration.sha256);
+  const { signature, recoveryId } = ecc.signRecoverable(messageHash(line), node.privateKey);
+  const out = new Uint8Array(65);
+  out[0] = 39 + recoveryId; // a native segwit address's signature
+  out.set(signature, 1);
+  const home = { url, key: pub, signature: toBase64(out) };
+  const check = checkHome({ ...crowdlock, home });
+  if (!check.ok) throw new Error(`the signature did not check — refusing (${check.problems[0]})`);
+  return home;
 }
 
 /** The coin a commitment spends, as "txid:vout", or null if it won't read. */

@@ -205,6 +205,19 @@ let session = null;
  * key at the end — the newest key is the one new locks use — and commits.
  * `check(file)` is run on the result and must return { ok, problems }.
  */
+/** Put a signed `home` into a Crowdlock's file (wallet/core.mjs, signHomeWith). Nothing else in it changes. */
+export async function setHome({ token, owner, repo, path, home, check }, fetchImpl = globalThis.fetch) {
+  const gh = client(token, fetchImpl);
+  const got = await gh("GET", `/repos/${owner}/${repo}/contents/${path}`);
+  const c = JSON.parse(Buffer.from(String(got.content).replace(/\s/g, ""), "base64").toString("utf8"));
+  const next = { ...c, home };
+  const r = check ? check(next) : { ok: true };
+  if (!r.ok) throw new Error(`That would break the Crowdlock file: ${r.problems.join("; ")}`);
+  const sha = await commitFiles(gh, owner, repo, { [path]: JSON.stringify(next, null, 2) + "\n" },
+    `Say where ${c.name ?? path} lives\n\nSigned from the Crowdlock app with one of its co-signer keys: this Crowdlock lives at ${home.url}. A copy of its file put up anywhere else now sends people here.`);
+  return { sha };
+}
+
 export async function addCosignerKey({ token, owner, repo, path, key, xpub = null, check }, fetchImpl = globalThis.fetch) {
   const gh = client(token, fetchImpl);
   const got = await gh("GET", `/repos/${owner}/${repo}/contents/${path}`);

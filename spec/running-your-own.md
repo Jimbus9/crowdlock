@@ -133,7 +133,7 @@ Fund's is `crowdlocks/kop-fund.json`: copy it and change the values.
 | `destination_wait_days` | How long a destination must be public before a proposal may name it. Your choice; we recommend at least 7 on real bitcoin. A test copy may use 0 | 7 |
 | `attestor_keys` | Who attests destinations. **Never a co-signer's key** | **Not yet chosen** — an empty list |
 | `attestor_threshold` | How many attestations an entry needs | 1 |
-| `max_commitment_fee` | Fee cap on a commitment, as a fraction of the amount committed | 0.01 |
+| `max_commitment_fee` | Fee cap on a commitment, as a fraction of the amount committed. At most 0.05 | 0.02 |
 | `register` | Your registrations and destinations files | `registrations.json`, `destinations.json` |
 | `chain_api` | Where the register reads balances from. Anybody can swap in their own | mempool.space |
 | `disclaimer` | Optional. Shown on your register page | Not affiliated with Liverpool FC |
@@ -141,6 +141,7 @@ Fund's is `crowdlocks/kop-fund.json`: copy it and change the values.
 | `lock_endpoint` | Optional. The same for locks: an https address that checks a lock's terms against the chain and publishes it. Can refuse but never invent a lock; the pull request route stays open | — (The Kop Fund no longer runs one; members join through the relays) |
 | `relays` | Optional. Public Nostr relays where members post signed registrations and locks, for the Crowdlock's own repository to collect every two minutes — no endpoint, account or key in the path | — |
 | `spare_relays` | Optional. Published in advance; one replaces a live relay that has been silent for 7 days, in a commit saying so | — |
+| `home` | Optional, but do add it. Where this Crowdlock lives: `{ url, key, signature }`, the https link to this file signed by one of its co-signer keys (a Bitcoin Signed Message by that key's address over `crowdlock-home\|<url>\|<declaration sha256>`). Opened anywhere else, the app goes to `url` instead, so a copy put up elsewhere can't pass itself off as this one. Sign it from the app: Look after this Crowdlock → Where it lives | `https://thekopfund.org/crowdlocks/kop-fund.json` |
 
 Choose them deliberately. Shorter windows suit a smaller, more connected crowd; a
 higher minimum suits fewer, larger contributors; a longer destination wait suits

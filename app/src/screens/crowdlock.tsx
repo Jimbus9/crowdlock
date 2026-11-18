@@ -30,6 +30,8 @@ import { Proposals } from "./proposals";
 // Crowdlocks
 // ---------------------------------------------------------------------------
 
+const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u; } };
+
 export function CrowdlockList({ words, address, go }: { words: string; address: string; go: Go }) {
   const [items, setItems] = useState<Loaded[] | null>(null);
   const [totals, setTotals] = useState<Record<string, { sats: bigint; members: number }>>({});
@@ -157,6 +159,9 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
       {!me && here && !waitingToJoin && <Text style={s.kick}>Step 1 of 6: Understand</Text>}
       <Text style={s.h1}>{c.crowdlock.name}</Text>
       {c.crowdlock.about && <Text style={s.p}>{c.crowdlock.about}</Text>}
+      {c.crowdlock.home
+        ? <Text style={s.note}>Lives at {hostOf(c.crowdlock.home.url)}, signed by its co-signer.{(c as any).cameFrom ? ` You opened a copy at ${hostOf((c as any).cameFrom)}; this is the real one.` : ""}</Text>
+        : <Text style={s.note}>This Crowdlock hasn't signed where it lives, so a copy of it elsewhere would look the same.</Text>}
       {c.crowdlock.disclaimer && <Text style={s.note}>{c.crowdlock.disclaimer}</Text>}
 
       {keyChange && <View style={s.panel}>

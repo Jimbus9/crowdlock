@@ -92,7 +92,14 @@ async function getLimited(fetchImpl, u, maxChars, limitMs = LOAD_LIMIT_MS) {
  * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, versions: any[], statement: string, register: any, destinations: any, proposals: any[], proposalProblems: string[] }
  *                 | { ok: false, url: string, problems: string[] }>}
  */
-export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs = LOAD_LIMIT_MS } = {}) {
+/** Are two links the same file? Host case and a trailing slash aside. */
+function sameLink(a, b) {
+  const norm = (u) => { try { const x = new URL(String(u)); return `${x.protocol}//${x.host.toLowerCase()}${x.pathname.replace(/\/+$/, "")}${x.search}`; } catch { return null; } };
+  const na = norm(a), nb = norm(b);
+  return na !== null && nb !== null && na === nb;
+}
+
+export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs = LOAD_LIMIT_MS, cameFrom = null } = {}) {
   const fail = (...problems) => ({ ok: false, url, problems });
   const fileUrl = String(url ?? "").trim();
   if (/^http:\/\//i.test(fileUrl)) return fail("a Crowdlock link must start with https://");
@@ -129,6 +136,20 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs
   // hardware wallet build a lock the register never counts.
   if (fileCheck.ok) { const xc = checkCosignerXpubs(crowdlock); if (!xc.ok) return fail(...xc.problems); }
   if (!fileCheck.ok) return fail(...fileCheck.problems);
+
+  // A Crowdlock that says where it lives (method/js/crowdlock.mjs, checkHome)
+  // is opened from there. Found anywhere else, it is a copy, or the same file
+  // served at a second address: either way the phone goes to the real one,
+  // once, and opens that instead.
+  if (crowdlock.home && sameLink(crowdlock.home.url, fileUrl) === false) {
+    if (cameFrom) return fail(`it says it lives at ${crowdlock.home.url}, but opening that gave a file that says otherwise`);
+    const real = await loadCrowdlock(crowdlock.home.url, fetchImpl, { limitMs, cameFrom: fileUrl });
+    // Only the same Crowdlock: the same declaration, at the place it names.
+    if (real.ok && real.crowdlock?.declaration?.sha256 !== crowdlock.declaration?.sha256) {
+      return fail(`it says it lives at ${crowdlock.home.url}, but the Crowdlock there is a different one`);
+    }
+    return real.ok ? { ...real, cameFrom: fileUrl } : fail(`This is a copy of a Crowdlock that lives at ${crowdlock.home.url}, and that one couldn't be opened: ${real.problems?.[0] ?? "it didn't load"}`);
+  }
 
   let registrations, destinations;
   try {
@@ -527,6 +548,8 @@ export function rulesOf(loaded) {
     // proposal's target, which is outside its hash and decides "the target
     // is met" and whether the co-signer's button is live.
     fee: typeof c.max_commitment_fee === "number" ? c.max_commitment_fee : null,
+    // Where it says it lives: dropped or changed later is worth saying.
+    home: typeof c.home?.url === "string" ? c.home.url : null,
     targets: Object.fromEntries((Array.isArray(loaded?.proposals) ? loaded.proposals : [])
       .filter((p) => typeof p?.hash === "string" && Number.isInteger(p?.target?.sats))
       .map((p) => [p.hash, p.target.sats])),
@@ -566,6 +589,11 @@ export function rulesChanges(seen, now) {
   else if (!kept) notes.push("An earlier entry in the destinations list has been rewritten. Nothing on it is ever meant to change.");
   // Only where this phone has something to compare: rules remembered before
   // these two were kept say nothing about them.
+  if ("home" in seen && seen.home && seen.home !== now.home) {
+    notes.push(now.home
+      ? `It said it lived at ${seen.home}, and now says ${now.home}.`
+      : `It said it lived at ${seen.home}, signed by its co-signer, and no longer says where it lives. A copy put up somewhere else would look like this.`);
+  }
   if ("fee" in seen && seen.fee !== now.fee) {
     const pc = (v) => (typeof v === "number" ? `${+(v * 100).toFixed(4)}%` : "not set");
     notes.push(`The largest network fee a commitment may leave went from ${pc(seen.fee)} to ${pc(now.fee)} of what it commits. The same limit decides what the co-signer's record lets pass as a purchase.`);

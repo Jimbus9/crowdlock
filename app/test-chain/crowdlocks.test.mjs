@@ -9,6 +9,7 @@
 
 import { readFileSync } from "node:fs";
 import { esploraChain } from "../src/wallet/esplora.mjs";
+import { newCosignerWords, cosignerKeyFromWords, signHomeWith } from "../src/wallet/core.mjs";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import { loadCrowdlock, baseFor, membershipOf, committedTotal, submitJoin, STARTING_LIST, shortBtc, poundsPerBtc, COUNTING_RULE_URL, submitLock, locksOnRegister, openLinkFor, fileUrlFromOpenLink, shareLinkFor, rankFound, matchesSearch } from "../src/crowdlocks.mjs";
@@ -56,6 +57,27 @@ check("The test Crowdlock loads and passes every check", test.ok, test.ok ? test
 check("…it is on testnet4, and takes registrations through its relays, not an endpoint",
   test.ok && test.crowdlock.network === "testnet4" && test.crowdlock.relays.length > 0 && !test.crowdlock.join_endpoint);
 check("…and a different declaration from The Kop Fund", test.ok && kop.ok && test.statement !== kop.statement);
+{
+  // Where it lives (Needs James item 4): signed by a co-signer key, a copy
+  // opened anywhere else sends the phone to the real one.
+  const raw = JSON.parse(readFileSync(join(KOP_FIX, "crowdlocks/kop-fund.json"), "utf8"));
+  const coWords = newCosignerWords();
+  const withKey = { ...raw, cosigner_keys: [...raw.cosigner_keys, cosignerKeyFromWords(coWords).publicKey] };
+  const realUrl = `${KOP_SITE}crowdlocks/kop-fund.json`;
+  const home = signHomeWith({ words: coWords, crowdlock: withKey, url: realUrl, network: withKey.network });
+  const signed = JSON.stringify({ ...withKey, home });
+  const decl = readFileSync(join(KOP_FIX, raw.declaration.file), "utf8");
+  const served = siteFetch({ "kop:crowdlocks/kop-fund.json": signed, "crowdlocks/kop-copy.json": signed, [raw.declaration.file]: decl });
+  const real = await loadCrowdlock(realUrl, served);
+  check("A Crowdlock that signed where it lives opens from there", real.ok && real.crowdlock.home?.url === realUrl, real.ok ? "" : real.problems[0]);
+  const copy = await loadCrowdlock(`${SITE}crowdlocks/kop-copy.json`, served);
+  check("…a copy of it put up elsewhere opens the real one instead", copy.ok && copy.url === realUrl && copy.cameFrom === `${SITE}crowdlocks/kop-copy.json`, copy.ok ? copy.url : copy.problems[0]);
+  const other = readFileSync(join(REPO, "crowdlocks/kop-fund-testnet4.json"), "utf8");
+  const liar = siteFetch({ "kop:crowdlocks/kop-fund.json": other, "crowdlocks/kop-copy.json": signed, [raw.declaration.file]: decl });
+  const bad = await loadCrowdlock(`${SITE}crowdlocks/kop-copy.json`, liar);
+  check("…and if a different Crowdlock is at the place it names, nothing opens", !bad.ok, bad.ok ? "OPENED" : bad.problems[0].slice(0, 60));
+  check("…a home signed over another link is refused", !(await loadCrowdlock(realUrl, siteFetch({ "kop:crowdlocks/kop-fund.json": JSON.stringify({ ...withKey, home: { ...home, url: "https://elsewhere.example/k.json" } }) }))).ok);
+}
 check("Both are on the app's starting list, The Kop Fund at its own domain",
   STARTING_LIST.length === 2 && STARTING_LIST[0] === `${KOP_SITE}crowdlocks/kop-fund.json` && STARTING_LIST[1] === `${SITE}crowdlocks/kop-fund-testnet4.json`);
 

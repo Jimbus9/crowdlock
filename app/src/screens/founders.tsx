@@ -10,7 +10,7 @@ import * as Clipboard from "expo-clipboard";
 import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
 import {
-  tidyWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH, isPublicKey, keyFromXpub, xpubForKey, signStatementWith, NETWORKS, buildStamp,
+  tidyWords, newCosignerWords, cosignerKeyFromWords, COSIGNER_PATH, isPublicKey, keyFromXpub, xpubForKey, signStatementWith, NETWORKS, buildStamp, signHomeWith,
 } from "../wallet/core.mjs";
 import { address as bitcoinAddress } from "bitcoinjs-lib";
 import {
@@ -23,7 +23,7 @@ import { buildCrowdlock, declarationSkeleton, slugify, DEFAULT_RELAYS, checkWith
 // @ts-ignore
 import {
   startSignIn, waitForSignIn, whoAmI, createCrowdlockRepo, canWrite, updateCrowdlockRepo, addMaintainer, rememberSignIn, currentSignIn, addCosignerKey,
-  addDestination, publishProposal, publishDeclarationVersion,
+  addDestination, publishProposal, publishDeclarationVersion, setHome,
 } from "../github.mjs";
 // @ts-ignore — plain module shared with the tests
 import { canonicalise, declarationHash, checkCrowdlock, currentVersion } from "../../../method/js/crowdlock.mjs";
@@ -558,7 +558,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
   const [published, setPublished] = useState<string | null>(null);
   const [open, setOpen] = useState(!!alone);
   // On its own page, each job has a row; this is the one that is open.
-  const [job, setJob] = useState<null | "update" | "keys" | "destinations" | "proposal" | "maintainers" | "version">(null);
+  const [job, setJob] = useState<null | "update" | "keys" | "home" | "destinations" | "proposal" | "maintainers" | "version">(null);
   useBack(() => { if (alone && job) { setJob(null); return true; } return false; });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -624,6 +624,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
     <View>
       <NavRow title="Update it" sub={status === "behind" ? "An update is available" : status === "current" ? "Its inbox is up to date" : "Keep its inbox on the newest code"} state={status === "behind" ? { text: "Update available", good: false } : undefined} onPress={() => setJob("update")} />
       <NavRow title="Co-signer keys" sub="The keys that can add the second signature to a purchase" onPress={() => setJob("keys")} />
+      <NavRow title="Where it lives" sub={c.crowdlock.home ? "Signed by its co-signer" : "Not yet signed: a copy elsewhere would look the same"} onPress={() => setJob("home")} />
       {here && <NavRow title="Destinations" sub="The addresses a proposal is allowed to pay" onPress={() => setJob("destinations")} />}
       {here && <NavRow title="Write a proposal" sub="Put a purchase to the members" onPress={() => setJob("proposal")} />}
       <NavRow title="Maintainers" sub="Other people who can help run it" onPress={() => setJob("maintainers")} />
@@ -634,6 +635,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
       <Btn kind="link" label="‹ All the jobs" onPress={() => setJob(null)} />
       {job === "update" && <><Text style={s.h2}>Update it</Text><Text style={s.note}>A Crowdlock's inbox is the small program, in its own GitHub account, that collects new members, locks and commitments. The app can bring it up to the newest version.</Text>{updateBox}</>}
       {job === "keys" && <><CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
+      {job === "home" && <Home c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
       {job === "destinations" && <><Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
       {job === "proposal" && <><WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
       {job === "maintainers" && <><Text style={s.h2}>Maintainers</Text><MaintainerAdvice /><MaintainerForm owner={where.owner} repo={where.repo} /></>}
@@ -648,6 +650,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
       {!open ? <Btn label="For its founder and maintainers" kind="second" onPress={() => setOpen(true)} /> : <>
         {updateBox}
         <CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />
+        <Home c={c} owner={where.owner} repo={where.repo} onChange={onChange} />
         {here && <Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />}
         {here && <WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
         <Text style={s.label}>Maintainers</Text>
@@ -712,6 +715,45 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
     <Btn label={busy ? "Adding…" : "Add this co-signer key"} disabled={busy || !k || !!problem || !path} onPress={add} />
+  </>;
+}
+
+// Where it lives: one of its co-signer keys signs the link to its file, so a
+// copy put up anywhere else sends people here (method/js/crowdlock.mjs).
+function Home({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; owner: string; repo: string; onChange: () => void }) {
+  const { withSignIn, codeView } = useGitHub();
+  const [words, setWords] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const keys: string[] = c.crowdlock.cosigner_keys ?? [];
+  const home = c.crowdlock.home;
+  const path = pathInRepo(c.url);
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      // Signed first, on this phone, before anything is sent anywhere.
+      const signed = signHomeWith({ words, crowdlock: c.crowdlock, url: c.url, network: c.crowdlock.network });
+      setWords("");
+      await withSignIn(async (token) => {
+        if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can change it, and the GitHub account you signed in with isn't one of them.");
+        await setHome({ token, owner, repo, path, home: signed, check: checkWithNewKey });
+        setMsg({ ok: true, text: `Signed and published: it lives at ${c.url}. Its website updates in a minute or two.` });
+        setTimeout(onChange, 90000);
+      });
+    } catch (e: any) { setWords(""); setMsg({ ok: false, text: String(e.message ?? e) }); }
+    setBusy(false);
+  };
+  return <>
+    <Text style={s.label}>Where it lives</Text>
+    {home
+      ? <Text style={s.good}>It lives at {home.url}, signed by co-signer key {String(home.key).slice(0, 10)}…{String(home.key).slice(-8)}. A copy put up anywhere else sends people here.</Text>
+      : <Text style={s.note}>It doesn't say where it lives yet. Anyone could put a copy of its file up at another address, and it would show this Crowdlock's locks under its own name.</Text>}
+    <Text style={s.note}>To {home ? "sign it again" : "fix that"}, type the words of one of its co-signer keys{keys.length > 1 ? " (the newest is best)" : ""}. They sign this link on this phone and are not saved or sent: {c.url}</Text>
+    <WordsInput value={words} onChange={(t: string) => { setWords(t); setMsg(null); }} placeholder="The co-signer key's 12 words" />
+    {!path && <Text style={s.error}>Can't tell where this Crowdlock's file sits in its repository.</Text>}
+    {codeView}
+    {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+    <Btn label={busy ? "Signing…" : "Sign where it lives, and publish"} disabled={busy || !words.trim() || !path} onPress={go} />
   </>;
 }
 
