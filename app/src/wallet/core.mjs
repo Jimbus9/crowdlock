@@ -40,7 +40,7 @@ import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 import { messageHash, verifyMembership, memberAddressForOwnerKey, canonicalAddress } from "../../../method/js/verify.mjs";
 // The lock's script and address, and the destinations list's rules, are the
 // register's own browser-safe code (held to the reference code by its tests).
-import { lockScript as lockScriptOf, lockAddress as lockAddressOf } from "../../../method/js/lockrecord.mjs";
+import { lockScript as lockScriptOf, lockAddress as lockAddressOf, lockLine } from "../../../method/js/lockrecord.mjs";
 import { destinationIsPermitted, attestorsOf, stampsFor, SETTLE_MARGIN } from "../../../method/js/proposals.mjs";
 import { isCosignerOf } from "../../../method/js/crowdlock.mjs";
 
@@ -1179,6 +1179,19 @@ export function signStatement(account, statement) {
   out[0] = 31 + recoveryId;
   out.set(signature, 1);
   return toBase64(out);
+}
+
+/**
+ * The record a lock is posted to the relays as. Signed by the owner when the
+ * key is on this phone, so a flood of records naming this member's key can't
+ * hold it up (method/js/lockrecord.mjs, lockLine). A Ledger's lock goes
+ * unsigned rather than ask for a second approval; it is still taken, only
+ * not ahead of others.
+ */
+export function lockRecordFor(account, crowdlock, { address, cosigner_pubkey, locktime }) {
+  const record = { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey, locktime, address };
+  if (account.kind === "ledger") return record;
+  return { ...record, owner_signature: signStatement(account, lockLine(crowdlock.declaration.sha256, record)) };
 }
 
 // ---------------------------------------------------------------------------

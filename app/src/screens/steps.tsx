@@ -10,6 +10,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 // @ts-ignore — plain module shared with the chain tests
 import {
   waitingBalance, lockFor, lockDate, buildLock, lockState, takeHome, relock, xpubForKey, signStatementWith,
+  lockRecordFor,
 } from "../wallet/core.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
@@ -278,7 +279,7 @@ export function LockFlow({ words, url, go }: { words: string; url: string; go: G
       // The terms are saved before the money moves, and checked saved.
       await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner!, cosignerXpub: lock.cosignerXpub ?? undefined, name: c.crowdlock.name });
       await chain.broadcast(tx.hex);
-      if (viaRelays) await postToRelays(c.crowdlock, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: cosigner, locktime, address: lock.address }).catch(() => {});
+      if (viaRelays) await postToRelays(c.crowdlock, lockRecordFor(account, c.crowdlock, { cosigner_pubkey: cosigner!, locktime, address: lock.address })).catch(() => {});
       whileOpen.overview = null;   // Home reads afresh
       setDone({ sent: tx.sent, fee: tx.fee, locktime });
       setPage(4);
@@ -549,7 +550,7 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
       // The new terms are saved before the money moves.
       await saveLock({ crowdlock: c.url, address: newLock.address, locktime, cosignerPubkey: cosigner!, cosignerXpub: newLock.cosignerXpub ?? undefined, name });
       await chain.broadcast(tx.hex);
-      if (viaRelays) await postToRelays(cl, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: cosigner, locktime, address: newLock.address }).catch(() => {});
+      if (viaRelays) await postToRelays(cl, lockRecordFor(account, cl, { cosigner_pubkey: cosigner!, locktime, address: newLock.address })).catch(() => {});
       whileOpen.overview = null;
       setDone(`Locked ${btc(tx.sent)} again for ${name} until ${when(locktime)}. The network fee was ${btc(tx.fee)}. Once it confirms it goes on the register by itself.`);
       setPage("done");

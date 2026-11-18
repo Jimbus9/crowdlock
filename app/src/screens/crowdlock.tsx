@@ -6,7 +6,7 @@ import { ActivityIndicator, Linking, Pressable, Share, Text, View } from "react-
 import * as Clipboard from "expo-clipboard";
 import QRCode from "react-native-qrcode-svg";
 // @ts-ignore — plain module shared with the chain tests
-import { waitingBalance, lockState, xpubForKey } from "../wallet/core.mjs";
+import { waitingBalance, lockState, xpubForKey, lockRecordFor } from "../wallet/core.mjs";
 // @ts-ignore — plain modules shared with the tests
 import { DEFAULT_RELAYS } from "../start.mjs";
 // @ts-ignore — plain module shared with the chain tests
@@ -275,7 +275,7 @@ function MyLocks({ account, c, onLock, onHome, onAll, all = false, paused = fals
     const terms = { ownerPubkey: account.publicKey, ...l };
     if (viaRelays) {
       if (posted.current.has(l.address)) return { ok: true, note: "Sent. It will be on the register within a few minutes." };
-      const p = await postToRelays(c.crowdlock, { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey: l.cosignerPubkey, locktime: l.locktime, address: l.address });
+      const p = await postToRelays(c.crowdlock, lockRecordFor(account, c.crowdlock, { cosigner_pubkey: l.cosignerPubkey, locktime: l.locktime, address: l.address }));
       if (p.ok) posted.current.add(l.address);
       return p.ok
         ? { ok: true, note: "Sent. It will be on the register within a few minutes." }

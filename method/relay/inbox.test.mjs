@@ -10,7 +10,7 @@ import { finalizeEvent, generateSecretKey, verifyEvent } from "nostr-tools/pure"
 import { signAsync, getPublicKey, utils } from "../js/vendor/noble-secp256k1.js";
 import { messageHash, memberAddressForOwnerKey } from "../js/verify.mjs";
 import { membershipStatement, checkCrowdlock } from "../js/crowdlock.mjs";
-import { lockAddress } from "../js/lockrecord.mjs";
+import { lockAddress, lockLine } from "../js/lockrecord.mjs";
 import { applyRecords, recordEventTemplate, recordFromEvent, RECORD_KIND, announcementTemplate, announcementFromEvent, announcementDue, ANNOUNCE_KIND } from "../js/inbox.mjs";
 import { recordPass, planSwaps } from "../js/relayhealth.mjs";
 import { readBack, readRelay } from "./nostr.mjs";
@@ -40,6 +40,8 @@ async function newMember(over = statement) {
   const sig = await signAsync(messageHash(over), priv);
   return {
     pub, address: memberAddressForOwnerKey(pub, "tb"),
+    // A Bitcoin Signed Message over any line, by this member's key.
+    signLine: async (line) => { const g = await signAsync(messageHash(line), priv); return Buffer.concat([Buffer.from([31 + g.recovery]), Buffer.from(g.toCompactRawBytes())]).toString("base64"); },
     signature: Buffer.concat([Buffer.from([31 + sig.recovery]), Buffer.from(sig.toCompactRawBytes())]).toString("base64"),
   };
 }
@@ -241,6 +243,21 @@ check("Announced weekly: not again within six days, again on the seventh",
   const mixed = await applyRecords(withCarol, [...junk, post(real, now)], { crowdlock, statement, now, today, confirmedSats: async (a) => (a === real.address ? 50000 : 0), seed: "pass-1" });
   check("A flood naming one member's key does not keep another member's lock off the register",
     mixed.register.locks.some((l) => l.address === real.address), mixed.outcome.find((o) => o.address === real.address)?.reason ?? "added");
+  // A lock its owner signed is asked about first, however many unsigned
+  // records name the same key (Needs James item 8, 18 November 2026).
+  const mine = lockFor(bob, now + 86400 * 365);
+  const signedMine = { ...mine, owner_signature: await bob.signLine(lockLine(fp, mine)) };
+  const withMine = await applyRecords(base, [...junk, post(signedMine, now)], { crowdlock, statement, now, today, confirmedSats: async (a) => (a === mine.address ? 50000 : 0), seed: "pass-1" });
+  check("A member's own signed lock is added in the first pass, under 3,000 junk records naming their key",
+    withMine.register.locks.some((l) => l.address === mine.address), withMine.outcome.find((o) => o.address === mine.address)?.reason ?? "added");
+  const both = await applyRecords(base, [...junk, post(mine, now - 60), post(signedMine, now)], { crowdlock, statement, now, today, confirmedSats: async (a) => (a === mine.address ? 50000 : 0), seed: "pass-1" });
+  check("…even when an unsigned copy of it was posted first", both.register.locks.some((l) => l.address === mine.address));
+  const forged = { ...mine, owner_signature: await carol.signLine(lockLine(fp, mine)) };
+  const r9 = await applyRecords(base, [post(forged, now)], { crowdlock, statement, now, today, confirmedSats: async () => 50000 });
+  check("A lock signed by somebody other than its owner is refused", /owner signature doesn't check/.test(r9.outcome.find((o) => o.type === "lock")?.reason ?? ""), r9.outcome.find((o) => o.type === "lock")?.reason);
+  const otherTerms = { ...mine, owner_signature: await bob.signLine(lockLine(fp, { ...mine, locktime: mine.locktime + 1 })) };
+  const r10 = await applyRecords(base, [post(otherTerms, now)], { crowdlock, statement, now, today, confirmedSats: async () => 50000 });
+  check("…and so is one whose owner signed other terms", /owner signature doesn't check/.test(r10.outcome.find((o) => o.type === "lock")?.reason ?? ""));
   // Many owners at once: the pass's own limit holds, and which are asked changes from pass to pass.
   const owners = [];
   for (let i = 0; i < 60; i++) owners.push(await newMember());

@@ -13,7 +13,7 @@ import { startSignIn, waitForSignIn, createCrowdlockRepo, CLIENT_ID, SCOPES, can
 import { repoFromFileUrl, versionStatus, changesSince } from "../src/crowdlocks.mjs";
 import template from "../src/template.mjs";
 import { loadCrowdlock } from "../src/crowdlocks.mjs";
-import { accountFromWords, cosignerFromWords, newWords, signStatement } from "../src/wallet/core.mjs";
+import { accountFromWords, cosignerFromWords, newWords, signStatement, lockRecordFor } from "../src/wallet/core.mjs";
 
 let failures = 0;
 const check = (what, ok, detail = "") => { if (!ok) failures++; console.log(`${ok ? "PASS" : "FAIL"}  ${what.padEnd(70)} ${detail}`); };
@@ -106,6 +106,19 @@ const applied = await applyRecords(testLoaded.register, [event], {
   crowdlock: t, statement: testLoaded.statement, now: 1800000000, today: "2026-11-01", confirmedSats: async () => 0,
 });
 check("The founder's own signature joins their new Crowdlock as member 1", applied.register.members[0]?.n === 1 && applied.register.members[0].address === member.address);
+{
+  // The phone signs a lock record with the owner's key, and the new
+  // Crowdlock's own copy of the inbox code takes it as signed.
+  const { prepareLock, lockAddress } = await import(pathToFileURL(join(dir, "js/lockrecord.mjs")).href);
+  const cosigner = t.cosigner_keys.at(-1);
+  const locktime = 1800000000 + Math.round(Math.min(...t.lock_lengths_years) * 31557600) + 86400;
+  const address = lockAddress({ ownerPubkey: member.publicKey, cosignerPubkey: cosigner, locktime }, "tb");
+  const record = lockRecordFor(member, t, { cosigner_pubkey: cosigner, locktime, address });
+  const p = prepareLock(record, { crowdlock: t, register: applied.register, now: 1800000000 });
+  check("A lock the phone posts is signed by its owner, and the inbox takes it as signed", p.ok && p.signed === true, p.reason);
+  const ledgerRecord = lockRecordFor({ ...member, kind: "ledger" }, t, { cosigner_pubkey: cosigner, locktime, address });
+  check("…a Ledger's goes unsigned, and is still taken", !("owner_signature" in ledgerRecord) && prepareLock(ledgerRecord, { crowdlock: t, register: applied.register, now: 1800000000 }).ok);
+}
 
 rule("GITHUB: SIGN-IN AND SETTING IT UP");
 const calls = [];
