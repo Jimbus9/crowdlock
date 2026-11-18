@@ -804,6 +804,13 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
       !wrong.ok && wrong.still.length === 0 && wrong.total === 0 && /co-signer key these words don't make/.test(wrong.problems.join(" ")), wrong.problems.join(" ").slice(0, 70));
     const short = await ask(coWords5, 100_001);
     check("…and a total short of the target is not ok either", !short.ok && short.total === 100_000);
+    // Past the target, commitments are a reserve (James, 18 November 2026):
+    // taken in order, and no further than the target needs.
+    const twice = await commitmentsToComplete({ words: coWords5, records: [good, good], crowdlock: cl, proposal: { ...appProposal, target: { sats: 100_000 } }, destinations: destFile, chain, network: net });
+    check("Once the target is met, a commitment after it is held in reserve and not completed", twice.ok && twice.still.length === 1 && twice.total === 100_000, `${twice.still.length} taken`);
+    const broken = { ...good, tx: "zz" };
+    const fallback = await commitmentsToComplete({ words: coWords5, records: [broken, good], crowdlock: cl, proposal: { ...appProposal, target: { sats: 100_000 } }, destinations: destFile, chain, network: net });
+    check("…and one in reserve takes the place of one ahead of it that no longer passes", fallback.ok && fallback.still.length === 1 && fallback.still[0] === good, fallback.problems.join(" ").slice(0, 80));
     const spent = bitcoinjs.Transaction.fromHex(good.tx).ins[0];
     check("The coin a commitment spends is read from it", commitmentCoin(good) === `${Buffer.from(spent.hash).reverse().toString("hex")}:${spent.index}` && commitmentCoin({ tx: "zz" }) === null);
     // Tiny coins anybody can send to a published address (round 3): each cost

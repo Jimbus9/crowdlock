@@ -216,6 +216,7 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
         </> : <>
           <Text style={s.big}>{btc(BigInt(pile.sats + pile.paid + pile.sent))}</Text>
           <Text style={s.note}>{pile.count} waiting{pile.sentCount ? ` · ${pile.sentCount} sent by the co-signer and waiting for a block (${btc(BigInt(pile.sent))})` : ""}{pile.paidCount ? ` · ${pile.paidCount} paid (${btc(BigInt(pile.paid))})` : ""}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats - pile.paid)))} to go.`}</Text>
+          {met && !funded ? <Text style={s.good}>Target met. Commitments past it are held in reserve: they are used only if the price moves or one ahead of them no longer counts, and otherwise their bitcoin simply stays locked.</Text> : null}
         </>}
         {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
         {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : pile.mine.some((m) => m.sent) ? "Your commitment was completed and sent, and is waiting for a block: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
@@ -525,7 +526,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         // A handful are sent from here at once. More than that are published
         // only, for the Crowdlock's repository to send a few at a time
         // (pacing: thousands at once would push up fees for everyone).
-        const sendHere = take.length <= SEND_FROM_APP;
+        let sendHere = take.length <= SEND_FROM_APP;
         let sent = 0; const failed: string[] = [];
         // Every commitment is checked again now, and the total added up again
         // from those that still pass. If they no longer reach the target,
@@ -537,9 +538,12 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         // would send members' money to a purchase that stays short.
         let recheck: { ok: boolean; still: any[]; total: number; problems: string[] };
         try {
-          recheck = await commitmentsToComplete({ words, records: take.map((g) => g.record), crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK, alreadyPaid: settledSoFar });
+          // The whole pile, in order: if one in `take` no longer passes, the
+          // next in reserve takes its place rather than the purchase falling short.
+          recheck = await commitmentsToComplete({ words, records: order.map((g) => g.record), crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK, alreadyPaid: settledSoFar });
         } catch (e: any) { recheck = { ok: false, still: [], total: settledSoFar, problems: [String(e.message ?? e)] }; }
         const still = recheck.still.map((record) => ({ record }));
+        sendHere = still.length <= SEND_FROM_APP;
         const total = recheck.total;
         failed.push(...recheck.problems);
         if (!recheck.ok) {

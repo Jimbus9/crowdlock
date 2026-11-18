@@ -1044,9 +1044,14 @@ export function commitmentCoin(record) {
  */
 export async function commitmentsToComplete({ words, records, crowdlock, proposal, destinations, chain, network, alreadyPaid = 0 }) {
   const key = cosignerKeyFromWords(words).publicKey;
+  // `records` come in the order they were submitted. They are taken in that
+  // order until the target is met, and no further: anything past it is held
+  // in reserve, and a reserve one is used only if one ahead of it no longer
+  // passes its check (James, 18 November 2026).
   const still = [], problems = [];
   let total = alreadyPaid;
   for (const record of records) {
+    if (total >= proposal.target.sats) break;
     if (String(record?.lock?.cosigner_pubkey ?? "").toLowerCase() !== key) {
       problems.push("A commitment's lock names a co-signer key these words don't make, so they can't complete it and it isn't counted.");
       continue;
