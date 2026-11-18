@@ -5,6 +5,8 @@
 
 // A request the explorer never answers would leave the app spinning forever,
 // so every question gives up after this long, in all, and says why.
+import { readHistory, coinsFromHistory } from "../../../method/js/release.mjs";
+
 export const TIMEOUT_MS = 20000;
 // A question is asked twice within that time before giving up. The first try
 // is never cut short: if it hasn't answered after this share of the time, a
@@ -186,7 +188,18 @@ export function esploraChain(baseUrl, rawFetch = globalThis.fetch, timeoutMs = T
   const forget = () => { for (const k of [...memory.keys()]) if (k.includes(baseUrl) && !k.startsWith("kept ")) memory.delete(k); };
   return {
     async utxos(address) {
-      const list = await get(`/address/${address}/utxo`);
+      let list;
+      try { list = await get(`/address/${address}/utxo`); }
+      catch (e) {
+        // Public explorers refuse to list the coins at an address holding
+        // more than 500 (they answer 400). Anybody can send 501 tiny coins to
+        // a published address. The address's history says the same thing, a
+        // page at a time (security loop, 17 November 2026).
+        if (!/answered 400/.test(String(e?.message ?? e))) throw e;
+        const h = await readHistory(() => get(`/address/${address}/txs`), (last) => get(`/address/${address}/txs/chain/${last}`));
+        if (!h.complete) throw e;
+        return coinsFromHistory(address, h.txs);
+      }
       return list.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value, confirmed: !!u.status?.confirmed }));
     },
     txHex: (txid) => get(`/tx/${txid}/hex`, "text"),

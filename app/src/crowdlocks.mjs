@@ -20,10 +20,10 @@
 // A file published anywhere else has its paths read relative to its own folder.
 
 import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, currentVersion, signedVersions, hasSigned } from "../../method/js/crowdlock.mjs";
-import { proposalVersion, stampsFor, destinationHash } from "../../method/js/proposals.mjs";
+import { proposalVersion, stampsFor, destinationHash, relayOnlyCommitments as relayOnly, RELAY_ONLY_PER_LOCK } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
-import { earlyReleases, readHistory, clocksFor } from "../../method/js/release.mjs";
+import { earlyReleases, readHistory, clocksFor, locksToWatch as watchLocks, locksSeen as seenLocks } from "../../method/js/release.mjs";
 import { checkCosignerXpubs, NETWORKS } from "./wallet/core.mjs";
 import { lockIsGenuine, hrpFor } from "../../method/js/lockrecord.mjs";
 
@@ -324,10 +324,16 @@ const closedRecords = new Map();
  * The co-signer's record: every lock on the register that the co-signer helped
  * open before its date, other than for a purchase (method/js/release.mjs: every
  * output a listed destination, money staying locked, or a marker). Read from the
- * chain alone, so nobody — the co-signer included — can keep one off it.
- * Returns { releases: [{ address, member, txid, at, sats, paidTo, confirmed, cosigner }], unreadable }.
+ * chain alone. Which locks it reads about comes from the register and from
+ * `remembered`, the locks this phone saw on the register before (locksSeen):
+ * a lock taken off the register is still read, and counted in `gone`.
+ * Returns { releases: [{ address, member, txid, at, sats, paidTo, confirmed, cosigner, removed? }], unreadable, gone }.
+ * @param {any} loaded
+ * @param {any} [fetchImpl]
+ * @param {number} [now]
+ * @param {{ remembered?: any }} [options]
  */
-export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000)) {
+export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now = Math.floor(Date.now() / 1000), { remembered = null } = {}) {
   const { crowdlock, register, destinations } = loaded;
   const chain = chainFor(crowdlock, fetchImpl);
   const seen = new Set();
@@ -338,11 +344,14 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
   const entries = destinations?.entries ?? [];
   let stamps = {};
   try { stamps = await stampsFor(entries, [...new Set(entries.filter((e) => e.op === "add").map((e) => e.address))], (id) => chain.tx(id)); } catch {}
-  for (const lock of register.locks ?? []) {
+  // Every genuine lock on the register, and every lock this phone saw there
+  // before that has since gone from it (not a lock of this Crowdlock, and
+  // never seen as one: nothing of the co-signer's to record).
+  const watched = locksToWatch(loaded, remembered);
+  for (const lock of watched.locks) {
     const address = String(lock.address).toLowerCase();
     if (seen.has(address)) continue;
     seen.add(address);
-    if (!lockIsGenuine(lock, { crowdlock, register, hrp: lockHrp(crowdlock) }).ok) continue; // not a lock of this Crowdlock: nothing of the co-signer's to record
     try {
       // Only a spend before the lock's date can be a release, so once a lock is
       // well past its date its record is closed: what was read then is kept for
@@ -365,13 +374,85 @@ export async function coSignerRecord(loaded, fetchImpl = globalThis.fetch, now =
       let undecided = false;
       for (const r of earlyReleases(lock, txs, { destinations: destinations ?? null, crowdlock, register, stamps, clocks, hrp: lockHrp(crowdlock) }, now)) {
         if (r.undecided) { undecided = true; continue; }
-        releases.push({ address: lock.address, member: lock.member ?? null, ...r });
+        releases.push({ address: lock.address, member: lock.member ?? null, ...r, ...(lock.removed ? { removed: true } : {}) });
       }
       if (undecided) unreadable++;
     } catch { unreadable++; }
   }
-  return { releases, unreadable };
+  // `rewritten`: the locks this phone saw before are not all still there as
+  // they were. Then the record cannot be called clean, whatever it found.
+  return { releases, unreadable, gone: watched.gone.length, rewritten: watched.rewritten };
 }
+
+// ---------------------------------------------------------------------------
+// Locks this phone has seen on a register, and commitments that are only on
+// the relays (security loop, 17 November 2026). The rules are the method's
+// own (method/js/release.mjs, method/js/proposals.mjs), shared with the
+// website; here they are given the app's address prefix for the network.
+// ---------------------------------------------------------------------------
+
+/** The locks to read the co-signer's record for: the register's, and those this phone saw there before. */
+export function locksToWatch(loaded, remembered = null) {
+  return watchLocks({ crowdlock: loaded.crowdlock, register: loaded.register, remembered, hrp: lockHrp(loaded.crowdlock) });
+}
+
+/** What this phone remembers of a register's locks now: their terms. */
+export function locksSeen(loaded, remembered = null) {
+  return seenLocks({ crowdlock: loaded.crowdlock, register: loaded.register, remembered, hrp: lockHrp(loaded.crowdlock) });
+}
+
+export { RELAY_ONLY_PER_LOCK };
+
+/** Of what the relays hold for a proposal, what this phone goes on to check. */
+export function relayOnlyCommitments(found, { crowdlock, register, inPile = new Set() }) {
+  return relayOnly(found, { crowdlock, register, inPile, hrp: lockHrp(crowdlock) });
+}
+
+// ---------------------------------------------------------------------------
+// Copies (security loop, 17 November 2026).
+//
+// A lock counts for the Crowdlock whose co-signer key it names. Nothing stops
+// a second Crowdlock's file naming the same key, or the same declaration, and
+// every lock of the first then counts for the copy too: a stranger's file
+// showed The Kop Fund's locked bitcoin and members as its own, level with it
+// in Find. Which of two such files is the real one cannot be read from the
+// files. So: one the app or the person already has is believed over one that
+// is merely announced, and where neither is, both are marked.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark the copies among found Crowdlocks.
+ *   items    [{ url, name, sats, members, declaration, cosigners }]
+ *   trusted  links the app ships with, or the person has already added
+ * Returns the items with:
+ *   copyOf   the name of a trusted Crowdlock it shares a declaration or a
+ *            co-signer key with. Its locked total is that Crowdlock's, so it
+ *            is shown as nothing.
+ *   sharesWith  the name of another found Crowdlock it shares one with,
+ *            where neither is trusted: the totals stand, with a warning.
+ */
+export function markCopies(items, trusted = []) {
+  const keysOf = (it) => [`d:${it.declaration}`, ...(it.cosigners ?? []).map((k) => `k:${String(k).slice(2).toLowerCase()}`)];
+  const believed = new Map();
+  for (const it of items) if (trusted.includes(it.url)) for (const k of keysOf(it)) if (!believed.has(k)) believed.set(k, it);
+  const firstSeen = new Map();
+  return items.map((it) => {
+    if (trusted.includes(it.url)) return it;
+    const keys = keysOf(it);
+    const real = keys.map((k) => believed.get(k)).find(Boolean);
+    if (real) return { ...it, sats: 0n, members: 0, copyOf: real.name };
+    const other = keys.map((k) => firstSeen.get(k)).find((x) => x && x.url !== it.url);
+    for (const k of keys) if (!firstSeen.has(k)) firstSeen.set(k, it);
+    return other ? { ...it, sharesWith: other.name } : it;
+  }).map((it, _i, all) => {
+    // The first of an untrusted pair is marked too, once its pair is known.
+    if (it.copyOf || it.sharesWith || trusted.includes(it.url)) return it;
+    const keys = new Set(keysOf(it));
+    const pair = all.find((x) => x.url !== it.url && !trusted.includes(x.url) && keysOf(x).some((k) => keys.has(k)));
+    return pair ? { ...it, sharesWith: pair.name } : it;
+  });
+}
+
 
 /**
  * The Crowdlock counting rule, where it explains the minimum. The rule is one
@@ -440,7 +521,30 @@ export function rulesOf(loaded) {
     entries: entries.length,
     head,
     hashes: entries.map((e) => { try { return destinationHash(e); } catch { return "unreadable"; } }),
+    // Two more numbers the file's writer could change unseen (security loop,
+    // round 3): the largest fee a commitment may leave, which also decides
+    // what the early-release record lets pass as a purchase; and each
+    // proposal's target, which is outside its hash and decides "the target
+    // is met" and whether the co-signer's button is live.
+    fee: typeof c.max_commitment_fee === "number" ? c.max_commitment_fee : null,
+    targets: Object.fromEntries((Array.isArray(loaded?.proposals) ? loaded.proposals : [])
+      .filter((p) => typeof p?.hash === "string" && Number.isInteger(p?.target?.sats))
+      .map((p) => [p.hash, p.target.sats])),
+    titles: Object.fromEntries((Array.isArray(loaded?.proposals) ? loaded.proposals : [])
+      .filter((p) => typeof p?.hash === "string").map((p) => [p.hash, String(p.title ?? "a proposal").slice(0, 60)])),
   };
+}
+
+/**
+ * What to remember when nothing changed: the rules as they are now, with
+ * each proposal's target kept at the HIGHEST this phone has seen. A target is
+ * restated as the price moves, so a small fall is ordinary; remembering the
+ * highest means one walked down in small steps is still noticed.
+ */
+export function rulesKept(seen, now) {
+  const targets = { ...(now.targets ?? {}) };
+  for (const [hash, sats] of Object.entries(seen?.targets ?? {})) if (hash in targets && sats > targets[hash]) targets[hash] = sats;
+  return { ...now, targets };
 }
 
 /**
@@ -460,6 +564,18 @@ export function rulesChanges(seen, now) {
   const kept = (seen.hashes ?? []).every((h, i) => now.hashes[i] === h);
   if (now.entries < (seen.entries ?? 0)) notes.push(`The destinations list is shorter than when you last looked (${now.entries} entries, was ${seen.entries}). Nothing is ever meant to be taken off it: a revocation may have been removed.`);
   else if (!kept) notes.push("An earlier entry in the destinations list has been rewritten. Nothing on it is ever meant to change.");
+  // Only where this phone has something to compare: rules remembered before
+  // these two were kept say nothing about them.
+  if ("fee" in seen && seen.fee !== now.fee) {
+    const pc = (v) => (typeof v === "number" ? `${+(v * 100).toFixed(4)}%` : "not set");
+    notes.push(`The largest network fee a commitment may leave went from ${pc(seen.fee)} to ${pc(now.fee)} of what it commits. The same limit decides what the co-signer's record lets pass as a purchase.`);
+  }
+  for (const [hash, was] of Object.entries(seen.targets ?? {})) {
+    const is = now.targets?.[hash];
+    if (Number.isInteger(is) && is * 2 < was) {
+      notes.push(`The target of "${now.titles?.[hash] ?? "a proposal"}" was cut from ${was} to ${is} sats, to less than half. A target is restated as the price moves, but not by that much: with a lower target, far less has to be committed before the co-signer completes.`);
+    }
+  }
   return { changed: notes.length > 0, notes };
 }
 

@@ -83,7 +83,8 @@ check("Fifty generated keys are fifty different keys", fresh.size === 50, `${fre
   const dir = join(mkdtempSync(join(tmpdir(), "cosigner-")), "a folder with spaces");
   mkdirSync(dir);
   for (const f of ["generate.mjs", "package.json"]) copyFileSync(join(here, f), join(dir, f));
-  symlinkSync(join(here, "node_modules"), join(dir, "node_modules"), "dir");
+  // A junction on Windows: a plain symlink there needs administrator rights.
+  symlinkSync(join(here, "node_modules"), join(dir, "node_modules"), process.platform === "win32" ? "junction" : "dir");
   const run = spawnSync(process.execPath, ["generate.mjs", "Test"], { cwd: dir, encoding: "utf8" });
   console.log();
   check("Run from a folder with a space in its name, it prints the key (it used to print nothing)",

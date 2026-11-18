@@ -454,7 +454,7 @@ export function verifyCommitment({
   destinationEntries = [],
   destinationRules = null, // { attestors, threshold, instance } — used only when no Crowdlock is given
   destinationStamps = {},  // { txid: tx } — the stamp payments, as an explorer describes them
-  utxoValue,              // the lock's value, needed to check the signature and the fee
+  utxoValue,              // the value of the coin it spends, which MUST be read from a coin at the lock's own address: the signature is checked against it, and a value taken from any other coin proves nothing about the lock
   coinIsUnspent = null,   // true only for a coin that is confirmed and unspent
   network,
   crowdlock = null,
@@ -493,8 +493,13 @@ export function verifyCommitment({
   // The lock must still be shut when the proposal's settling ends. A lock that
   // opens sooner can be taken home by its owner alone, at any moment up to
   // and after the co-signer completes it, so its money is not committed.
-  // (Block heights are for private test chains only, and are not compared.)
-  if (record.lock.locktime >= 500_000_000) {
+  // A lock dated by block height is for a private test chain only. On any
+  // other network it is refused: until the security loop of 17 November 2026
+  // it was simply not compared, so a lock dated by a height already passed,
+  // which its owner can take home alone today, counted as committed money.
+  if (record.lock.locktime < 500_000_000) {
+    if (network?.bech32 !== "bcrt") return fail("the lock is dated by block height, which only a private test chain uses — on a real network it may already be open, so its money isn't committed");
+  } else {
     const settles = Date.parse(proposal.settlesBy ?? "");
     if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
     if (!(record.lock.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");
@@ -507,6 +512,11 @@ export function verifyCommitment({
   catch (e) { return fail(`transaction will not parse: ${e.message}`); }
   if (tx.ins.length !== 1) return fail(`${tx.ins.length} inputs, must be exactly 1`);
   note("exactly one input", true);
+  // The input's own script (scriptSig) must be empty. The owner's signature
+  // does not cover it, so anybody can add one to a commitment; the result has
+  // another id, still carries the owner's signature, and can never be mined
+  // (security loop, 17 November 2026).
+  if (tx.ins[0].script.length !== 0) return fail("its input carries a script, which a spend of a lock never does — the network would not take it");
 
   // 3. the witness is the purchase branch, co-signer's slot empty
   const w = tx.ins[0].witness;
@@ -644,6 +654,7 @@ export function completeCommitment({ record, cosignerKey, utxoValue, network }) 
   });
 
   const tx = Transaction.fromHex(record.tx);
+  if (tx.ins.length !== 1 || tx.ins[0].script.length !== 0) throw new Error("its input carries a script, which a spend of a lock never does — the network would not take it");
   const w = tx.ins[0].witness;
   if (w[0].length !== 0) throw new Error("already completed");
 

@@ -39,7 +39,11 @@ const strangerKey = ECPair.fromPrivateKey(Buffer.from("33".repeat(32), "hex"), {
 
 const ownerPubkey = Buffer.from(ownerKey.publicKey);
 const cosignerPubkey = Buffer.from(cosignerKey.publicKey);
-const LOCKTIME = 2_900_000;
+// A date (May 2030), as every lock on a real network is. Until the security
+// loop of 17 November 2026 this was a block height (2,900,000) on testnet: a
+// lock dated by height is now refused in a commitment on every public network,
+// so the fixture is the kind of lock the method actually makes.
+const LOCKTIME = 1_900_000_000;
 
 const lock = lockAddress({ fanPubkey: ownerPubkey, cosignerPubkey, locktime: LOCKTIME, network: NETWORK });
 const utxo = { txid: "a".repeat(64), vout: 0, value: 1_000_000 };
@@ -634,6 +638,14 @@ rejects("A list attested by somebody the Crowdlock's file does not name, even wh
   verifyCommitment({ record, proposal: PROPOSAL, destinationStamps: STAMPS, destinationEntries: outsiderList, destinationRules: { attestors: [OUTSIDER], threshold: 1, instance: INSTANCE },
     utxoValue: utxo.value, network: NETWORK, crowdlock: ours }), "not a listed attestor");
 
+// A script in the input (security loop, round 2). The owner's signature does
+// not cover it; a lock's spend that has one is never mined.
+{
+  const tx = bitcoin.Transaction.fromHex(record.tx);
+  tx.ins[0].script = Buffer.from("51", "hex");
+  rejects("A copy with a script added to its input", verifyWith({ ...record, tx: tx.toHex() }), "carries a script");
+}
+
 // A lock that opens before the proposal's settling ends is not committed
 // money: its owner could take it home first (second review, 17 November 2026).
 {
@@ -647,6 +659,12 @@ rejects("A list attested by somebody the Crowdlock's file does not name, even wh
   rejects("A lock that opens before settling ends", verifyWith(dated(settles - 86400)), "opens before the proposal's settling ends");
   rejects("A lock that opens the moment settling ends", verifyWith(dated(settles)), "opens before the proposal's settling ends");
   check("A lock that opens after settling ends is accepted", verifyWith(dated(settles + 86400)).valid, true, verifyWith(dated(settles + 86400)).reason);
+  // A lock dated by block height was never compared with the settling date.
+  // On a public network a height in the past is a lock its owner can already
+  // take home alone, so its money was counted and could be co-signed while
+  // being no commitment at all (security loop, round 1).
+  rejects("A lock dated by a block height already passed", verifyWith(dated(800_000)), "dated by block height");
+  rejects("…or by any block height, on a public network", verifyWith(dated(2_900_000)), "dated by block height");
   rejects("A date lock checked against a proposal with no settling date", verifyWith(dated(settles + 86400), { proposal: { ...PROPOSAL, settlesBy: undefined } }), "settling date can't be read");
 }
 

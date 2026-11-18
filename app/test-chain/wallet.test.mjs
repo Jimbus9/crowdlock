@@ -702,6 +702,21 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     if (app.valid !== refv.valid || (!app.valid && app.reason !== refv.reason)) { agreeAll = false; disagree.push(`${name}: app "${app.reason}" vs ref "${refv.reason}"`); }
   }
   check("The app's commitment checker gives the reference checker's verdict and reason, good and tampered", agreeAll, disagree.join(" | "));
+  {
+    // A script in the input (security loop, round 2). The owner's signature
+    // does not cover it, so anyone can add one to a member's commitment. The
+    // result has another id, still carries the owner's signature, and can
+    // never be paid: the network refuses a lock's spend that has one. It
+    // counted toward a target, and posted first it took the coin's place in
+    // the pile and shut the member's real commitment out.
+    const withScript = remade((tx) => { tx.ins[0].script = Buffer.from("51", "hex"); });
+    const a = await checkCommitment({ record: withScript, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    const r = C.verifyCommitment({ record: withScript, utxoValue: c3.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
+      proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry], destinationRules: { attestors: [attestor.address], threshold: 1, instance: INSTANCE } });
+    check("A copy with a script added to its input is refused, by the app and the reference alike",
+      !a.valid && !r.valid && /carries a script/.test(a.reason) && a.reason === r.reason, a.valid ? "THE APP COUNTED IT" : a.reason);
+    await refuses("…and the co-signer's words won't complete one", () => completeCommitmentWith({ words: coWords5, record: withScript, chain }), "carries a script");
+  }
   const appGood = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
   check("…and counts what a good one commits", appGood.valid && appGood.committedSats === 100_000, appGood.reason);
   check("…naming the coin it spends, so a pile can count each coin once", appGood.coin === `${c3.txid}:${c3.vout}`, appGood.coin);
@@ -752,9 +767,53 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
       proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry] });
     check("A commitment from a lock that opens before settling ends is refused, by the app and the reference alike",
       !vShort.valid && !rShort.valid && /opens before the proposal's settling ends/.test(vShort.reason) && vShort.reason === rShort.reason, vShort.reason);
+    // A lock dated by block height, on a real network: a height already
+    // passed is a lock its owner can take home alone today. It was never
+    // compared with the settling date, so it counted (security loop, round 1).
+    const byHeight = { owner_pubkey: fan.publicKey, cosigner_pubkey: coKey5, locktime: 800000 };
+    byHeight.address = lockAddress({ ownerPubkey: fan.publicKey, cosignerPubkey: coKey5, locktime: 800000 }, "tb");
+    const vHeight = await checkCommitment({ record: { ...onShort, lock: byHeight }, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: "testnet4" });
+    check("A commitment from a lock dated by block height is refused on a real network", !vHeight.valid && /dated by block height/.test(vHeight.reason), vHeight.reason);
+    // A record whose owner key is not a compressed key (security loop, round 5):
+    // the reference checker always refused it; the app's made a "lock" from it.
+    const longKey = "04" + "11".repeat(64);
+    const badKey = { ...onShort, lock: { ...onShort.lock, owner_pubkey: longKey } };
+    let madeAddress = null;
+    try { madeAddress = lockAddress({ ownerPubkey: longKey, cosignerPubkey: coKey5, locktime: onShort.lock.locktime }, net.bech32 ?? "rb"); } catch {}
+    const vKey = await checkCommitment({ record: madeAddress ? { ...badKey, lock: { ...badKey.lock, address: madeAddress } } : badKey, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    const rKey = C.verifyCommitment({ record: badKey, utxoValue: sc.value, coinIsUnspent: true, network: net.network, crowdlock: cl,
+      proposal: { hash: pHash, destination, opensAt: proposal.opens, settlesBy: proposal.settlesBy }, destinationStamps: STAMPS, destinationEntries: [entry] });
+    check("A commitment whose lock names a key that is not a compressed key is no lock, to the app and the reference alike",
+      madeAddress === null && !vKey.valid && !rKey.valid && /not a valid lock/.test(vKey.reason) && /not a valid lock/.test(rKey.reason), madeAddress ? "THE APP MADE A LOCK OF IT" : vKey.reason);
   }
 
   await refuses("Completing with words that aren't this lock's co-signer", () => completeCommitmentWith({ words: newWords(), record: good, chain }), "don't make this lock's co-signer key");
+  {
+    // The co-signer's screen (security loop, round 3). It added up every
+    // commitment that passed its check, then completed those the typed words
+    // could and skipped the rest: with two co-signer keys listed, the ones
+    // under the other key counted toward the target and were never paid, so
+    // honest members' money went to a purchase that stayed short. What the
+    // words cannot complete is now left out of the sum before anything is signed.
+    const { commitmentsToComplete, commitmentCoin, worthSpending } = await import("../src/wallet/core.mjs");
+    const ask = (words, target) => commitmentsToComplete({ words, records: [good], crowdlock: cl, proposal: { ...appProposal, target: { sats: target } }, destinations: destFile, chain, network: net });
+    const right = await ask(coWords5, 100_000);
+    check("With the words of the key the lock names, the commitment counts and may be completed", right.ok && right.still.length === 1 && right.total === 100_000, right.problems.join(" "));
+    const wrong = await ask(newWords(), 100_000);
+    check("With another key's words it is not counted, so nothing is completed short of the target",
+      !wrong.ok && wrong.still.length === 0 && wrong.total === 0 && /co-signer key these words don't make/.test(wrong.problems.join(" ")), wrong.problems.join(" ").slice(0, 70));
+    const short = await ask(coWords5, 100_001);
+    check("…and a total short of the target is not ok either", !short.ok && short.total === 100_000);
+    const spent = bitcoinjs.Transaction.fromHex(good.tx).ins[0];
+    check("The coin a commitment spends is read from it", commitmentCoin(good) === `${Buffer.from(spent.hash).reverse().toString("hex")}:${spent.index}` && commitmentCoin({ tx: "zz" }) === null);
+    // Tiny coins anybody can send to a published address (round 3): each cost
+    // more to spend than it held, and the app spent every coin or none.
+    const tiny = Array.from({ length: 300 }, (_, i) => ({ txid: `t${i}`, vout: 0, value: 330 }));
+    const picked = worthSpending([...tiny, { txid: "big", vout: 0, value: 250_863 }, { txid: "mid", vout: 1, value: 5_000 }], 320, 10);
+    check("Coins that cost more to spend than they hold are left where they are", picked.length === 2 && picked[0].txid === "big" && picked[1].txid === "mid", `${picked.length} coins picked`);
+    check("…at a lower fee rate they are worth taking, largest first, and never more than a payment can carry",
+      worthSpending(tiny, 320, 1).length === 200 && worthSpending([...tiny, { txid: "big", vout: 0, value: 9_000 }], 320, 1)[0].txid === "big");
+  }
   const finished = await completeCommitmentWith({ words: coWords5, record: good, chain });
   {
     // The fee is sized for the payment as it is finally sent: two signatures,
@@ -769,6 +828,16 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
   {
     const { commitmentPaid } = await import("../src/wallet/core.mjs");
     check("A completed payment the network has but no block yet is not shown as paid", (await commitmentPaid({ record: good, chain })) === 0);
+    // …but it is not forgotten either (security loop, round 4). It read as
+    // "void": counted neither as waiting nor as paid. So after the co-signer
+    // sent the first commitments of an oversubscribed proposal, the pile's
+    // total dropped, the ones left out reached the target on their own, the
+    // button went live again, and pressing it paid the seller twice over.
+    const { commitmentPayment } = await import("../src/wallet/core.mjs");
+    const inFlight = await commitmentPayment({ record: good, chain });
+    const asVoid = await checkCommitment({ record: good, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    check("A completed payment waiting for a block is known as sent: its amount, and that no block holds it yet",
+      !asVoid.valid && /already been spent/.test(asVoid.reason) && inFlight?.sats === 100_000 && inFlight?.confirmed === false, JSON.stringify(inFlight));
   }
   await rpc("generatetoaddress", [1, miner.address]);
   const paid3 = (await chain.utxos(destination)).filter((c) => c.confirmed).reduce((n, c) => n + BigInt(c.value), 0n);
@@ -785,6 +854,45 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
       !vJunk.valid && /owner's signature does not verify/.test(vJunk.reason), vJunk.reason);
   }
   const { commitmentPaid, signNoticeWith } = await import("../src/wallet/core.mjs");
+  {
+    // A payment that never left a lock (security loop, round 2). A payment's
+    // id leaves out its signatures. So an ordinary payment from somebody's
+    // own wallet to the seller, carrying the proposal's marker, shares its
+    // id with a "commitment" written around it that claims to spend a lock.
+    // The app read the spent coin's value from the chain without asking
+    // whether that coin was ever the lock's, found the payment in a block,
+    // and counted it as paid: a seller paying themselves made a proposal
+    // read "funded and paid", and the co-signer's own re-check agreed.
+    await chain.broadcast((await buildSend({ account: miner, chain, to: fan.address, amount: 200_400n, feeRate: 2 })).hex);
+    await rpc("generatetoaddress", [1, miner.address]);
+    const X = (await chain.utxos(fan.address)).find((c) => c.confirmed && Number(c.value) === 200_400);
+    const pay = new bitcoinjs.Transaction(); pay.version = 2; pay.locktime = 0;
+    pay.addInput(Buffer.from(X.txid, "hex").reverse(), X.vout, 0xfffffffe);
+    pay.addOutput(bitcoinjs.address.toOutputScript(destination, net.network), 200_000);
+    pay.addOutput(Buffer.from("6a20" + pHash, "hex"), 0);
+    // The real payment: an ordinary spend of the fan's own wallet coin.
+    const real = bitcoinjs.Transaction.fromHex(pay.toHex());
+    const h1 = real.hashForWitnessV0(0, bitcoinjs.payments.p2pkh({ pubkey: fanKey.publicKey }).output, Number(X.value), bitcoinjs.Transaction.SIGHASH_ALL);
+    real.setWitness(0, [bitcoinjs.script.signature.encode(Buffer.from(fanKey.sign(h1)), bitcoinjs.Transaction.SIGHASH_ALL), Buffer.from(fanKey.publicKey)]);
+    await chain.broadcast(real.toHex());
+    await rpc("generatetoaddress", [1, miner.address]);
+    // The "commitment": the same payment, dressed as a spend of the fan's lock.
+    const dressed = bitcoinjs.Transaction.fromHex(pay.toHex());
+    const h2 = dressed.hashForWitnessV0(0, lock2Script, Number(X.value), bitcoinjs.Transaction.SIGHASH_ALL);
+    dressed.setWitness(0, [Buffer.alloc(0), Buffer.alloc(0), bitcoinjs.script.signature.encode(Buffer.from(fanKey.sign(h2)), bitcoinjs.Transaction.SIGHASH_ALL), lock2Script]);
+    const fake = { proposal: pHash, lock: good.lock, tx: dressed.toHex() };
+    const vFake = await checkCommitment({ record: fake, crowdlock: cl, proposal: appProposal, destinations: destFile, chain, network: net });
+    const paidFake = await commitmentPaid({ record: fake, chain });
+    check("A payment from an ordinary wallet, dressed as a lock's commitment, is in a block under the same id",
+      dressed.getId() === real.getId() && (await chain.tx(real.getId())).status.confirmed === true);
+    check("…and is refused because the coin it spends was never the lock's, not read as a spent commitment",
+      !vFake.valid && /never a coin of the lock/.test(vFake.reason), vFake.reason);
+    check("…and is not counted as paid", paidFake === 0, `${paidFake} sats`);
+    check("A commitment the co-signer really completed still reads as paid", (await commitmentPaid({ record: good, chain })) === 100_000);
+    const { commitmentPayment } = await import("../src/wallet/core.mjs");
+    const settled = await commitmentPayment({ record: good, chain });
+    check("…and as in a block; the dressed-up payment is no payment at all", settled?.confirmed === true && settled.sats === 100_000 && (await commitmentPayment({ record: fake, chain })) === null);
+  }
   const P = await import("../../method/js/proposals.mjs");
   const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");
   const notice = signNoticeWith({ words: coWords5, crowdlock: cl, statement: P.noticeStatement(pHash), network: net });

@@ -33,7 +33,7 @@ import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { BIP32, Output, Psbt, signers, networks, keyExpressionBIP32 } from "@bitcoinerlab/descriptors";
 import * as ecc from "@bitcoinerlab/secp256k1";
 import bs58check from "bs58check";
-import { Transaction, script as bscript, address as baddress } from "bitcoinjs-lib";
+import { Transaction, script as bscript, address as baddress, crypto as bcrypto } from "bitcoinjs-lib";
 import * as ledgerApi from "@bitcoinerlab/descriptors/ledger";
 // The register's own verifier, shared with the website: the message hash a
 // signature is made over is computed by exactly the code that later checks it.
@@ -55,6 +55,28 @@ export const NETWORKS = {
 // Below this a native-segwit output is "dust": nodes will not relay a
 // transaction creating one, so it would be stuck. Bitcoin Core's figure.
 export const DUST_SATS = 294n;
+
+// The most coins one payment spends. A payment's size is limited by the
+// network; 200 lock coins come to about a sixth of that.
+export const MOST_INPUTS = 200;
+const TOO_SMALL = "every coin here is too small to be worth its own fee at this fee rate — choose a slower fee";
+
+/**
+ * The coins worth spending at this fee rate: each must hold more than it
+ * costs to spend, largest first, at most MOST_INPUTS. Anybody can send tiny
+ * coins to a published address. Until 17 November 2026 (security loop,
+ * round 3) every coin at an address was spent in one payment, so a few
+ * hundred of them made the app refuse to send, lock or take a lock home, or
+ * build a payment too large for the network. A coin left out is not lost: it
+ * stays where it is.
+ *   inputWeight  the weight of one such input, from the library
+ */
+export function worthSpending(coins, inputWeight, feeRate, most = MOST_INPUTS) {
+  const cost = BigInt(Math.ceil((inputWeight / 4) * feeRate));
+  return coins.filter((c) => BigInt(c.value) > cost)
+    .sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : BigInt(b.value) < BigInt(a.value) ? -1 : 0))
+    .slice(0, most);
+}
 
 /**
  * The same limit for any kind of output, by Bitcoin Core's rule: three sats
@@ -317,8 +339,11 @@ export async function buildSend({ account, chain, to, amount, feeRate, policies 
   try { dest = new Output({ descriptor: `addr(${String(to).trim()})`, network: net }); }
   catch { throw new Error("that is not an address on this network"); }
 
-  const coins = (await chain.utxos(account.address)).filter((c) => c.confirmed);
-  if (coins.length === 0) throw new Error("there is no confirmed money to send yet");
+  const everyCoin = (await chain.utxos(account.address)).filter((c) => c.confirmed);
+  if (everyCoin.length === 0) throw new Error("there is no confirmed money to send yet");
+  // Coins that cost more to spend than they hold are left where they are.
+  const coins = worthSpending(everyCoin, account.output.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate);
+  if (coins.length === 0) throw new Error(TOO_SMALL);
   const inputTotal = coins.reduce((s, c) => s + BigInt(c.value), 0n);
 
   const sendAll = amount === "all";
@@ -590,8 +615,11 @@ export async function takeHome({ account, chain, lock, feeRate, medianTime, to, 
   try { dest = new Output({ descriptor: `addr(${String(to ?? account.address).trim()})`, network: net }); }
   catch { throw new Error("that is not an address on this network"); }
 
-  const coins = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
-  if (coins.length === 0) throw new Error("there is no confirmed money in this lock");
+  const everyCoin = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
+  if (everyCoin.length === 0) throw new Error("there is no confirmed money in this lock");
+  // Coins that cost more to spend than they hold are left where they are.
+  const coins = worthSpending(everyCoin, out.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate);
+  if (coins.length === 0) throw new Error(TOO_SMALL);
   const total = coins.reduce((s, c) => s + BigInt(c.value), 0n);
 
   const weight = 44 + coins.length * out.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES") + dest.outputWeight();
@@ -641,9 +669,12 @@ export async function relock({ account, chain, lock, newLock, feeRate, medianTim
   const oldOut = new Output({ descriptor: oldDescriptor, network: net, signersPubKeys: [fromHex(account.publicKey)] });
   const dest = new Output({ descriptor: `addr(${next.address})`, network: net });
 
-  const lockCoins = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
-  if (lockCoins.length === 0) throw new Error("there is no confirmed money in this lock");
-  const waitCoins = addWaiting ? (await chain.utxos(account.address)).filter((c) => c.confirmed) : [];
+  const everyLockCoin = (await chain.utxos(lock.address)).filter((c) => c.confirmed);
+  if (everyLockCoin.length === 0) throw new Error("there is no confirmed money in this lock");
+  // Coins that cost more to spend than they hold are left where they are.
+  const lockCoins = worthSpending(everyLockCoin, oldOut.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate);
+  if (lockCoins.length === 0) throw new Error(TOO_SMALL);
+  const waitCoins = addWaiting ? worthSpending((await chain.utxos(account.address)).filter((c) => c.confirmed), account.output.inputWeight(true, "DANGEROUSLY_USE_FAKE_SIGNATURES"), feeRate) : [];
   const total = [...lockCoins, ...waitCoins].reduce((s, c) => s + BigInt(c.value), 0n);
 
   const weight = 44
@@ -855,7 +886,11 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (!isCosignerOf(crowdlock, L.cosigner_pubkey)) return fail(`the lock's co-signer is not ${crowdlock.name}'s — this commitment belongs to a different Crowdlock, or to none`);
   // The lock must still be shut when the proposal's settling ends, or its
   // owner could take the money home first (method/lock/commitment.mjs).
-  if (L.locktime >= 500000000) {
+  // A lock dated by block height is for a private test chain only: anywhere
+  // else it may already be open (security loop, 17 November 2026).
+  if (L.locktime < 500000000) {
+    if (hrp !== "bcrt") return fail("the lock is dated by block height, which only a private test chain uses — on a real network it may already be open, so its money isn't committed");
+  } else {
     const settles = Date.parse(proposal.settles_by ?? proposal.settlesBy ?? "");
     if (Number.isNaN(settles)) return fail("the proposal's settling date can't be read, so whether the lock outlasts it can't be checked");
     if (!(L.locktime > settles / 1000)) return fail("the lock opens before the proposal's settling ends, so its owner could take the money home first");
@@ -864,6 +899,9 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch (e) { return fail(`transaction will not parse: ${e.message}`); }
   if (tx.ins.length !== 1) return fail(`${tx.ins.length} inputs, must be exactly 1`);
+  // The input's own script must be empty: the owner's signature does not
+  // cover it, and a lock's spend that has one is never mined (method/lock/commitment.mjs).
+  if (tx.ins[0].script.length !== 0) return fail("its input carries a script, which a spend of a lock never does — the network would not take it");
   const w = tx.ins[0].witness;
   if (w.length !== 4) return fail(`witness has ${w.length} items, the purchase branch has 4`);
   if (w[0].length !== 0) return fail("the co-signer's slot is not empty — this is a completed spend, not a commitment");
@@ -882,7 +920,14 @@ export async function checkCommitment({ record, crowdlock, proposal, destination
   if (value === null) {
     try {
       const src = Transaction.fromHex(String(await chain.txHex(txid)).trim());
-      if (src.getId() === txid && src.outs[tx.ins[0].index]) value = BigInt(src.outs[tx.ins[0].index].value);
+      const spent = src.getId() === txid ? src.outs[tx.ins[0].index] : null;
+      // The coin must have been a coin OF THIS LOCK. Until 17 November 2026
+      // (security loop, round 2) any coin's value was read here, so a
+      // payment from an ordinary wallet, dressed as a spend of a lock, passed
+      // as a commitment whose coin "has already been spent", and was then
+      // counted as paid.
+      if (spent && toHex(spent.script) !== toHex(lockOutputScript(script))) return fail("the coin it spends was never a coin of the lock it names, so this is not a spend of that lock");
+      if (spent) value = BigInt(spent.value);
     } catch { /* below */ }
     if (value === null) return fail("the coin it spends can't be read from the chain just now, so its signature can't be checked");
   }
@@ -975,6 +1020,49 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
   return { address, signature: sig };
 }
 
+/** The coin a commitment spends, as "txid:vout", or null if it won't read. */
+export function commitmentCoin(record) {
+  try {
+    const tx = Transaction.fromHex(record.tx);
+    return tx.ins.length === 1 ? `${toHex(Uint8Array.from(tx.ins[0].hash).reverse())}:${tx.ins[0].index}` : null;
+  } catch { return null; }
+}
+
+/**
+ * Which of these commitments the co-signer key these words make can
+ * complete, and what they add up to. A Crowdlock may list more than one
+ * co-signer key, and a commitment can only be completed with the key its own
+ * lock names. Until 17 November 2026 (security loop, round 3) the co-signer's
+ * screen added up every commitment that passed its check, then completed
+ * those the typed words could and skipped the rest: honest members' money
+ * went to a purchase that stayed short. So those the words cannot complete
+ * are left out of the sum BEFORE anything is signed.
+ *
+ * Returns { ok, still, total, problems }: `ok` only if `total` (what is
+ * already paid plus what `still` commits) reaches the proposal's target.
+ */
+export async function commitmentsToComplete({ words, records, crowdlock, proposal, destinations, chain, network, alreadyPaid = 0 }) {
+  const key = cosignerKeyFromWords(words).publicKey;
+  const still = [], problems = [];
+  let total = alreadyPaid;
+  for (const record of records) {
+    if (String(record?.lock?.cosigner_pubkey ?? "").toLowerCase() !== key) {
+      problems.push("A commitment's lock names a co-signer key these words don't make, so they can't complete it and it isn't counted.");
+      continue;
+    }
+    try {
+      const v = await checkCommitment({ record, crowdlock, proposal, destinations, chain, network });
+      if (v.valid) { still.push(record); total += v.committedSats; } else problems.push(`A commitment no longer passes its check: ${v.reason}`);
+    } catch (e) { problems.push(String(e?.message ?? e)); }
+  }
+  return { ok: total >= proposal.target.sats, still, total, problems };
+}
+
+/** The output script of a lock: segwit v0, the SHA-256 of its witness script. */
+function lockOutputScript(witnessScript) {
+  return Uint8Array.from([0x00, 0x20, ...bcrypto.sha256(Uint8Array.from(witnessScript))]);
+}
+
 /** The id of a commitment's payment, which a completed one shares (the id leaves out the signatures). Null if it won't read. */
 export function commitmentTxid(record) {
   try { return Transaction.fromHex(record.tx).getId(); } catch { return null; }
@@ -986,12 +1074,50 @@ export function commitmentTxid(record) {
  * is in a block, the co-signer completed it and it was sent. Returns the sats
  * it paid the destination, or 0. One the network has seen but no block holds
  * yet is not paid: until 17 November 2026 it was shown as paid at once.
+ *
+ * The id says which coin was spent and where the money went, and nothing
+ * about who signed. So this asks the chain what that coin was: it counts as
+ * paid only if the coin was a coin of the lock the record names. Without
+ * that, an ordinary payment from anybody's wallet to the seller, carrying
+ * the proposal's marker, read as a paid commitment (security loop, round 2).
+ * Such a coin can only have been spent this way with the co-signer's
+ * signature: the payment declares no date, so the lock's going-home exit
+ * refuses it.
  */
 export async function commitmentPaid({ record, chain }) {
+  const p = await commitmentPayment({ record, chain });
+  return p?.confirmed ? p.sats : 0;
+}
+
+/**
+ * The payment a commitment became, if the co-signer completed it and it was
+ * sent: { sats, confirmed }, or null. `confirmed` is false while the network
+ * has it and no block holds it yet.
+ *
+ * A payment waiting for a block is not "paid", and must not be forgotten
+ * either. Until 17 November 2026 (security loop, round 4) its commitment
+ * read as void, counted neither as waiting nor as paid. After the co-signer
+ * sent the first commitments of an oversubscribed proposal, the total fell,
+ * the ones left out reached the target by themselves, the co-signer's button
+ * went live again, and pressing it sent those too: the seller was paid twice
+ * the target, from members the settlement rule leaves alone.
+ */
+export async function commitmentPayment({ record, chain }) {
   let tx;
-  try { tx = Transaction.fromHex(record.tx); } catch { return 0; }
-  try { if (!(await chain.tx(tx.getId()))?.status?.confirmed) return 0; } catch { return 0; }
-  return Number(tx.outs[0].value);
+  try { tx = Transaction.fromHex(record.tx); } catch { return null; }
+  if (tx.ins.length !== 1) return null;
+  try {
+    const L = record.lock ?? {};
+    const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
+    const from = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
+    const src = Transaction.fromHex(String(await chain.txHex(from)).trim());
+    const spent = src.getId() === from ? src.outs[tx.ins[0].index] : null;
+    if (!spent || toHex(spent.script) !== toHex(lockOutputScript(script))) return null;
+  } catch { return null; }
+  let seen;
+  try { seen = await chain.tx(tx.getId()); } catch { return null; }
+  if (!seen) return null;
+  return { sats: Number(tx.outs[0].value), confirmed: !!seen.status?.confirmed };
 }
 
 /**
@@ -1011,6 +1137,7 @@ export async function completeCommitmentWith({ words, record, chain }) {
   const L = record.lock;
   const script = lockScriptOf({ ownerPubkey: L.owner_pubkey, cosignerPubkey: L.cosigner_pubkey, locktime: L.locktime });
   const tx = Transaction.fromHex(record.tx);
+  if (tx.ins.length !== 1 || tx.ins[0].script.length !== 0) throw new Error("its input carries a script, which a spend of a lock never does — the network would not take it");
   const txid = toHex(Uint8Array.from(tx.ins[0].hash).reverse());
   const coin = (await chain.utxos(L.address)).find((u) => u.txid === txid && u.vout === tx.ins[0].index);
   if (!coin) throw new Error("the coin has already been spent, so this commitment is void");

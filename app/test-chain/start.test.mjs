@@ -6,6 +6,7 @@
 
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { buildCrowdlock, declarationSkeleton, NO_RETURNS, slugify } from "../src/start.mjs";
 import { startSignIn, waitForSignIn, createCrowdlockRepo, CLIENT_ID, SCOPES, canWrite, updateCrowdlockRepo, addMaintainer, addCosignerKey } from "../src/github.mjs";
@@ -95,9 +96,9 @@ rule("THE COPIED INBOX WORKS ON THE NEW CROWDLOCK");
 // signed registration for the test copy, exactly as its job would.
 const dir = mkdtempSync(join(tmpdir(), "crowdlock-"));
 for (const [p, content] of Object.entries(files)) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), content); }
-const { applyRecords } = await import(join(dir, "js/inbox.mjs"));
+const { applyRecords } = await import(pathToFileURL(join(dir, "js/inbox.mjs")).href);
 const { finalizeEvent, generateSecretKey } = await import("nostr-tools/pure");
-const { recordEventTemplate } = await import(join(dir, "js/inbox.mjs"));
+const { recordEventTemplate } = await import(pathToFileURL(join(dir, "js/inbox.mjs")).href);
 const t = testLoaded.crowdlock;
 const signature = signStatement(member, testLoaded.statement);
 const event = finalizeEvent(recordEventTemplate({ type: "join", address: member.address, signature }, t.declaration.sha256, 1800000000), generateSecretKey());

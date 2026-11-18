@@ -64,12 +64,18 @@ committed = Σ (confirmed balance of every lock address in state "locked"
   published with the figure.
 - **Unconfirmed transactions do not count.** A lock counts from its first
   confirmation.
+- **A balance must be readable however many coins sit at the address.**
+  Public block explorers refuse to list the coins at an address holding more
+  than 500, and anybody can send that many tiny coins to a published lock
+  address. A reader that is refused works the coins out from the address's
+  history instead: every output paying it that nothing has spent.
 - Each lock address is counted once. An address appearing twice in the register
   is counted once.
 - **Only a real lock is counted.** A register is a file, and a file can say
   anything. A record counts only if its address is the lock its own stated
-  terms make (lock format, "Verifying a lock") and its co-signer is one of
-  this Crowdlock's keys. Anything else is not a lock of this Crowdlock, however
+  terms make (lock format, "Verifying a lock"), its co-signer is one of
+  this Crowdlock's keys, and it is dated by a date: a record dated by a block
+  height is not a lock on any real network (lock format, "Locktime"). Anything else is not a lock of this Crowdlock, however
   much money sits at the address it names, and the blockchain is not asked
   about it.
 

@@ -51,6 +51,10 @@ const locktimes = [
   ["the largest locktime there is", 4294967295],
   ["a small block height (regtest)", 150],
   ["a height with the high bit set (128)", 128],
+  // The smallest numbers have opcodes of their own (security loop, 17 November 2026).
+  ["block 1", 1],
+  ["block 16, the last with an opcode of its own", 16],
+  ["block 17, the first that is pushed as a byte", 17],
 ];
 for (const [label, t] of locktimes) {
   const ours = hex(lockScript({ ownerPubkey: OWNER, cosignerPubkey: COSIGNER, locktime: t }));
@@ -68,6 +72,34 @@ for (const net of ["mainnet", "testnet4"]) {
     locktime: t, network: proven.networkFor(net),
   }).address;
   check(`Address on ${net}`, ours === theirs, ours.slice(0, 18) + "…");
+}
+
+// A key that is not a compressed public key makes no script, from either
+// (security loop, round 5). The proven code always refused one; this one
+// wrote "33 bytes follow" and then whatever it was given, so a 65-byte key
+// still made "a lock", with an address, which the app's commitment checker
+// went on to accept where the reference checker refused.
+{
+  const throws = (f) => { try { f(); return false; } catch { return true; } };
+  const long = "04" + "11".repeat(64);          // an uncompressed key, 65 bytes
+  for (const [label, owner, cosigner] of [
+    ["an uncompressed owner key", long, COSIGNER], ["an uncompressed co-signer key", OWNER, long],
+    ["a key cut short", OWNER.slice(0, 64), COSIGNER], ["a key that is not hex", "02" + "zz".repeat(32), COSIGNER],
+    ["a key that starts 05", "05" + OWNER.slice(2), COSIGNER], ["no key at all", undefined, COSIGNER],
+  ]) {
+    const ours = throws(() => lockScript({ ownerPubkey: owner, cosignerPubkey: cosigner, locktime: NOW + 31557600 }));
+    const theirs = throws(() => proven.lockScript({ fanPubkey: Buffer.from(String(owner ?? ""), "hex"), cosignerPubkey: Buffer.from(String(cosigner ?? ""), "hex"), locktime: NOW + 31557600 }));
+    check(`No script for ${label}, from either`, ours && theirs, ours ? "" : "THIS ONE MADE A SCRIPT");
+  }
+  check("…nor an address", throws(() => lockAddress({ ownerPubkey: long, cosignerPubkey: COSIGNER, locktime: NOW + 31557600 }, "bc")));
+}
+
+// Outside what a locktime can be, both refuse: nothing is quietly cut short.
+for (const [label, t] of [["nought", 0], ["a negative number", -5], ["more than a locktime can hold (2^32)", 4294967296], ["a fraction", 1.5]]) {
+  const throws = (f) => { try { f(); return false; } catch { return true; } };
+  check(`No script for ${label}, from either`,
+    throws(() => lockScript({ ownerPubkey: OWNER, cosignerPubkey: COSIGNER, locktime: t }))
+      && throws(() => proven.lockScript({ fanPubkey: Buffer.from(OWNER, "hex"), cosignerPubkey: Buffer.from(COSIGNER, "hex"), locktime: t })));
 }
 
 const typical = lockScript({ ownerPubkey: OWNER, cosignerPubkey: COSIGNER, locktime: NOW + 31557600 });
@@ -193,6 +225,18 @@ rule();
   const stranger = lockIsGenuine(record, { crowdlock, register: { ...onRegister, members: [] } });
   check("A real lock whose owner never joined is a lock, and its owner is not counted as a member", stranger.ok && stranger.member === false);
   not("a record with no keys", { address: record.address, member: record.member, locktime: record.locktime }, read, "not public keys");
+  // A "lock" dated by a block height long passed is money its owner can take
+  // home alone today (security loop, round 1).
+  const byHeight = (hrp) => ({ ...record, locktime: 800000, address: lockAddress({ ownerPubkey: OWNER, cosignerPubkey: record.cosigner_pubkey, locktime: 800000 }, hrp) });
+  not("a lock dated by a block height, on a real network", byHeight("bc"), read, "block height");
+  check("…though a private test chain may date a lock by height",
+    lockIsGenuine(byHeight("bcrt"), { crowdlock: { ...crowdlock, network: "regtest" }, register: onRegister }).ok);
+  // A co-signer key's mirror image (02… for 03…) is another key, and makes
+  // another lock: one the co-signer's words cannot open (security loop, round 3).
+  not("a lock co-signed by the mirror image of this Crowdlock's key", (() => {
+    const m = mirror(record.cosigner_pubkey);
+    return { ...record, cosigner_pubkey: m, address: lockAddress({ ownerPubkey: OWNER, cosignerPubkey: m, locktime: record.locktime }, "bc") };
+  })(), read, "co-signer is not this Crowdlock's");
   not("a lock whose owner and co-signer are one key", { ...record, cosigner_pubkey: "03" + OWNER.slice(2) }, read, "same key");
   not("anything at all, for a network the checker does not know", record, { crowdlock: { ...crowdlock, network: "nowhere" }, register: onRegister }, "network");
   // The real registers, as they stand: every lock on them is genuine.

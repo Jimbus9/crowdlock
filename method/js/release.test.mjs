@@ -145,9 +145,10 @@ const hidden = earlyReleases(L, [withOuts([pay(shop, 330), pay(elsewhere, 498000
 check("330 sats to a listed destination and the rest to a wallet: an early release",
   hidden.length === 1 && hidden[0].paidTo === elsewhere);
 check("To a listed destination, the rest back into the same lock, and the proposal marker: a purchase",
-  earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 398000), marker])], ctx).length === 0);
+  earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 399000), marker])], ctx).length === 0);
 check("The rest into a lock of the same owner with a later date, on the register: a purchase",
-  earlyReleases(L, [withOuts([pay(shop, 100000), pay(later, 398000)])],
+  // (399,000 back, not 398,000: a purchase leaves at most 1% of what it pays its destination as fee, as a commitment must.)
+  earlyReleases(L, [withOuts([pay(shop, 100000), pay(later, 399000)])],
     { ...ctx, register: { members: [], locks: [{ address: later, owner_pubkey: ownerHex, cosigner_pubkey: cosHex, locktime: locktime + 86400 }] } }).length === 0);
 check("The rest into a lock of the same owner with an EARLIER date: an early release",
   earlyReleases(L, [withOuts([pay(shop, 100000), pay(earlier, 398000)])],
@@ -220,6 +221,82 @@ check(`A history longer than ${MOST_PAGES} pages is read that far and called inc
 const waiting = Array.from({ length: 50 }, (_, i) => ({ txid: `w${i}`, status: { confirmed: false }, vin: [], vout: [] }));
 check("Fifty waiting payments: called incomplete (an explorer shows no more than fifty)",
   !(await readHistory(async () => waiting, async () => [])).complete);
+
+
+// ---- Security loop, round 3 ------------------------------------------------
+{
+  // Emptied as fees, a slice at a time. Each spend sent 99% back to the same
+  // lock and left 1% as fee: every output "stayed locked" and each fee was
+  // within a commitment's limit of what was SPENT, so 300 of them took 95% of
+  // a lock before its date and none showed. A purchase pays a destination,
+  // and its fee is limited by what it pays the destination, as a
+  // commitment's is.
+  // A list made afresh here: the stamps above are shared, and later lists in this file re-made them.
+  const ctx3 = { ...ctx, destinations: await makeList([{ op: "add", address: shop, stampedAt: longAgo }]) };
+  const move = (id, from, to, blockTime) => ({ txid: id, status: { confirmed: true, block_time: blockTime, block_hash: `b${blockTime}` },
+    vin: [{ prevout: { scriptpubkey_address: lock.address, value: from }, witness: ["aa", "", "bb", "cc"] }], vout: [pay(sameLock, to)] });
+  const slices = [];
+  let left = 500000;
+  for (let i = 0; i < 300; i++) { const next = Math.ceil(left * 0.99); slices.push(move(`s${i}`, left, next, before + i)); left = next; }
+  const seen = earlyReleases(L, slices.slice().reverse(), ctx3);   // newest first, as an explorer lists them
+  check("300 co-signed moves back into the same lock, each leaving 1% as fee: all but the first are on the record",
+    left < 500000 * 0.06 && seen.length === 299 && seen.every((r) => r.paidTo === null), `${seen.length} reported; ${left} of 500000 sats left`);
+  check("…while one such move with an ordinary fee is still not a release: the money stayed locked",
+    earlyReleases(L, [move("m1", 500000, 499000, before)], ctx3).length === 0);
+  const token = earlyReleases(L, [withOuts([pay(shop, 330), pay(sameLock, 494670)])], ctx3);
+  check("…and 330 sats to a listed destination does not excuse a fee of 5,000", token.length === 1);
+  check("A real commitment's shape still reads as a purchase: fee within 1% of what the destination is paid",
+    earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 399000), marker])], ctx3).length === 0
+      && earlyReleases(L, [withOuts([pay(shop, 100000), pay(sameLock, 398999), marker])], ctx3).length === 1);
+}
+{
+  // The locks a reader remembers. Remembering the newest 500 was not enough:
+  // 500 newer records pushed an older lock out of memory while it was still
+  // on the register, and it could then be removed unseen. The reader now also
+  // keeps a running fingerprint of every lock it has seen, in order, so any
+  // earlier record removed or changed shows, however long the register is.
+  const { locksToWatch, locksSeen, LOCKS_REMEMBERED } = await import("./release.mjs");
+  const co = "02" + "c5".repeat(32);
+  const cl = { network: "mainnet", cosigner_keys: [co] };
+  const mk = (i) => {
+    const owner = Buffer.from(ECPair.makeRandom({ network }).publicKey).toString("hex");
+    const t = 1900000000 + i;
+    return { owner_pubkey: owner, cosigner_pubkey: co, locktime: t, address: recordAddress({ ownerPubkey: owner, cosignerPubkey: co, locktime: t }, "bc") };
+  };
+  const X = mk(0);
+  const small = { members: [], locks: [X] };
+  const m1 = locksSeen({ crowdlock: cl, register: small });
+  check("What is remembered: the locks' terms, how many there were, and a fingerprint of them in order",
+    m1.locks.length === 1 && m1.count === 1 && /^[0-9a-f]{64}$/.test(m1.chain) && !m1.rewritten);
+  const many = { members: [], locks: [X, ...Array.from({ length: LOCKS_REMEMBERED + 1 }, (_, i) => mk(i + 1))] };
+  const m2 = locksSeen({ crowdlock: cl, register: many, remembered: m1 });
+  check("A register that only grows is not a rewritten one", !m2.rewritten && m2.count === LOCKS_REMEMBERED + 2 && !locksToWatch({ crowdlock: cl, register: many, remembered: m1 }).rewritten);
+  check("…though by now the oldest lock's terms have dropped out of memory", !m2.locks.some((l) => l.owner_pubkey === X.owner_pubkey));
+  const without = { members: [], locks: many.locks.slice(1) };
+  const w = locksToWatch({ crowdlock: cl, register: without, remembered: m2 });
+  check("That oldest lock taken off the register is still noticed: the register was rewritten", w.rewritten === true, `gone ${w.gone.length}, rewritten ${w.rewritten}`);
+  const bent = { members: [], locks: [{ ...X, locktime: X.locktime + 1 }, ...many.locks.slice(1)] };
+  check("…and so is one digit of its date changed", locksToWatch({ crowdlock: cl, register: bent, remembered: m2 }).rewritten === true);
+  const m3 = locksSeen({ crowdlock: cl, register: without, remembered: m2 });
+  check("Once seen, a rewrite is not forgotten when the register settles down",
+    m3.rewritten === true && locksToWatch({ crowdlock: cl, register: without, remembered: m3 }).rewritten === true);
+  check("Memory kept the old way (a plain list of terms) still works", locksToWatch({ crowdlock: cl, register: { members: [], locks: [] }, remembered: [X] }).gone.length === 1);
+}
+{
+  // The coins at an address, worked out from its history. Public explorers
+  // refuse to list the coins at an address holding more than 500, so 501
+  // tiny coins sent to a lock's address made the lock unreadable everywhere.
+  const { coinsFromHistory } = await import("./release.mjs");
+  const A = "bc1qaaa", B = "bc1qbbb";
+  const funding = { txid: "f1", status: { confirmed: true }, vin: [{ txid: "00", vout: 0, prevout: { scriptpubkey_address: B } }], vout: [{ scriptpubkey_address: A, value: 500000 }, { scriptpubkey_address: B, value: 7 }] };
+  const dust = { txid: "d1", status: { confirmed: true }, vin: [{ txid: "01", vout: 0, prevout: { scriptpubkey_address: B } }], vout: Array.from({ length: 501 }, () => ({ scriptpubkey_address: A.toUpperCase(), value: 330 })) };
+  const pending = { txid: "p1", status: { confirmed: false }, vin: [{ txid: "02", vout: 1, prevout: { scriptpubkey_address: B } }], vout: [{ scriptpubkey_address: A, value: 9000 }] };
+  const spendOne = { txid: "s1", status: { confirmed: true }, vin: [{ txid: "d1", vout: 3, prevout: { scriptpubkey_address: A } }], vout: [{ scriptpubkey_address: B, value: 100 }] };
+  const coins = coinsFromHistory(A, [pending, spendOne, dust, funding]);
+  check("An address's coins are worked out from its history: every output paying it that nothing has spent",
+    coins.length === 1 + 500 + 1 && coins.filter((c) => c.confirmed).length === 501 && !coins.some((c) => c.txid === "d1" && c.vout === 3)
+      && coins.some((c) => c.txid === "f1" && c.vout === 0 && c.value === 500000 && c.confirmed) && coins.some((c) => c.txid === "p1" && !c.confirmed));
+}
 
 console.log(failures === 0 ? "\nAn early release by the co-signer is caught; a purchase or a spend on its date is not." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
