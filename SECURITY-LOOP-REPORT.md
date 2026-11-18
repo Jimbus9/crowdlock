@@ -1,14 +1,14 @@
 # Security loop report
 
-17 November 2026. Branch `security-loop` in both repositories. Nothing was merged.
+17 and 18 November 2026. Branch `security-loop` in both repositories. Nothing was merged.
 
 ## 1. In five lines
 
-- **Four rounds were run, not five. The run hit its usage limit after round 4, so round 5 never started.**
-- **The loop did not reach a clean round.** Round 4 still found two HIGH problems. They are fixed, but no fresh reviewer has looked since.
+- **All five rounds were run. The fifth found nothing at MEDIUM or above**, only one LOW, which is fixed.
 - Nothing known to be CRITICAL is left open in the code. Two things that could be critical need GitHub settings or a design choice (section 4).
-- 21 findings at MEDIUM or above were reproduced. 16 are fixed, 3 are partly fixed, 2 need a design decision.
+- 21 findings at MEDIUM or above were reproduced across rounds 1 to 4. 15 are fixed, 5 are partly fixed, 1 needs a design decision.
 - Every fix has a test that fails on the old code. All 12 test steps pass on the final commits.
+- One clean round by an AI reviewer is not an outside review. Rounds 2, 3 and 4 each found serious problems the round before had missed.
 
 ## 2. Each round
 
@@ -57,9 +57,17 @@ Low, fixed: the two lock-script builders disagreed on edge cases; posted text co
 | Junk commitments used up the questions a completed payment needs. | MEDIUM | Fixed |
 | The fund's pages wrote file text into the page as HTML. | MEDIUM | Fixed |
 
-### Round 5
+### Round 5: crowdlock `7935bbc`, the-kop-fund `9dca6bb`
 
-Not run.
+Run on 18 November, after the run was resumed. Reviewed at crowdlock `437afc0`, the-kop-fund `04ee41c`.
+
+**Nothing at MEDIUM or above.** The reviewer said so plainly.
+
+| Finding | Severity | Result |
+| --- | --- | --- |
+| The register's lock builder made a "lock" from a key that is not a key (65 bytes, say), and the app's commitment checker accepted it where the reference checker refused. Nothing could reach it: the register and the pile check a key's shape first. | LOW | Fixed |
+
+Reproduced with the reviewer's script, then fixed in both lock builders, with tests.
 
 ## 3. Files changed
 
@@ -84,7 +92,7 @@ Not run.
 - `commit/index.html`, `join/index.html`, `register/index.html`
 - `js/crowdlock.mjs`, `inbox.mjs`, `lockrecord.mjs`, `proposals.mjs`, `release.mjs`
 - `js/vendor/crowdlock-ledger-web.bundle.js` and its `.sha256`
-- `relay/inbox.mjs`, `signed.mjs`, `VERSION` (now `2026-11-17k`)
+- `relay/inbox.mjs`, `signed.mjs`, `VERSION` (now `2026-11-17l`)
 - `spec/lock-format.md`
 
 ## 4. Needs James
@@ -111,12 +119,13 @@ These are design decisions or GitHub settings. I did not make them.
 - **One existing app test is sensitive to timing on this PC.** It failed in one run of three with no change to the code it covers. I did not alter it.
 - **Three test fixtures were changed, none weakened.** One used a height-dated lock, which is now refused. Two left a 2% fee, more than a real commitment may.
 - **The fund's `spec/` folder was already out of step** with the method's in five files before I started. I carried across `lock-format.md` only.
+- **Round 5's reviewer did not run the private-chain settlement end to end,** and did not check the website's bundle byte for byte. It read the code and the tests.
 - **Not looked at by any reviewer:** the Ledger device code, the taproot variant, the founder flows, the anchor scripts in depth, and GitHub's own settings.
 - **Listed as known limits in `REVIEWING.md`, not fixed:** a signature re-posted as a second member; twenty junk commitments hiding a member's own from phones for a few minutes; five commitments per lock; locks dated from 2038.
 
 ## 6. Final test results
 
-Run on crowdlock `d9b3d83` and the-kop-fund `04ee41c`.
+Run on crowdlock `7935bbc` and the-kop-fund `9dca6bb`, the round 5 commits. (The report itself was committed after them.)
 
 | Step | Result |
 | --- | --- |
