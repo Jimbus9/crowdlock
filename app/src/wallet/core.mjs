@@ -42,7 +42,7 @@ import { messageHash, verifyMembership, memberAddressForOwnerKey, canonicalAddre
 // register's own browser-safe code (held to the reference code by its tests).
 import { lockScript as lockScriptOf, lockAddress as lockAddressOf, lockLine } from "../../../method/js/lockrecord.mjs";
 import { destinationIsPermitted, attestorsOf, stampsFor, SETTLE_MARGIN } from "../../../method/js/proposals.mjs";
-import { isCosignerOf, homeLine, checkHome } from "../../../method/js/crowdlock.mjs";
+import { isCosignerOf, homeLine, homeSignatureChecks } from "../../../method/js/crowdlock.mjs";
 
 /** Networks the wallet knows, and the coin type each uses in its key path. */
 export const NETWORKS = {
@@ -1022,27 +1022,25 @@ export function signNoticeWith({ words, crowdlock, statement, network }) {
 }
 
 /**
- * Where this Crowdlock lives, signed with the co-signer key these words make:
- * the `home` its file carries (method/js/crowdlock.mjs, checkHome). `url` is
- * the link to the Crowdlock's file, exactly as people open it.
+ * One co-signer key's signature saying where this Crowdlock lives: the key
+ * these words make, over homeLine. Returns { key, signature }; the file's
+ * `home.signatures` needs one from every co-signer key (method/js/crowdlock.mjs,
+ * checkHome). `url` is the link to the Crowdlock's file, exactly as people open it.
  */
-export function signHomeWith({ words, crowdlock, url, network }) {
+export function signHomeWith({ words, crowdlock, url }) {
   const tidy = tidyWords(words);
   if (!wordsAreValid(tidy)) throw new Error("those are not valid backup words — check the spelling and the order");
   if (!/^https:\/\/[^\s]+$/.test(String(url))) throw new Error("the Crowdlock's link must start with https://");
   const node = BIP32.fromSeed(mnemonicToSeedSync(tidy), networks.bitcoin).derivePath(COSIGNER_PATH);
-  const pub = toHex(node.publicKey);
-  if (!(crowdlock.cosigner_keys ?? []).includes(pub)) throw new Error("these words don't make one of this Crowdlock's co-signer keys");
-  const net = typeof network === "string" ? NETWORKS[network].network : (network.network ?? network);
-  const line = homeLine(url, crowdlock.declaration.sha256);
+  const key = toHex(node.publicKey);
+  const line = homeLine(crowdlock.network, url, crowdlock.declaration.sha256);
   const { signature, recoveryId } = ecc.signRecoverable(messageHash(line), node.privateKey);
   const out = new Uint8Array(65);
   out[0] = 39 + recoveryId; // a native segwit address's signature
   out.set(signature, 1);
-  const home = { url, key: pub, signature: toBase64(out) };
-  const check = checkHome({ ...crowdlock, home });
-  if (!check.ok) throw new Error(`the signature did not check — refusing (${check.problems[0]})`);
-  return home;
+  const sig = toBase64(out);
+  if (!homeSignatureChecks(crowdlock, url, key, sig)) throw new Error("the signature did not check — refusing");
+  return { key, signature: sig };
 }
 
 /** The coin a commitment spends, as "txid:vout", or null if it won't read. */
@@ -1220,7 +1218,13 @@ export function signStatement(account, statement) {
 export function lockRecordFor(account, crowdlock, { address, cosigner_pubkey, locktime }) {
   const record = { type: "lock", owner_pubkey: account.publicKey, cosigner_pubkey, locktime, address };
   if (account.kind === "ledger") return record;
-  return { ...record, owner_signature: signStatement(account, lockLine(crowdlock.declaration.sha256, record)) };
+  // Never throws. Given the wallet as the screens hold it, which can't sign
+  // until it is unlocked, the record simply goes unsigned: it is still taken,
+  // only not ahead of others. Until 18 November 2026 this threw after the
+  // money had been locked, so the lock never reached the register (OpenAI
+  // review 7). Pass the unlocked account to have it signed.
+  try { return { ...record, owner_signature: signStatement(account, lockLine(crowdlock.declaration.sha256, record)) }; }
+  catch { return record; }
 }
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@
 // are relative to <site>/ — that is how this project's own files are laid out.
 // A file published anywhere else has its paths read relative to its own folder.
 
-import { checkCrowdlock, checkRegisterFiles, membershipStatement, versionsOf, currentVersion, signedVersions, hasSigned } from "../../method/js/crowdlock.mjs";
+import { checkCrowdlock, checkHome, checkRegisterFiles, membershipStatement, versionsOf, currentVersion, signedVersions, hasSigned } from "../../method/js/crowdlock.mjs";
 import { proposalVersion, stampsFor, destinationHash, relayOnlyCommitments as relayOnly, RELAY_ONLY_PER_LOCK } from "../../method/js/proposals.mjs";
 import { checkProposals } from "../../method/js/proposals.mjs";
 import { esploraChain, EXPLORERS, BACKUP_EXPLORERS } from "./wallet/esplora.mjs";
@@ -92,9 +92,15 @@ async function getLimited(fetchImpl, u, maxChars, limitMs = LOAD_LIMIT_MS) {
  * @returns {Promise<{ ok: true, url: string, crowdlock: any, declarationText: string, versions: any[], statement: string, register: any, destinations: any, proposals: any[], proposalProblems: string[] }
  *                 | { ok: false, url: string, problems: string[] }>}
  */
+/** The Crowdlocks this app ships with: declaration fingerprint → the one link each lives at. */
+export const PINNED = {
+  "3a0a0bca96ec2161d98ff9da05ae885d6b8d68e55ed412bc85dcc7fb16209b96": "https://thekopfund.org/crowdlocks/kop-fund.json",
+  "29f943a5bf2c110200cb33d0299b00960b19f10f1942d14699aec154b39316df": "https://crowdlock.org/crowdlocks/kop-fund-testnet4.json",
+};
+
 /** Are two links the same file? Host case and a trailing slash aside. */
 function sameLink(a, b) {
-  const norm = (u) => { try { const x = new URL(String(u)); return `${x.protocol}//${x.host.toLowerCase()}${x.pathname.replace(/\/+$/, "")}${x.search}`; } catch { return null; } };
+  const norm = (u) => { try { const x = new URL(String(u)); return `${x.protocol}//${x.host.toLowerCase()}${x.pathname}${x.search}`; } catch { return null; } };
   const na = norm(a), nb = norm(b);
   return na !== null && nb !== null && na === nb;
 }
@@ -116,6 +122,26 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs
       : `could not load the Crowdlock file: ${e.message}`);
   }
 
+  // Where it lives. The Crowdlocks this app ships with are pinned: their
+  // declaration's fingerprint is tied here to the one link they live at, so a
+  // copy of one, whatever its file says and whoever its co-signer, opens the
+  // real one instead (OpenAI review 7: a copy could otherwise bring its own
+  // co-signer and sign its own address). Any other Crowdlock that says where
+  // it lives, signed by every one of its co-signer keys (checkHome), is
+  // opened from there. Either way the phone goes to the real one, once.
+  // Decided before anything else of the file is fetched, so a copy missing
+  // its other files still leads to the real one.
+  const pinned = PINNED[crowdlock?.declaration?.sha256];
+  const lives = pinned ?? (crowdlock?.home && checkHome(crowdlock).ok ? crowdlock.home.url : null);
+  if (lives && sameLink(lives, fileUrl) === false) {
+    if (cameFrom) return fail(`it says it lives at ${lives}, but opening that gave a file that says otherwise`);
+    const real = await loadCrowdlock(lives, fetchImpl, { limitMs, cameFrom: fileUrl });
+    // Only the same Crowdlock: the same declaration, at the place it names.
+    if (real.ok && real.crowdlock?.declaration?.sha256 !== crowdlock.declaration?.sha256) {
+      return fail(`it says it lives at ${lives}, but the Crowdlock there is a different one`);
+    }
+    return real.ok ? { ...real, cameFrom: fileUrl } : fail(`This is a copy of a Crowdlock that lives at ${lives}, and that one couldn't be opened: ${real.problems?.[0] ?? "it didn't load"}`);
+  }
   const base = baseFor(fileUrl);
   let declarationText;
   try { declarationText = await getText(resolvePath(crowdlock?.declaration?.file, base)); }
@@ -137,19 +163,7 @@ export async function loadCrowdlock(url, fetchImpl = globalThis.fetch, { limitMs
   if (fileCheck.ok) { const xc = checkCosignerXpubs(crowdlock); if (!xc.ok) return fail(...xc.problems); }
   if (!fileCheck.ok) return fail(...fileCheck.problems);
 
-  // A Crowdlock that says where it lives (method/js/crowdlock.mjs, checkHome)
-  // is opened from there. Found anywhere else, it is a copy, or the same file
-  // served at a second address: either way the phone goes to the real one,
-  // once, and opens that instead.
-  if (crowdlock.home && sameLink(crowdlock.home.url, fileUrl) === false) {
-    if (cameFrom) return fail(`it says it lives at ${crowdlock.home.url}, but opening that gave a file that says otherwise`);
-    const real = await loadCrowdlock(crowdlock.home.url, fetchImpl, { limitMs, cameFrom: fileUrl });
-    // Only the same Crowdlock: the same declaration, at the place it names.
-    if (real.ok && real.crowdlock?.declaration?.sha256 !== crowdlock.declaration?.sha256) {
-      return fail(`it says it lives at ${crowdlock.home.url}, but the Crowdlock there is a different one`);
-    }
-    return real.ok ? { ...real, cameFrom: fileUrl } : fail(`This is a copy of a Crowdlock that lives at ${crowdlock.home.url}, and that one couldn't be opened: ${real.problems?.[0] ?? "it didn't load"}`);
-  }
+
 
   let registrations, destinations;
   try {

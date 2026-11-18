@@ -275,11 +275,14 @@ export function LockFlow({ words, url, go }: { words: string; url: string; go: G
     try {
       const lock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(c.crowdlock, cosigner!) };
       const feeRate = await chain.feeRate(whileOpen.feeSpeed);
-      const tx = await buildLock({ account: await signingAccount(account), chain, lock, feeRate, amount: chosen.amount });
+      const signer = await signingAccount(account);
+      const tx = await buildLock({ account: signer, chain, lock, feeRate, amount: chosen.amount });
+      // Signed now, with the same unlocked wallet, before any money moves.
+      const record = lockRecordFor(signer, c.crowdlock, { cosigner_pubkey: cosigner!, locktime, address: lock.address });
       // The terms are saved before the money moves, and checked saved.
       await saveLock({ crowdlock: c.url, address: lock.address, locktime, cosignerPubkey: cosigner!, cosignerXpub: lock.cosignerXpub ?? undefined, name: c.crowdlock.name });
       await chain.broadcast(tx.hex);
-      if (viaRelays) await postToRelays(c.crowdlock, lockRecordFor(account, c.crowdlock, { cosigner_pubkey: cosigner!, locktime, address: lock.address })).catch(() => {});
+      if (viaRelays) await postToRelays(c.crowdlock, record).catch(() => {});
       whileOpen.overview = null;   // Home reads afresh
       setDone({ sent: tx.sent, fee: tx.fee, locktime });
       setPage(4);
@@ -543,14 +546,16 @@ export function HomeFlow({ words, url, address, again, go }: { words: string; ur
     setBusy(true); setError(null);
     try {
       const newLock = { ...lockFor({ account, cosignerPubkey: cosigner, locktime }), cosignerXpub: xpubForKey(cl, cosigner!) };
+      const signer = await signingAccount(account);
+      const record = lockRecordFor(signer, cl, { cosigner_pubkey: cosigner!, locktime, address: newLock.address });
       const tx = await relock({
-        account: await signingAccount(account), chain, lock: oldLock, newLock, addWaiting: extra > 0n,
+        account: signer, chain, lock: oldLock, newLock, addWaiting: extra > 0n,
         feeRate: await chain.feeRate(whileOpen.feeSpeed), medianTime: await chain.medianTime(),
       });
       // The new terms are saved before the money moves.
       await saveLock({ crowdlock: c.url, address: newLock.address, locktime, cosignerPubkey: cosigner!, cosignerXpub: newLock.cosignerXpub ?? undefined, name });
       await chain.broadcast(tx.hex);
-      if (viaRelays) await postToRelays(cl, lockRecordFor(account, cl, { cosigner_pubkey: cosigner!, locktime, address: newLock.address })).catch(() => {});
+      if (viaRelays) await postToRelays(cl, record).catch(() => {});
       whileOpen.overview = null;
       setDone(`Locked ${btc(tx.sent)} again for ${name} until ${when(locktime)}. The network fee was ${btc(tx.fee)}. Once it confirms it goes on the register by itself.`);
       setPage("done");

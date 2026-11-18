@@ -17,6 +17,8 @@ check("Changing a lock's date is caught", shrinkage(v1, { members: [m1], locks: 
 check("Adding a lock anywhere but the end is caught", shrinkage(v1, { members: [m1], locks: [l2, l1] }).length > 0);
 check("Removing a member is caught", shrinkage({ members: [m1, m2], locks: [] }, { members: [m2], locks: [] }).length > 0);
 check("Changing a member's signature is caught", shrinkage(v1, { members: [{ ...m1, signature: "other" }], locks: [l1] }).length > 0);
+check("A member signing a version in between, which moves a later signature along, is growth",
+  shrinkage({ members: [{ ...m1, also_signed: [{ version: 3, signature: "c" }] }], locks: [] }, { members: [{ ...m1, also_signed: [{ version: 2, signature: "b" }, { version: 3, signature: "c" }] }], locks: [] }).length === 0);
 check("Removing a later signature is caught",
   shrinkage({ members: [{ ...m1, also_signed: [{ version: 2 }] }], locks: [] }, { members: [m1], locks: [] }).length > 0);
 check("A history that only grew has no problems", historyProblems([{ members: [], locks: [] }, v1, { members: [m1, m2], locks: [l1, l2] }]).length === 0);

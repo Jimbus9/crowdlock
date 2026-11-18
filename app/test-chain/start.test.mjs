@@ -117,6 +117,12 @@ check("The founder's own signature joins their new Crowdlock as member 1", appli
   const p = prepareLock(record, { crowdlock: t, register: applied.register, now: 1800000000 });
   check("A lock the phone posts is signed by its owner, and the inbox takes it as signed", p.ok && p.signed === true, p.reason);
   const ledgerRecord = lockRecordFor({ ...member, kind: "ledger" }, t, { cosigner_pubkey: cosigner, locktime, address });
+  // The wallet as the screens hold it: public only, its signer throws until unlocked.
+  const watching = { ...member, signer: () => { throw new Error("the wallet has to be unlocked before it can sign"); } };
+  let threw = null, watched = null;
+  try { watched = lockRecordFor(watching, t, { cosigner_pubkey: cosigner, locktime, address }); } catch (e) { threw = e; }
+  check("Given the locked wallet the screens hold, the record goes unsigned rather than failing after the money moved",
+    !threw && watched && !("owner_signature" in watched) && prepareLock(watched, { crowdlock: t, register: applied.register, now: 1800000000 }).ok, threw?.message ?? "");
   check("…a Ledger's goes unsigned, and is still taken", !("owner_signature" in ledgerRecord) && prepareLock(ledgerRecord, { crowdlock: t, register: applied.register, now: 1800000000 }).ok);
 }
 

@@ -21,7 +21,7 @@ const REPO = join(APP, "..");
 // Crowdlock's site publishes its version in relay/VERSION; the app offers its
 // founder and maintainers an update when theirs is older. Add a line here
 // whenever the template changes, newest last.
-export const TEMPLATE_VERSION = "2026-11-18f";
+export const TEMPLATE_VERSION = "2026-11-18g";
 export const CHANGES = [
   { version: "2026-10-31", change: "Collects registrations and locks from the relays every two minutes, and keeps itself running" },
   { version: "2026-11-01", change: "Announces the Crowdlock weekly so people can find it, and replaces a relay that has been silent for 7 days" },
@@ -56,6 +56,7 @@ export const CHANGES = [
   { version: "2026-11-18d", change: "A proposal's target must be what it requires at the rate it states: the rate reads exactly \"1 BTC = <price> <currency>\", and the sats must match within 1%. Check your proposals file: one that doesn't match is now refused" },
   { version: "2026-11-18e", change: "A lock record can carry its owner's signature. The phone signs every lock it posts, and your inbox looks at signed locks before unsigned ones naming the same member, so a flood of fake records can't hold a member's real lock up. Unsigned locks are still taken" },
   { version: "2026-11-18f", change: "Your Crowdlock can say where it lives, signed by one of its co-signer keys. Then a copy of its file put up anywhere else sends people to the real one. Sign it from the app: Look after this Crowdlock, then Where it lives" },
+  { version: "2026-11-18g", change: "Fixes from the seventh outside review. Where your Crowdlock lives must now be signed by every one of its co-signer keys, over its network too: a home signed the earlier way no longer checks, so sign it again from the app. A target at a price of zero or a price too long to be a number is refused. And a member signing a declaration version in between no longer trips the register-history check" },
 ];
 
 const FROM_REPO = [

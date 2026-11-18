@@ -57,6 +57,8 @@ check("A target without its rate and moment is refused",
   check("A target matching what the proposal requires at its stated rate is accepted", withTarget({}).ok, withTarget({}).problems?.[0]);
   check("A target cut to a tenth, at the same stated rate, is refused", /not what it requires/.test(withTarget({ sats: Math.round(p.target.sats / 10) }).problems?.[0] ?? ""));
   check("A target in another currency's rate is refused", /must read/.test(withTarget({ rate: "1 BTC = 66000.00 USD" }).problems?.[0] ?? ""));
+  check("A rate of zero is refused, though it made any target \"match\"", /real, positive price/.test(withTarget({ sats: 1, rate: "1 BTC = 0 GBP" }).problems?.[0] ?? ""));
+  check("…and so is one too long to be a number", /real, positive price/.test(withTarget({ sats: 1, rate: "1 BTC = " + "9".repeat(310) + " GBP" }).problems?.[0] ?? ""));
   check("A rate in words the reader can't check is refused", /must read/.test(withTarget({ rate: "about 66k" }).problems?.[0] ?? ""));
   check("Sats are worked out from minor units: pence, whole yen, thousandths",
     targetSats(16500, "GBP", 66000) === 250000 && targetSats(1650, "JPY", 66000) === 2500000 && targetSats(16500, "KWD", 66000) === 25000);

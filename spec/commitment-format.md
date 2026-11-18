@@ -179,7 +179,10 @@ the pile checkable.
 ### The fee sanity check
 
 Fee is the input value minus the sum of the outputs. A verifier **must** reject a
-commitment whose fee exceeds **one per cent** of the committed amount.
+commitment whose fee exceeds the Crowdlock's `max_commitment_fee` of the
+committed amount, and never more than **five per cent**, whatever the file says
+(The Kop Fund sets two per cent). Until 18 November 2026 this said a flat one
+per cent.
 
 This is not about economy. It is to stop a bug in somebody's client, or a
 mistyped figure, destroying a supporter's money as miner fee — an error nobody

@@ -178,9 +178,12 @@ export function Proposals({ c, account, onOpen, onAll, all = false }: { c: Extra
 /** The one line under a proposal's title: its phase, or that it has been paid, or declared dead. */
 function ProposalStatus({ c, p, account }: { c: Extract<Loaded, { ok: true }>; p: any; account: any }) {
   const [paid, setPaid] = useState<number | null>(null);
+  const [moved, setMoved] = useState(0);
   const [dead, setDead] = useState(false);
-  useEffect(() => { readPile(c, p, account).then((x) => { setPaid(x.paid); setDead(!!x.notice); }).catch(() => setPaid(null)); }, [c, p]);
+  useEffect(() => { readPile(c, p, account).then((x) => { setPaid(x.paid); setMoved(x.paid + x.sent); setDead(!!x.notice); }).catch(() => setPaid(null)); }, [c, p]);
   if (paid !== null && paid >= p.target.sats) return <Text style={s.good}>Funded and paid · {btc(BigInt(paid))} sent to the seller · closed</Text>;
+  // Money that moved after the co-signer declared it dead is a broken promise, and says so (OpenAI review 7a).
+  if (dead && moved > 0) return <Text style={s.error}>Declared dead, yet {btc(BigInt(moved))} of its commitments has been sent · the co-signer broke its notice</Text>;
   if (dead) return <Text style={s.note}>Declared dead · didn't reach its target · closed · nothing will move</Text>;
   return <Text style={s.note}>{PHASE_TEXT[phaseOf(p)]} · needs {money(p.requires, p.currency)} · target about {shortBtc(p.target.sats)}{paid ? ` · ${btc(BigInt(paid))} paid so far` : ""}</Text>;
 }
@@ -206,7 +209,10 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
       <Text style={s.note}>Gathers from {atUtc(p.opens)} to {atUtc(p.closes)}. Settles by {atUtc(p.settles_by)}.</Text>
       <Text style={s.label}>Committed so far</Text>
       {err ? <Text style={s.error}>{err}</Text> : !pile ? <ActivityIndicator /> : <>
-        {dead ? <>
+        {dead && pile.paid + pile.sent > 0 ? <>
+          <Text style={s.error}>{`Declared dead by the co-signer${pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}, yet ${btc(BigInt(pile.paid + pile.sent))} of its commitments has been sent to the seller (${pile.paidCount} paid${pile.sentCount ? `, ${pile.sentCount} waiting for a block` : ""}). The co-signer said it would complete none of them: this breaks that notice. Any commitment not yet sent stays locked and comes home on its date.`}</Text>
+          <Text style={s.note}>The notice is signed by the co-signer's key, and the payments are read from the chain, both on this phone. Together they are the evidence.</Text>
+        </> : dead ? <>
           <Text style={s.error}>{pile.noticeContradicted
             ? `Declared dead by the co-signer${pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}, although the commitments checked on this phone add up to its target. The co-signer has said it will complete none of them. Your money stays locked and comes home on its date as usual.`
             : `Declared dead by the co-signer${pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}: it didn't reach its target, and none of its commitments will be completed. Your money stays locked and comes home on its date as usual.`}</Text>

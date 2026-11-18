@@ -624,7 +624,7 @@ function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: t
     <View>
       <NavRow title="Update it" sub={status === "behind" ? "An update is available" : status === "current" ? "Its inbox is up to date" : "Keep its inbox on the newest code"} state={status === "behind" ? { text: "Update available", good: false } : undefined} onPress={() => setJob("update")} />
       <NavRow title="Co-signer keys" sub="The keys that can add the second signature to a purchase" onPress={() => setJob("keys")} />
-      <NavRow title="Where it lives" sub={c.crowdlock.home ? "Signed by its co-signer" : "Not yet signed: a copy elsewhere would look the same"} onPress={() => setJob("home")} />
+      <NavRow title="Where it lives" sub={c.crowdlock.home ? "Signed by its co-signer keys" : "Not yet signed: a copy elsewhere would look the same"} onPress={() => setJob("home")} />
       {here && <NavRow title="Destinations" sub="The addresses a proposal is allowed to pay" onPress={() => setJob("destinations")} />}
       {here && <NavRow title="Write a proposal" sub="Put a purchase to the members" onPress={() => setJob("proposal")} />}
       <NavRow title="Maintainers" sub="Other people who can help run it" onPress={() => setJob("maintainers")} />
@@ -671,6 +671,7 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [newKeyWords, setNewKeyWords] = useState("");
   // A pasted xpub stands for its first key, and is published beside it.
   const pastedXpub = keyFromXpub(key) ? key.trim() : null;
   const k: string = (pastedXpub ? keyFromXpub(pastedXpub) : key.trim().toLowerCase()) ?? "";
@@ -687,7 +688,15 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     try {
       await withSignIn(async (token) => {
         if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can change it, and the GitHub account you signed in with isn't one of them.");
-        await addCosignerKey({ token, owner, repo, path, key: k, xpub: pastedXpub as any, check: checkWithNewKey });
+        // A Crowdlock that says where it lives needs the new key to sign that too.
+        let homeSignature: string | null = null;
+        if (c.crowdlock.home && !has) {
+          const signed = signHomeWith({ words: newKeyWords, crowdlock: c.crowdlock, url: c.crowdlock.home.url });
+          setNewKeyWords("");
+          if (signed.key !== k) throw new Error("Those words don't make the key you pasted, so it can't sign where this Crowdlock lives.");
+          homeSignature = signed.signature;
+        }
+        await addCosignerKey({ token, owner, repo, path, key: k, xpub: pastedXpub as any, homeSignature: homeSignature as any, check: checkWithNewKey });
         // You made this change, so this phone needn't warn you about it —
         // but the website hasn't caught up yet, so it's expected, not seen.
         await saveExpectedKeys(c.url, [...(await loadExpectedKeys(c.url)), k]).catch(() => {});
@@ -711,49 +720,69 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     {!!pastedXpub && <Text style={s.note}>That xpub stands for {k.slice(0, 10)}…{k.slice(-8)}.{has ? " This Crowdlock already has that key, so only the xpub will be added." : ""}</Text>}
     {keys.length > 0 && keys.some((x) => !xpubForKey(c.crowdlock, x)) && <Text style={s.note}>Members with a hardware wallet can only lock with a key whose xpub is published. To add one for a key already here, paste its xpub.</Text>}
     {problem && <Text style={s.error}>{problem}</Text>}
+    {!!c.crowdlock.home && !!k && !has && <>
+      <Text style={s.note}>This Crowdlock says where it lives, and every co-signer key must sign that. Type the new key's words so it can sign too. They are used once and not saved or sent.</Text>
+      <WordsInput value={newKeyWords} onChange={setNewKeyWords} placeholder="The new co-signer key's 12 words" />
+    </>}
     {!path && <Text style={s.error}>Can't tell where this Crowdlock's file sits in its repository.</Text>}
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-    <Btn label={busy ? "Adding…" : "Add this co-signer key"} disabled={busy || !k || !!problem || !path} onPress={add} />
+    <Btn label={busy ? "Adding…" : "Add this co-signer key"} disabled={busy || !k || !!problem || !path || (!!c.crowdlock.home && !has && !newKeyWords.trim())} onPress={add} />
   </>;
 }
 
-// Where it lives: one of its co-signer keys signs the link to its file, so a
-// copy put up anywhere else sends people here (method/js/crowdlock.mjs).
+// Where it lives: every one of its co-signer keys signs the link to its file,
+// so a copy put up anywhere else sends people here (method/js/crowdlock.mjs).
 function Home({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; owner: string; repo: string; onChange: () => void }) {
   const { withSignIn, codeView } = useGitHub();
+  const keys: string[] = (c.crowdlock.cosigner_keys ?? []).map((k: string) => k.toLowerCase());
+  const home = c.crowdlock.home;
+  // Signatures already published for this same link carry over.
+  const [sigs, setSigs] = useState<Record<string, string>>(() => (home && home.url === c.url ? { ...(home.signatures ?? {}) } : {}));
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const keys: string[] = c.crowdlock.cosigner_keys ?? [];
-  const home = c.crowdlock.home;
   const path = pathInRepo(c.url);
-  const go = async () => {
+  const missing = keys.filter((k) => !sigs[k]);
+  const short = (k: string) => `${k.slice(0, 10)}…${k.slice(-8)}`;
+  const addSig = () => {
+    setMsg(null);
+    try {
+      // Signed on this phone; the words are not kept or sent.
+      const { key, signature } = signHomeWith({ words, crowdlock: c.crowdlock, url: c.url });
+      setWords("");
+      if (!keys.includes(key)) { setMsg({ ok: false, text: "Those words make a key that isn't one of this Crowdlock's co-signer keys." }); return; }
+      setSigs((x) => ({ ...x, [key]: signature }));
+      setMsg({ ok: true, text: `Signed with ${short(key)}.` });
+    } catch (e: any) { setWords(""); setMsg({ ok: false, text: String(e.message ?? e) }); }
+  };
+  const publish = async () => {
     setBusy(true); setMsg(null);
     try {
-      // Signed first, on this phone, before anything is sent anywhere.
-      const signed = signHomeWith({ words, crowdlock: c.crowdlock, url: c.url, network: c.crowdlock.network });
-      setWords("");
       await withSignIn(async (token) => {
         if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can change it, and the GitHub account you signed in with isn't one of them.");
-        await setHome({ token, owner, repo, path, home: signed, check: checkWithNewKey });
-        setMsg({ ok: true, text: `Signed and published: it lives at ${c.url}. Its website updates in a minute or two.` });
+        await setHome({ token, owner, repo, path, home: { url: c.url, signatures: Object.fromEntries(keys.map((k) => [k, sigs[k]])) }, check: checkWithNewKey });
+        setMsg({ ok: true, text: `Published: it lives at ${c.url}. Its website updates in a minute or two.` });
         setTimeout(onChange, 90000);
       });
-    } catch (e: any) { setWords(""); setMsg({ ok: false, text: String(e.message ?? e) }); }
+    } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
     setBusy(false);
   };
   return <>
     <Text style={s.label}>Where it lives</Text>
     {home
-      ? <Text style={s.good}>It lives at {home.url}, signed by co-signer key {String(home.key).slice(0, 10)}…{String(home.key).slice(-8)}. A copy put up anywhere else sends people here.</Text>
+      ? <Text style={s.good}>It lives at {home.url}, signed by all {keys.length} of its co-signer keys. A copy put up anywhere else sends people here.</Text>
       : <Text style={s.note}>It doesn't say where it lives yet. Anyone could put a copy of its file up at another address, and it would show this Crowdlock's locks under its own name.</Text>}
-    <Text style={s.note}>To {home ? "sign it again" : "fix that"}, type the words of one of its co-signer keys{keys.length > 1 ? " (the newest is best)" : ""}. They sign this link on this phone and are not saved or sent: {c.url}</Text>
-    <WordsInput value={words} onChange={(t: string) => { setWords(t); setMsg(null); }} placeholder="The co-signer key's 12 words" />
+    <Text style={s.note}>Every co-signer key signs this link, one after another, on this phone. The words are used once and not saved or sent: {c.url}</Text>
+    {keys.map((k) => <Text key={k} style={sigs[k] ? s.good : s.note}>{sigs[k] ? "Signed" : "Still to sign"}: {short(k)}</Text>)}
+    {missing.length > 0 && <>
+      <WordsInput value={words} onChange={(t: string) => { setWords(t); setMsg(null); }} placeholder="The words of one of the keys still to sign" />
+      <Btn label="Sign with these words" kind="second" disabled={!words.trim()} onPress={addSig} />
+    </>}
     {!path && <Text style={s.error}>Can't tell where this Crowdlock's file sits in its repository.</Text>}
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-    <Btn label={busy ? "Signing…" : "Sign where it lives, and publish"} disabled={busy || !words.trim() || !path} onPress={go} />
+    <Btn label={busy ? "Publishing…" : missing.length ? `Publish (${missing.length} key${missing.length === 1 ? "" : "s"} still to sign)` : "Publish where it lives"} disabled={busy || missing.length > 0 || !path} onPress={publish} />
   </>;
 }
 

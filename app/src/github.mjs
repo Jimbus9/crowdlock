@@ -218,7 +218,7 @@ export async function setHome({ token, owner, repo, path, home, check }, fetchIm
   return { sha };
 }
 
-export async function addCosignerKey({ token, owner, repo, path, key, xpub = null, check }, fetchImpl = globalThis.fetch) {
+export async function addCosignerKey({ token, owner, repo, path, key, xpub = null, homeSignature = null, check }, fetchImpl = globalThis.fetch) {
   const gh = client(token, fetchImpl);
   const got = await gh("GET", `/repos/${owner}/${repo}/contents/${path}`);
   const c = JSON.parse(Buffer.from(String(got.content).replace(/\s/g, ""), "base64").toString("utf8"));
@@ -236,7 +236,10 @@ export async function addCosignerKey({ token, owner, repo, path, key, xpub = nul
   const next = {};
   for (const [name, v] of Object.entries(c)) {
     if (name === "cosigner_xpubs") continue;
-    next[name] = name === "cosigner_keys" ? newKeys : v;
+    next[name] = name === "cosigner_keys" ? newKeys
+      // A Crowdlock that says where it lives needs every co-signer key to have signed that, the new one too.
+      : name === "home" && homeSignature && v && typeof v === "object" ? { ...v, signatures: { ...(v.signatures ?? {}), [k]: homeSignature } }
+      : v;
     if (name === "cosigner_keys" && newXpubs.length) next.cosigner_xpubs = newXpubs;
   }
   const r = check ? check(next) : { ok: true };

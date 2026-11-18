@@ -12,7 +12,7 @@ import { DEFAULT_RELAYS } from "../start.mjs";
 // @ts-ignore — plain module shared with the chain tests
 import {
   STARTING_LIST, loadCrowdlock, membershipOf, committedTotal, COUNTING_RULE_URL, poundsPerBtc, shortBtc, locksOnRegister, submitLock, newestCosigner, keyChanges,
-  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges, rulesKept, locksSeen, markCopies,
+  historyLinkFor, coSignerRecord, openLinkFor, shareLinkFor, rankFound, matchesSearch, repoFromFileUrl, newVersionToSign, versionSignedBy, rulesOf, rulesChanges, rulesKept, locksSeen, markCopies, PINNED,
 } from "../crowdlocks.mjs";
 // @ts-ignore — plain module
 import { TEST_APP_URL } from "../build.mjs";
@@ -160,7 +160,8 @@ export function CrowdlockScreen({ words, url, go }: { words: string; url: string
       <Text style={s.h1}>{c.crowdlock.name}</Text>
       {c.crowdlock.about && <Text style={s.p}>{c.crowdlock.about}</Text>}
       {c.crowdlock.home
-        ? <Text style={s.note}>Lives at {hostOf(c.crowdlock.home.url)}, signed by its co-signer.{(c as any).cameFrom ? ` You opened a copy at ${hostOf((c as any).cameFrom)}; this is the real one.` : ""}</Text>
+        ? <Text style={s.note}>Lives at {hostOf(c.crowdlock.home.url)}, signed by its co-signer keys.{(c as any).cameFrom ? ` You opened a copy at ${hostOf((c as any).cameFrom)}; this is the real one.` : ""}</Text>
+        : (PINNED as Record<string, string>)[c.crowdlock.declaration?.sha256] ? <Text style={s.note}>Lives at {hostOf((PINNED as Record<string, string>)[c.crowdlock.declaration.sha256])}, as this app knows.{(c as any).cameFrom ? ` You opened a copy at ${hostOf((c as any).cameFrom)}; this is the real one.` : ""}</Text>
         : <Text style={s.note}>This Crowdlock hasn't signed where it lives, so a copy of it elsewhere would look the same.</Text>}
       {c.crowdlock.disclaimer && <Text style={s.note}>{c.crowdlock.disclaimer}</Text>}
 

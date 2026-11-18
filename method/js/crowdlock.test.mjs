@@ -175,24 +175,28 @@ check("A lock is recognised by its own Crowdlock", isCosignerOf({ cosigner_keys:
 check("…and not by another", !isCosignerOf({ cosigner_keys: [K("cd")] }, K("ab")));
 
 console.log();
-// Where it lives (Needs James item 4, 18 November 2026).
+// Where it lives (Needs James item 4, reworked after OpenAI review 7): every
+// co-signer key signs network, link and declaration.
 {
   const kop = jsonFix("crowdlocks/kop-fund.json");
-  const priv = utils.randomSecretKey ? utils.randomSecretKey() : utils.randomPrivateKey();
-  const pub = Buffer.from(getPublicKey(priv, true)).toString("hex");
-  const c = { ...kop, cosigner_keys: [...kop.cosigner_keys, pub] };
+  const newKey = () => (utils.randomSecretKey ? utils.randomSecretKey() : utils.randomPrivateKey());
+  const hex = (priv) => Buffer.from(getPublicKey(priv, true)).toString("hex");
+  const a = newKey(), b = newKey(), stranger = newKey();
+  const c = { ...kop, cosigner_keys: [hex(a), hex(b)] };
   const url = "https://thekopfund.org/crowdlocks/kop-fund.json";
-  const sign = async (line, key = priv) => { const g = await signAsync(messageHash(line), key); return Buffer.concat([Buffer.from([39 + g.recovery]), Buffer.from(g.toCompactRawBytes())]).toString("base64"); };
-  const home = { url, key: pub, signature: await sign(homeLine(url, kop.declaration.sha256)) };
-  check("A Crowdlock signed where it lives by one of its co-signer keys passes", checkHome({ ...c, home }).ok, checkHome({ ...c, home }).problems[0] ?? "");
+  const sign = async (key, line) => { const g = await signAsync(messageHash(line), key); return Buffer.concat([Buffer.from([39 + g.recovery]), Buffer.from(g.toCompactRawBytes())]).toString("base64"); };
+  const line = homeLine(c.network, url, kop.declaration.sha256);
+  const home = { url, signatures: { [hex(a)]: await sign(a, line), [hex(b)]: await sign(b, line) } };
+  check("A Crowdlock whose every co-signer key signed where it lives passes", checkHome({ ...c, home }).ok, checkHome({ ...c, home }).problems[0] ?? "");
   check("…and its file still checks out", checkCrowdlock({ ...c, home }, { declarationText: readFix(kop.declaration.file) }).ok);
-  refuses("One signed over another link", checkHome({ ...c, home: { ...home, url: "https://kopfund.example/crowdlocks/kop-fund.json" } }), "doesn't check");
-  refuses("One signed by a key that isn't its co-signer's", checkHome({ ...kop, home }), "one of this Crowdlock's co-signer keys");
-  const other = utils.randomSecretKey ? utils.randomSecretKey() : utils.randomPrivateKey();
-  refuses("One whose signature another key made", checkHome({ ...c, home: { ...home, signature: await sign(homeLine(url, kop.declaration.sha256), other) } }), "doesn't check");
+  refuses("One that only some of its keys signed", checkHome({ ...c, home: { url, signatures: { [hex(b)]: home.signatures[hex(b)] } } }), "every co-signer key must sign");
+  refuses("A copy listing the real key beside its own, signed only by its own",
+    checkHome({ ...c, cosigner_keys: [hex(a), hex(stranger)], home: { url: "https://copy.example/k.json", signatures: { [hex(stranger)]: await sign(stranger, homeLine(c.network, "https://copy.example/k.json", kop.declaration.sha256)) } } }), "every co-signer key must sign");
+  refuses("A signature over another link", checkHome({ ...c, home: { ...home, url: "https://kopfund.example/crowdlocks/kop-fund.json" } }), "doesn't check");
+  refuses("A signature made for another network", checkHome({ ...c, network: "testnet4", home }), "doesn't check");
+  refuses("A signature by a key that isn't a co-signer's", checkHome({ ...c, home: { url, signatures: { ...home.signatures, [hex(stranger)]: await sign(stranger, line) } } }), "not one of this Crowdlock's co-signer keys");
   refuses("A link that isn't https", checkHome({ ...c, home: { ...home, url: "http://thekopfund.org/x.json" } }), "https://");
-  const later = { ...c, cosigner_keys: [...c.cosigner_keys, "02" + "11".repeat(32)], home };
-  check("Adding a co-signer key later leaves it good", checkHome(later).ok);
+  refuses("Adding a key that hasn't signed", checkCrowdlock({ ...c, cosigner_keys: [...c.cosigner_keys, hex(stranger)], home }, { declarationText: readFix(kop.declaration.file) }), "every co-signer key must sign");
 }
 
 rule();
