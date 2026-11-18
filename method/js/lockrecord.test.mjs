@@ -162,6 +162,15 @@ refuses("A Crowdlock that has published no co-signer key yet",
   prepareLock(good, { ...ctx, crowdlock: { ...kop, cosigner_keys: [] } }), "not published a co-signer key");
 refuses("A co-signer key that is not this Crowdlock's",
   prepareLock({ ...good, cosigner_pubkey: STRANGER }, ctx), "not this Crowdlock's");
+refuses("A co-signer key the Crowdlock has since retired",
+  prepareLock(good, { ...ctx, crowdlock: { ...crowdlock, cosigner_keys: [COSIGNER, key(9)] } }), "retired");
+{
+  // …though a lock already naming it still counts, and one naming the newest is taken.
+  const both = { ...crowdlock, cosigner_keys: [COSIGNER, key(9)] };
+  const newest = prepareLock({ ...good, cosigner_pubkey: key(9), address: lockAddress({ ownerPubkey: good.owner_pubkey, cosignerPubkey: key(9), locktime: good.locktime }, hrpFor(crowdlock.network)) }, { ...ctx, crowdlock: both });
+  if (!newest.ok) { console.log("FAIL a lock naming the newest key was refused:", newest.reason); process.exitCode = 1; }
+  if (!lockIsGenuine(p.lock, { crowdlock: both, register: ctx.register }).ok) { console.log("FAIL a lock already naming a retired key stopped counting"); process.exitCode = 1; }
+}
 refuses("Owner and co-signer the same key",
   prepareLock({ ...good, owner_pubkey: COSIGNER }, ctx), "same key");
 refuses("…or a key and its mirror",

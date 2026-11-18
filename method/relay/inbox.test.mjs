@@ -23,7 +23,8 @@ const crowdlock = JSON.parse(readFileSync(joinPath(ROOT, "crowdlocks/kop-fund-te
 const register = JSON.parse(readFileSync(joinPath(ROOT, crowdlock.register.registrations), "utf8"));
 const statement = membershipStatement(crowdlock);
 const fp = crowdlock.declaration.sha256;
-const COSIGNER = crowdlock.cosigner_keys[0];
+// New locks name the newest key (the last); an older one is retired.
+const COSIGNER = crowdlock.cosigner_keys.at(-1);
 const now = Math.floor(Date.now() / 1000);
 const today = new Date().toISOString().slice(0, 10);
 
@@ -95,6 +96,13 @@ wrongCo.address = lockAddress({ ownerPubkey: bob.pub, cosignerPubkey: wrongCo.co
 r = await applyRecords(register, [events[0], post(wrongCo)], { crowdlock, statement, now, today, confirmedSats: chain(50000) });
 check("A lock naming somebody else's co-signer is refused", !r.outcome.find((o) => o.type === "lock").added,
   r.outcome.find((o) => o.type === "lock").reason.slice(0, 40));
+if (crowdlock.cosigner_keys.length > 1) {
+  const retired = { ...lockRec, cosigner_pubkey: crowdlock.cosigner_keys[0] };
+  retired.address = lockAddress({ ownerPubkey: bob.pub, cosignerPubkey: retired.cosigner_pubkey, locktime: T }, "tb");
+  r = await applyRecords(register, [events[0], post(retired)], { crowdlock, statement, now, today, confirmedSats: chain(50000) });
+  const o = r.outcome.find((x) => x.type === "lock");
+  check("A new lock naming a retired co-signer key is refused", !o.added && /retired/.test(o.reason), o.reason);
+}
 const stranger = await newMember();
 const strangerLock = { ...lockRec, owner_pubkey: stranger.pub, address: lockAddress({ ownerPubkey: stranger.pub, cosignerPubkey: COSIGNER, locktime: T }, "tb") };
 r = await applyRecords(register, [post(strangerLock)], { crowdlock, statement, now, today, confirmedSats: chain(50000) });
