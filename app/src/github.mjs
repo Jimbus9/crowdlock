@@ -252,6 +252,39 @@ export async function addCosignerKey({ token, owner, repo, path, key, xpub = nul
   return { sha, keys: next.cosigner_keys, xpubs: next.cosigner_xpubs ?? [] };
 }
 
+/**
+ * Add an attestor key: one of the keys that approve destinations
+ * (spec/destinations-format.md). The Crowdlock file names it in
+ * attestor_keys, and its destinations list repeats the attestors as addresses
+ * (`addressOf(key)`); both take the new rule of a simple majority. Only while
+ * the list holds no entry: a larger majority would need every entry attested
+ * again, and the app doesn't do that. Both files go in one commit.
+ */
+export async function addAttestorKey({ token, owner, repo, path, destinationsPath, key, addressOf, check }, fetchImpl = globalThis.fetch) {
+  const gh = client(token, fetchImpl);
+  const got = await gh("GET", `/repos/${owner}/${repo}/contents/${path}`);
+  const c = JSON.parse(Buffer.from(String(got.content).replace(/\s/g, ""), "base64").toString("utf8"));
+  const list = await readJson(gh, owner, repo, destinationsPath);
+  if (!list) throw new Error("This Crowdlock's destinations list isn't in its repository.");
+  if ((list.entries ?? []).length) throw new Error("Its destinations list already has entries, and adding an attestor would mean attesting every one of them again. The app only adds attestors before the first destination.");
+  const k = String(key).trim().toLowerCase();
+  const keys = Array.isArray(c.attestor_keys) ? c.attestor_keys : [];
+  if (keys.some((x) => x.slice(2) === k.slice(2))) throw new Error("This Crowdlock already has that attestor key.");
+  const newKeys = [...keys, k];
+  const threshold = Math.floor(newKeys.length / 2) + 1;
+  const next = Object.fromEntries(Object.entries(c).map(([name, v]) => [name, name === "attestor_keys" ? newKeys : name === "attestor_threshold" ? threshold : v]));
+  if (!("attestor_keys" in next)) next.attestor_keys = newKeys;
+  next.attestor_threshold = threshold;
+  const r = check ? check(next) : { ok: true };
+  if (!r.ok) throw new Error(`That would break the Crowdlock file: ${r.problems.join("; ")}`);
+  const nextList = { ...list, threshold, attestors: newKeys.map((x) => addressOf(x)) };
+  const sha = await commitFiles(gh, owner, repo, {
+    [path]: JSON.stringify(next, null, 2) + "\n",
+    [destinationsPath]: JSON.stringify(nextList, null, 2) + "\n",
+  }, `Add an attestor key to ${c.name ?? path}\n\nAdded from the Crowdlock app by its founder or a maintainer. It can now approve destinations; a destination needs ${threshold} of its ${newKeys.length} attestor${newKeys.length === 1 ? "" : "s"}.`);
+  return { sha, keys: newKeys, threshold };
+}
+
 // ---------------------------------------------------------------------------
 // Destinations and proposals (milestone 5). Both read the files from the
 // repository itself, not the website (which can lag), add one thing at the

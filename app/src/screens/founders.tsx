@@ -3,7 +3,7 @@
 // co-signer keys, destinations, proposals, maintainers, a new version of its
 // declaration). Everything a founder does is written to their own GitHub
 // repository through src/github.mjs.
-import { canonicalAddress } from "../../../method/js/verify.mjs";
+import { canonicalAddress, memberAddressForOwnerKey } from "../../../method/js/verify.mjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
@@ -22,7 +22,7 @@ import { ledgerAppFor } from "../ledgerDevice";
 import { buildCrowdlock, declarationSkeleton, slugify, DEFAULT_RELAYS, checkWithNewKey, NO_RETURNS } from "../start.mjs";
 // @ts-ignore
 import {
-  startSignIn, waitForSignIn, whoAmI, createCrowdlockRepo, canWrite, updateCrowdlockRepo, addMaintainer, rememberSignIn, currentSignIn, addCosignerKey,
+  startSignIn, waitForSignIn, whoAmI, createCrowdlockRepo, canWrite, updateCrowdlockRepo, addMaintainer, rememberSignIn, currentSignIn, addCosignerKey, addAttestorKey,
   addDestination, publishProposal, publishDeclarationVersion, setHome,
 } from "../github.mjs";
 // @ts-ignore — plain module shared with the tests
@@ -568,7 +568,7 @@ function LookAfter({ c, account, onChange, alone, job: first }: { c: Extract<Loa
   const [published, setPublished] = useState<string | null>(null);
   const [open, setOpen] = useState(!!alone);
   // On its own page, each job has a row; this is the one that is open.
-  const [job, setJob] = useState<null | "update" | "keys" | "home" | "destinations" | "proposal" | "maintainers" | "version">(first ?? null);
+  const [job, setJob] = useState<null | "update" | "keys" | "attestors" | "home" | "destinations" | "proposal" | "maintainers" | "version">(first ?? null);
   useBack(() => { if (alone && job) { setJob(null); return true; } return false; });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -635,6 +635,7 @@ function LookAfter({ c, account, onChange, alone, job: first }: { c: Extract<Loa
       <NavRow title="Update it" sub={status === "behind" ? "An update is available" : status === "current" ? "Its inbox is up to date" : "Keep its inbox on the newest code"} state={status === "behind" ? { text: "Update available", good: false } : undefined} onPress={() => setJob("update")} />
       <NavRow title="Co-signer keys" sub="The keys that can add the second signature to a purchase" onPress={() => setJob("keys")} />
       <NavRow title="Where it lives" sub={c.crowdlock.home ? "Signed by its co-signer keys" : "Not yet signed: a copy elsewhere would look the same"} onPress={() => setJob("home")} />
+      {here && <NavRow title="Attestor keys" sub={(c.crowdlock.attestor_keys ?? []).length ? "The keys that approve where a proposal may pay" : "None yet, so no destination can be approved"} state={(c.crowdlock.attestor_keys ?? []).length ? undefined : { text: "None yet", good: false }} onPress={() => setJob("attestors")} />}
       {here && <NavRow title="Destinations" sub="The addresses a proposal is allowed to pay" onPress={() => setJob("destinations")} />}
       {here && <NavRow title="Write a proposal" sub="Put a purchase to the members" onPress={() => setJob("proposal")} />}
       <NavRow title="Maintainers" sub="Other people who can help run it" onPress={() => setJob("maintainers")} />
@@ -645,6 +646,7 @@ function LookAfter({ c, account, onChange, alone, job: first }: { c: Extract<Loa
       <Btn kind="link" label="‹ All the jobs" onPress={() => setJob(null)} />
       {job === "update" && <><Text style={s.h2}>Update it</Text><Text style={s.note}>A Crowdlock's inbox is the small program, in its own GitHub account, that collects new members, locks and commitments. The app can bring it up to the newest version.</Text>{updateBox}</>}
       {job === "keys" && <><CosignerKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
+      {job === "attestors" && <AttestorKeys c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} />}
       {job === "home" && <Home c={c} owner={where.owner} repo={where.repo} onChange={onChange} />}
       {job === "destinations" && <><Destinations c={c} account={account} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
       {job === "proposal" && <><WriteProposal c={c} owner={where.owner} repo={where.repo} onChange={onChange} /></>}
@@ -738,6 +740,60 @@ function CosignerKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
     <Btn label={busy ? "Adding…" : "Add this co-signer key"} disabled={busy || !k || !!problem || !path || (!!c.crowdlock.home && !has && !newKeyWords.trim())} onPress={add} />
+  </>;
+}
+
+// Attestor keys: the keys that approve destinations, never a co-signer key
+// (spec/destinations-format.md). The wallet on this phone is the usual first.
+function AttestorKeys({ c, account, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; account: any; owner: string; repo: string; onChange: () => void }) {
+  const { withSignIn, codeView } = useGitHub();
+  const keys: string[] = c.crowdlock.attestor_keys ?? [];
+  const cosigners: string[] = c.crowdlock.cosigner_keys ?? [];
+  const hrp = c.crowdlock.network === "mainnet" ? "bc" : "tb";
+  const mine = String(account.publicKey ?? "").toLowerCase();
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const k = key.trim().toLowerCase();
+  const entries = (c.destinations?.entries ?? []).length;
+  const problem = !k ? null
+    : !isPublicKey(k) ? "That isn't a public key. Copy it whole: it starts 02 or 03."
+    : cosigners.some((x) => x.slice(2) === k.slice(2)) ? "That's a co-signer key. The key that approves where money may go must never be one that can send it there."
+    : keys.some((x) => x.slice(2) === k.slice(2)) ? "This Crowdlock already has that attestor key."
+    : null;
+  const path = pathInRepo(c.url);
+  const destinationsPath = repoPathOf(c, c.crowdlock.register.destinations);
+  const add = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await withSignIn(async (token) => {
+        if (!(await canWrite(token, owner, repo))) throw new Error("Only this Crowdlock's founder and its maintainers can change it, and the GitHub account you signed in with isn't one of them.");
+        const r = await addAttestorKey({ token, owner, repo, path, destinationsPath, key: k, addressOf: (x: string) => memberAddressForOwnerKey(x, hrp), check: checkWithNewKey });
+        setKey("");
+        setMsg({ ok: true, text: `Added. A destination now needs ${r.threshold} of its ${r.keys.length} attestor${r.keys.length === 1 ? "" : "s"}. Its website updates in a minute or two.` });
+        setTimeout(onChange, 90000);
+      });
+    } catch (e: any) { setMsg({ ok: false, text: String(e.message ?? e) }); }
+    setBusy(false);
+  };
+  return <>
+    <Text style={s.label}>Attestor keys</Text>
+    <Text style={s.note}>An attestor approves each address a proposal may pay, before anyone can commit to it. It must be a different key from the co-signer's, so that no one key can both approve where money goes and send it there.</Text>
+    {keys.length === 0 ? <Text style={s.note}>None yet, so no destination can be approved and no proposal written.</Text>
+      : keys.map((x) => (
+        <View key={x} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Text style={[s.note, { flex: 1 }]}>{x.slice(0, 10)}…{x.slice(-8)}{x === mine ? "  · this wallet" : ""}</Text>
+          <Btn label="Copy" kind="second" onPress={() => Clipboard.setStringAsync(x)} />
+        </View>))}
+    {entries > 0 ? <Text style={s.note}>Its destinations list already has entries, so the app can't add an attestor: every entry would need attesting again.</Text> : <>
+      {!!mine && !keys.includes(mine) && !cosigners.includes(mine) && <Btn label="Use this wallet's key" kind="second" onPress={() => { setKey(mine); setMsg(null); }} />}
+      <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={key} onChangeText={(t) => { setKey(t); setMsg(null); }} placeholder="Or paste a key: 02… or 03…" />
+      {problem && <Text style={s.error}>{problem}</Text>}
+      {!path && <Text style={s.error}>Can't tell where this Crowdlock's file sits in its repository.</Text>}
+      {codeView}
+      {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
+      <Btn label={busy ? "Adding…" : "Add this attestor key"} disabled={busy || !k || !!problem || !path || !destinationsPath} onPress={add} />
+    </>}
   </>;
 }
 
@@ -890,7 +946,7 @@ function Destinations({ c, account, owner, repo, onChange }: { c: Extract<Loaded
     <Text style={s.label}>Destinations</Text>
     {(d.entries ?? []).length === 0 ? <Text style={s.note}>None yet. A proposal can only pay an address on this list, attested by this Crowdlock's attestors.</Text>
       : d.entries.map((e: any) => <Text key={e.index} style={s.note}>{e.index}. {e.op === "revoke" ? "Revoked: " : ""}{e.text} — {e.address.slice(0, 14)}…{e.address.slice(-6)}, {e.op === "add" ? `, ${stampNote(e, stamps)}` : ""}</Text>)}
-    {!isAttestor ? <Text style={s.note}>This wallet isn't one of its attestors, so it can't approve a destination.</Text> : <>
+    {!isAttestor ? <Text style={s.note}>{rules.attestors.length ? "This wallet isn't one of its attestors, so it can't approve a destination." : "It has no attestors yet, so no destination can be approved. Add one under Attestor keys: this wallet's own key will do."}</Text> : <>
       <Input style={s.input} autoCapitalize="none" autoCorrect={false} value={address} onChangeText={(t) => { setAddress(t); setMsg(null); }} placeholder="The address a purchase would pay" />
       <Input style={s.input} value={text} onChangeText={(t) => { setText(t); setMsg(null); }} placeholder="Who it belongs to and what it's for" />
       <Text style={s.note}>Your wallet signs to say you attest it{account.kind === "ledger" ? " — approve the message on your Ledger" : ""}. Anyone can check that signature. Then it stamps it on the chain: a small payment from this wallet back to itself, carrying the destination's fingerprint, so its date can't be faked. That needs a little bitcoin in this wallet for the network fee{account.kind === "ledger" ? ", and a second approval on your Ledger" : ""}.</Text>

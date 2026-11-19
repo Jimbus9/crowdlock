@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { buildCrowdlock, declarationSkeleton, NO_RETURNS, slugify } from "../src/start.mjs";
-import { startSignIn, waitForSignIn, createCrowdlockRepo, CLIENT_ID, SCOPES, canWrite, updateCrowdlockRepo, addMaintainer, addCosignerKey } from "../src/github.mjs";
+import { startSignIn, waitForSignIn, createCrowdlockRepo, CLIENT_ID, SCOPES, canWrite, updateCrowdlockRepo, addMaintainer, addCosignerKey, addAttestorKey } from "../src/github.mjs";
 import { repoFromFileUrl, versionStatus, changesSince } from "../src/crowdlocks.mjs";
 import template from "../src/template.mjs";
 import { loadCrowdlock } from "../src/crowdlocks.mjs";
@@ -229,6 +229,26 @@ check("The same key twice is refused", dupe.includes("already has that"));
 const offCurve = "02" + "00".repeat(31) + "05";
 let bad = ""; try { await addCosignerKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, key: offCurve, check: checkWithNewKey }, withContents({ push: true })); } catch (e) { bad = e.message; }
 check("A key that only looks right — not a real point on the curve — is refused", !isPublicKey(offCurve) && isPublicKey(newKey) && bad.includes("not a real public key"), bad);
+
+// Adding an attestor key: the Crowdlock file and its destinations list, together.
+{
+  const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");
+  const destPath = JSON.parse(realFile).register.destinations;
+  const serve = (list) => (perms) => { const inner = withContents(perms); return async (url, init = {}) => {
+    const u = String(url).replace("https://api.github.com", "");
+    if (u === `/repos/somefan/the-pub-fund/contents/${destPath}`) return Response.json({ content: Buffer.from(JSON.stringify(list)).toString("base64") });
+    return inner(url, init);
+  }; };
+  const emptyList = JSON.parse(files[destPath]);
+  const addressOf = (k) => memberAddressForOwnerKey(k, "bc");
+  const att = await addAttestorKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, destinationsPath: destPath, key: member.publicKey, addressOf, check: checkWithNewKey }, serve(emptyList)({ push: true }));
+  check("An attestor key goes into the Crowdlock file and its destinations list, in one commit",
+    att.keys.length === 1 && att.keys[0] === member.publicKey && att.threshold === 1 && gcalls.tree.length === 2 && gcalls.tree.includes(realPath) && gcalls.tree.includes(destPath), JSON.stringify(gcalls.tree));
+  let co2 = ""; try { await addAttestorKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, destinationsPath: destPath, key: oldKey, addressOf, check: checkWithNewKey }, serve(emptyList)({ push: true })); } catch (e) { co2 = e.message; }
+  check("A co-signer key can't be made an attestor", co2.includes("both co-signer and attestor"), co2);
+  let later = ""; try { await addAttestorKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, destinationsPath: destPath, key: member.publicKey, addressOf, check: checkWithNewKey }, serve({ ...emptyList, entries: [{ index: 0 }] })({ push: true })); } catch (e) { later = e.message; }
+  check("Once a destination is listed, the app won't add an attestor", later.includes("already has entries"), later);
+}
 
 // Co-signer xpubs, for hardware wallets.
 {
