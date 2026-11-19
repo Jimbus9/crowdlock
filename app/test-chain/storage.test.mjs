@@ -123,4 +123,28 @@ reset();
   ok("The locks seen on a register are kept, each Crowdlock's apart", JSON.stringify(await S.loadSeenLocks(url)) === JSON.stringify(seen) && (await S.loadSeenLocks("https://b.example/crowdlocks/y.json")).count === 0);
 }
 
+// A co-signer key kept on this phone, behind the fingerprint.
+reset();
+{
+  const P = "03" + "cd".repeat(32), Q = "02" + "ef".repeat(32);
+  ok("No co-signer key kept to start with", (await S.keptCosignerKeys()).length === 0);
+  await S.keepCosignerKey(P.toUpperCase(), W);
+  ok("A co-signer key is kept locked, asking for the fingerprint as it's saved", mem.get(`crowdlock.cosigner.${P}`).locked && world.prompts.length === 1 && JSON.stringify(await S.keptCosignerKeys()) === JSON.stringify([P]));
+  ok("…its words are read only after the fingerprint", (await S.readCosignerWords(P, "co-sign")) === W && world.prompts.at(-1) === "co-sign");
+  await S.keepCosignerKey(Q, W);
+  ok("…two keys can be kept, each in its own entry", JSON.stringify(await S.keptCosignerKeys()) === JSON.stringify([P, Q]));
+  world.answer = "cancel";
+  let threw = ""; try { await S.readCosignerWords(P, "co-sign"); } catch (e) { threw = e.message; }
+  ok("…cancelling the fingerprint gives no words", /cancel/i.test(threw));
+  world.answer = "ok"; mem.get(`crowdlock.cosigner.${P}`).invalid = true;
+  ok("…one the phone threw away reads as nothing, and is no longer listed as kept", (await S.readCosignerWords(P, "co-sign")) === null && JSON.stringify(await S.keptCosignerKeys()) === JSON.stringify([Q]));
+  await S.forgetCosignerKey(Q);
+  ok("…forgetting one removes its words and its listing", !mem.has(`crowdlock.cosigner.${Q}`) && (await S.keptCosignerKeys()).length === 0);
+  await S.saveWordsWallet(W, text); await S.keepCosignerKey(P, W); await S.forgetWallet();
+  ok("…removing the wallet leaves a kept co-signer key alone", (await S.keptCosignerKeys()).includes(P));
+  reset(); world.biometrics = false;
+  let none = ""; try { await S.keepCosignerKey(P, W); } catch (e) { none = e.message; }
+  ok("A phone with no fingerprint or face can't keep one: never unlocked", /can't keep a co-signer key/.test(none) && !mem.has(`crowdlock.cosigner.${P}`));
+}
+
 console.log(process.exitCode ? "\nThe wallet's storage has a problem." : "\nThe wallet's storage keeps the words apart, locked where it can.");

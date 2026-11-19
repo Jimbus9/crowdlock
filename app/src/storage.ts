@@ -96,6 +96,60 @@ export async function forgetWallet(): Promise<void> {
   await SecureStore.deleteItemAsync(OLD);
 }
 
+// ---------------------------------------------------------------------------
+// Co-signer keys kept on this phone
+//
+// A co-signer signs on this same online phone whatever happens, so typing its
+// 12 words in afresh each time protects nothing: it only brings the paper out
+// and puts the words in front of eyes and keyboards again. So a co-signer may
+// keep its key here instead, one entry per key, each locked to the
+// fingerprint or face (never unlocked: a phone without one can't keep it).
+// Like the wallet's, an entry is thrown away by the phone if its fingerprints
+// or faces change; the words are then typed again once. The paper stays the
+// backup. The test app and the real app are separate installs, so each keeps
+// only its own network's keys.
+//
+//   COSIGNERS            the public keys kept (not secret)
+//   crowdlock.cosigner.  one entry per key, holding its words
+// ---------------------------------------------------------------------------
+const COSIGNERS = "crowdlock.cosigners.v1";
+const cosignerEntry = (pub: string) => `crowdlock.cosigner.${pub.toLowerCase()}`;
+
+/** The co-signer keys kept on this phone, by public key. */
+export async function keptCosignerKeys(): Promise<string[]> {
+  try { const v = JSON.parse((await SecureStore.getItemAsync(COSIGNERS)) ?? "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; }
+}
+
+/** Keep a co-signer key's words on this phone, locked to the fingerprint or face (it asks for it now). */
+export async function keepCosignerKey(pub: string, words: string): Promise<void> {
+  if (!canLock()) throw new Error("This phone has no fingerprint or face unlock set up, so it can't keep a co-signer key safely. Type the words each time instead.");
+  const p = pub.toLowerCase();
+  await SecureStore.deleteItemAsync(cosignerEntry(p)).catch(() => {});
+  await SecureStore.setItemAsync(cosignerEntry(p), words, {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    requireAuthentication: true, authenticationPrompt: "Confirm it's you, to keep this co-signer key on this phone",
+  });
+  const all = await keptCosignerKeys();
+  if (!all.includes(p)) await SecureStore.setItemAsync(COSIGNERS, JSON.stringify([...all, p]));
+}
+
+/**
+ * A kept co-signer key's words, for signing, after the fingerprint or face
+ * check (cancelling rejects). Null if the phone no longer has them, and the
+ * key is then no longer listed as kept.
+ */
+export async function readCosignerWords(pub: string, prompt: string): Promise<string | null> {
+  const words = await SecureStore.getItemAsync(cosignerEntry(pub), { requireAuthentication: true, authenticationPrompt: prompt });
+  if (!words) await forgetCosignerKey(pub);
+  return words;
+}
+
+export async function forgetCosignerKey(pub: string): Promise<void> {
+  const p = pub.toLowerCase();
+  await SecureStore.deleteItemAsync(cosignerEntry(p)).catch(() => {});
+  await SecureStore.setItemAsync(COSIGNERS, JSON.stringify((await keptCosignerKeys()).filter((x) => x !== p)));
+}
+
 // How fast the fan wants their transactions to confirm: slow, normal or fast.
 // Only a preference, so it is kept beside the rest, not with the words.
 const FEE_SPEED = "crowdlock.feespeed.v1";

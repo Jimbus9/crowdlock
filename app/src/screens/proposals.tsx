@@ -25,7 +25,7 @@ import {
   FeeChoice, SumRow, Confirm, s, signingAccount,
 } from "./shared";
 import type { Go, Loaded } from "./shared";
-import { WordsInput } from "./wallet";
+import { useCosignerWords } from "./cosigner";
 
 // ---------------------------------------------------------------------------
 // Reading proposals and their commitments
@@ -425,7 +425,7 @@ const SEND_PER_PASS_NOTE = "up to 25 every few minutes";
 
 function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; onDone: () => void }) {
   const [open, setOpen] = useState(false);
-  const [words, setWords] = useState("");
+  const co = useCosignerWords(c.crowdlock.cosigner_keys ?? []);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [asking, setAsking] = useState(false);
@@ -434,9 +434,10 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
   const deadGo = async () => { setAsking(false); {
       setBusy(true); setMsg(null);
       try {
+        const words = await co.words("Confirm it's you, to sign the notice");
         const notice = signNoticeWith({ words, crowdlock: c.crowdlock, statement: noticeStatement(p.hash), network: NETWORK });
         const posted = await postCommitment(c.crowdlock, { type: "notice", proposal: p.hash, notice });
-        setWords("");
+        await co.done(words);
         setMsg(posted.ok ? { ok: true, text: `Published to ${posted.accepted} of ${posted.total} relays. The Crowdlock's repository records it on its next pass.` }
           : { ok: false, text: "Signed, but no relay took it just now. Check your connection and try again." });
         onDone();
@@ -446,10 +447,10 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
   return !open ? <Btn label="For the co-signer: declare it dead" kind="second" onPress={() => setOpen(true)} /> : (
     <View style={s.panel}>
       <Text style={s.label}>It closed short of its target</Text>
-      <Text style={s.note}>Nothing has to happen: without your signature no commitment can ever move. Publishing a signed notice tells every member so, publicly, and promises you won't complete any of them. Type the co-signer key's words; they're used once and not saved.</Text>
-      <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
+      <Text style={s.note}>Nothing has to happen: without your signature no commitment can ever move. Publishing a signed notice tells every member so, publicly, and promises you won't complete any of them. It's signed with the co-signer key.</Text>
+      {co.view}
       {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-      {asking ? <Confirm title={askDead[0]} text={askDead[1]} yes="Sign and publish" onYes={deadGo} onCancel={() => setAsking(false)} /> : <Btn label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !wordsAreValid(tidyWords(words))} onPress={() => setAsking(true)} />}
+      {asking ? <Confirm title={askDead[0]} text={askDead[1]} yes="Sign and publish" onYes={deadGo} onCancel={() => setAsking(false)} /> : <Btn label={busy ? "Signing…" : "Sign and publish the notice"} disabled={busy || !co.ready} onPress={() => setAsking(true)} />}
     </View>
   );
 }
@@ -457,7 +458,7 @@ function DeclareDead({ c, p, onDone }: { c: Extract<Loaded, { ok: true }>; p: an
 /** The order commitments are settled in: as the repository received them (oldest first, then its own order). */
 function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: any; pile: Pile; onDone: () => void }) {
   const [open, setOpen] = useState(false);
-  const [words, setWords] = useState("");
+  const co = useCosignerWords(c.crowdlock.cosigner_keys ?? []);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // What is already paid, or sent and waiting for a block, counts first; then
@@ -473,7 +474,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
   const [asking, setAsking] = useState(false);
   const askSend: [string, string] = ["Complete and send?",
       `This completes ${take.length} commitment${take.length === 1 ? "" : "s"} (${btc(BigInt(sum - settledSoFar))}) and sends them to ${p.destination.slice(0, 14)}…. It can't be undone. Do this only if the proposal is genuine and its target is met.`];
-  const stop = (text: string) => { setWords(""); setBusy(false); setMsg({ ok: false, text }); onDone(); };
+  const stop = (text: string) => { setBusy(false); setMsg({ ok: false, text }); onDone(); };
   const sendGo = async () => {
     setAsking(false);
     setBusy(true); setMsg(null);
@@ -495,6 +496,9 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
     if (fpile.unreadable) return stop(`Nothing was completed: ${fpile.unreadable}.`);
     if (fpile.uncertain) return stop("Nothing was completed: whether an earlier payment has already gone couldn't be checked just now. Try again in a few minutes.");
     const plan = planFor(fpile, fp.target.sats);
+    // The words now, once, for every signature below.
+    let words: string;
+    try { words = await co.words("Confirm it's you, to co-sign"); } catch (e: any) { return stop(String(e.message ?? e)); }
     // Every commitment checked again, with these words, from the fresh pile in
     // order; the total added up again. Short of the target, nothing is done.
     let recheck: { ok: boolean; still: any[]; total: number; problems: string[] };
@@ -534,7 +538,7 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
         break;
       }
     }
-    setWords("");
+    if (sent > 0) await co.done(words);
     setMsg(failed.length
       ? { ok: sent > 0, text: `${sendHere ? "Sent" : "Completed"} ${sent} of ${recheck.still.length}. ${failed[0]}` }
       : sendHere ? { ok: true, text: `Completed and sent all ${sent}. They'll confirm over the next blocks.` }
@@ -545,13 +549,13 @@ function CoSign({ c, p, pile, onDone }: { c: Extract<Loaded, { ok: true }>; p: a
     <View>
       {!open ? <Btn label="For the co-signer" kind="second" onPress={() => setOpen(true)} /> : <View style={s.panel}>
         <Text style={s.label}>Co-sign this proposal</Text>
-        <Text style={s.note}>Only once the target is met, and only if the proposal and its destination are genuine. Type the co-signer key's words, ideally on a phone that is otherwise offline. They are used once and not saved.</Text>
+        <Text style={s.note}>Only once the target is met, and only if the proposal and its destination are genuine. It's signed with the co-signer key.</Text>
         {!met && <Text style={s.error}>The target isn't met yet: {btc(BigInt(pile.sats))} of {btc(BigInt(p.target.sats))}. Nothing should be completed.</Text>}
         {blocked && <Text style={s.error}>{blocked}</Text>}
         {met && take.length > 0 && <Text style={s.note}>The plan: {take.length} commitment{take.length === 1 ? "" : "s"}, oldest first, coming to {btc(BigInt(sum - settledSoFar))}{sum > p.target.sats ? `, ${btc(BigInt(sum - p.target.sats))} over the target because the last can't be split` : ""}. {pile.good.length - take.length} more held in reserve.</Text>}
-        <WordsInput value={words} onChange={setWords} placeholder="The co-signer key's 12 words" />
+        {co.view}
         {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-        {asking ? <Confirm title={askSend[0]} text={askSend[1]} yes="Complete and send" onYes={sendGo} onCancel={() => setAsking(false)} /> : <Btn label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !!blocked || !wordsAreValid(tidyWords(words)) || take.length === 0} onPress={() => setAsking(true)} />}
+        {asking ? <Confirm title={askSend[0]} text={askSend[1]} yes="Complete and send" onYes={sendGo} onCancel={() => setAsking(false)} /> : <Btn label={busy ? "Completing…" : `Complete ${take.length} and send`} disabled={busy || !met || !!blocked || !co.ready || take.length === 0} onPress={() => setAsking(true)} />}
       </View>}
     </View>
   );
