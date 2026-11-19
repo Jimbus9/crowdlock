@@ -812,6 +812,8 @@ function Home({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; 
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const path = pathInRepo(c.url);
   const missing = keys.filter((k) => !sigs[k]);
+  // Already published as it stands: nothing to publish.
+  const published = !!home && home.url === c.url && keys.every((k) => home.signatures?.[k] === sigs[k]);
   // A key kept on this phone that is still to sign is offered first.
   const co = useCosignerWords(missing, "The words of one of the keys still to sign");
   const short = (k: string) => `${k.slice(0, 10)}…${k.slice(-8)}`;
@@ -853,7 +855,7 @@ function Home({ c, owner, repo, onChange }: { c: Extract<Loaded, { ok: true }>; 
     {!path && <Text style={s.error}>Can't tell where this Crowdlock's file sits in its repository.</Text>}
     {codeView}
     {msg && <Text style={msg.ok ? s.good : s.error}>{msg.text}</Text>}
-    <Btn label={busy ? "Publishing…" : missing.length ? `Publish (${missing.length} key${missing.length === 1 ? "" : "s"} still to sign)` : "Publish where it lives"} disabled={busy || missing.length > 0 || !path} onPress={publish} />
+    <Btn label={busy ? "Publishing…" : published ? "Published" : missing.length ? `Publish (${missing.length} key${missing.length === 1 ? "" : "s"} still to sign)` : "Publish where it lives"} disabled={busy || missing.length > 0 || !path || published} onPress={publish} />
   </>;
 }
 

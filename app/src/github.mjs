@@ -87,15 +87,42 @@ export async function whoAmI(token, repoName, fetchImpl = globalThis.fetch) {
 
 /** Write files to a repository's main branch as one commit. Returns the commit's sha. */
 async function commitFiles(gh, owner, repo, files, message) {
-  const head = await gh("GET", `/repos/${owner}/${repo}/git/ref/heads/main`);
-  const base = await gh("GET", `/repos/${owner}/${repo}/git/commits/${head.object.sha}`);
-  const tree = await gh("POST", `/repos/${owner}/${repo}/git/trees`, {
-    base_tree: base.tree.sha,
-    tree: Object.entries(files).map(([path, content]) => ({ path, mode: "100644", type: "blob", content })),
-  });
-  const commit = await gh("POST", `/repos/${owner}/${repo}/git/commits`, { message, tree: tree.sha, parents: [head.object.sha] });
-  await gh("PATCH", `/repos/${owner}/${repo}/git/refs/heads/main`, { sha: commit.sha });
-  return commit.sha;
+  const paths = Object.keys(files);
+  // A file's blob at a commit, or null where it doesn't exist there.
+  const blobAt = async (ref, path) => {
+    try { return (await gh("GET", `/repos/${owner}/${repo}/contents/${path}?ref=${ref}`)).sha ?? null; }
+    catch (e) { if (e.status === 404) return null; throw e; }
+  };
+  let first = null;
+  // A Crowdlock's relay inbox commits every few minutes, so the branch can
+  // move on between reading it and writing to it; GitHub then refuses the
+  // write ("not a fast forward"). The write is made again on top of the new
+  // commit, as long as the inbox touched none of the files being written:
+  // if it did, what was read is out of date, and that is said instead.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const head = await gh("GET", `/repos/${owner}/${repo}/git/ref/heads/main`);
+    if (first === null) first = head.object.sha;
+    else if (head.object.sha !== first) {
+      for (const p of paths) {
+        if ((await blobAt(first, p)) !== (await blobAt(head.object.sha, p))) {
+          throw new Error(`${p} changed on GitHub while you were working, so nothing was written. Go back, open it again, and try once more.`);
+        }
+      }
+    }
+    const base = await gh("GET", `/repos/${owner}/${repo}/git/commits/${head.object.sha}`);
+    const tree = await gh("POST", `/repos/${owner}/${repo}/git/trees`, {
+      base_tree: base.tree.sha,
+      tree: Object.entries(files).map(([path, content]) => ({ path, mode: "100644", type: "blob", content })),
+    });
+    const commit = await gh("POST", `/repos/${owner}/${repo}/git/commits`, { message, tree: tree.sha, parents: [head.object.sha] });
+    try {
+      await gh("PATCH", `/repos/${owner}/${repo}/git/refs/heads/main`, { sha: commit.sha });
+      return commit.sha;
+    } catch (e) {
+      if (!(e.status === 422 && /fast.?forward/i.test(e.message))) throw e;
+    }
+  }
+  throw new Error("GitHub kept changing while this was written, so nothing was. Try again in a minute.");
 }
 
 /**

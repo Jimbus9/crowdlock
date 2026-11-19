@@ -230,6 +230,23 @@ const offCurve = "02" + "00".repeat(31) + "05";
 let bad = ""; try { await addCosignerKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, key: offCurve, check: checkWithNewKey }, withContents({ push: true })); } catch (e) { bad = e.message; }
 check("A key that only looks right — not a real point on the curve — is refused", !isPublicKey(offCurve) && isPublicKey(newKey) && bad.includes("not a real public key"), bad);
 
+// The relay inbox commits between the app reading the branch and writing to it.
+{
+  const racing = (fileMoved) => { const inner = withContents({ push: true }); let heads = 0, patches = 0; const f = async (url, init = {}) => {
+    const u = String(url).replace("https://api.github.com", "");
+    if (u.endsWith("/git/ref/heads/main")) return Response.json({ object: { sha: heads++ === 0 ? "c5" : "c7" } });
+    if (u.endsWith("/git/commits/c7")) return Response.json({ tree: { sha: "t7" } });
+    if (u.startsWith(`/repos/somefan/the-pub-fund/contents/${realPath}?ref=`)) return Response.json({ sha: fileMoved && u.endsWith("c7") ? "b2" : "b1" });
+    if (u.endsWith("/git/refs/heads/main") && (init.method === "PATCH") && patches++ === 0) return Response.json({ message: "Update is not a fast forward" }, { status: 422 });
+    return inner(url, init);
+  }; f.patches = () => patches; return f; };
+  const r1 = racing(false);
+  const raced = await addCosignerKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, key: newKey, check: checkWithNewKey }, r1);
+  check("The inbox committing in between: the write is made again on top, and works", raced.keys.length === 2 && r1.patches() === 2);
+  let moved = ""; try { await addCosignerKey({ token: "t", owner: "somefan", repo: "the-pub-fund", path: realPath, key: newKey, check: checkWithNewKey }, racing(true)); } catch (e) { moved = e.message; }
+  check("…but not if it changed the same file: then nothing is written, and it says so", moved.includes("changed on GitHub while you were working"), moved);
+}
+
 // Adding an attestor key: the Crowdlock file and its destinations list, together.
 {
   const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");
