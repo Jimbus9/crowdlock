@@ -70,7 +70,7 @@ export function Founders({ words, go }: { words: string; go: Go }) {
 // Its own 12 words, shown once to be written on paper and never saved; only
 // the public half leaves the screen, by QR code. The same words make the same
 // key in method/cosigner/generate.mjs, Sparrow or Electrum, so nothing here is
-// needed to use it later. Done with the phone in airplane mode.
+// needed to use it later.
 // ---------------------------------------------------------------------------
 
 export function CosignerKey({ words: walletWords, forStart, go }: { words: string; forStart?: "cosigner" | "testPasted"; go: Go }) {
@@ -94,7 +94,6 @@ export function CosignerKey({ words: walletWords, forStart, go }: { words: strin
     <View>
       <Text style={s.h1}>Make a co-signer key</Text>
       <Text style={s.p}>A Crowdlock's co-signer adds the second signature that lets a funded purchase go through. The key can't take or keep anyone's money — it can only complete what members already signed for, or refuse.</Text>
-      <Text style={[s.p, s.bold]}>Switch on airplane mode before you start, and leave it on until you've finished.</Text>
       <Text style={s.note}>You'll get 12 words to write on paper, twice — one copy kept outside your house. Those words are the key. They're never saved on this phone, and the same words work in other wallets (Sparrow, Electrum) or the project's own script, so you never depend on this app. Never use your wallet's own words for this.</Text>
       <Btn label="Make a new co-signer key" onPress={() => { setCoWords(newCosignerWords()); setStage("show"); }} />
       <Btn label="Check words I already have" kind="second" onPress={() => setStage("existing")} />
@@ -151,7 +150,7 @@ export function CosignerKey({ words: walletWords, forStart, go }: { words: strin
       <Text style={s.p}>Also public. It's the same key in the longer form a Ledger needs before it will lock with it. Paste this one into "Add this co-signer key" instead of the key above and the app adds both.</Text>
       <Text style={s.mono} selectable>{xpub}</Text>
       <Btn label="Copy the xpub" kind="second" onPress={() => xpub && Clipboard.setStringAsync(xpub)} />
-      <Text style={s.note}>You can switch airplane mode off now. Keep the two paper copies apart.</Text>
+      <Text style={s.note}>Keep the two paper copies apart.</Text>
       <Btn label={forStart ? "Use this key and go back to my Crowdlock" : "Done"} onPress={leave} />
     </View>
   );
