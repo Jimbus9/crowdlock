@@ -218,7 +218,7 @@ export default function App() {
             )}
             {screen.name === "sign" && <SignScreen words={screen.words} url={screen.url} go={setScreen} />}
             {screen.name === "share" && <ShareScreen url={screen.url} />}
-            {screen.name === "lookAfter" && <LookAfterScreen words={screen.words} url={screen.url} />}
+            {screen.name === "lookAfter" && <LookAfterScreen words={screen.words} url={screen.url} job={screen.job} />}
             {screen.name === "send" && <Send words={screen.words} go={setScreen} />}
             {screen.name === "feeSpeed" && <FeeSpeedScreen />}
             {screen.name === "wallet" && <WalletScreen words={screen.words} go={setScreen} />}

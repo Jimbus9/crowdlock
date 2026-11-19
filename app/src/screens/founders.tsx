@@ -286,7 +286,12 @@ export function StartCrowdlock({ words, go }: { words: string; go: Go }) {
       </View>}
       <Text style={s.note}>Your repository: {done.repoUrl}</Text>
       {!done.inboxStarted && <Text style={s.note}>Its relay inbox will start by itself within the hour.</Text>}
-      <Text style={s.note}>Next: open it from your Crowdlocks list and sign your own declaration, so you're its member 1.</Text>
+      <View style={s.panel}>
+        <Text style={[s.p, s.bold]}>Next: say where it lives</Text>
+        <Text style={s.p}>Until its co-signer key signs its website's address, anyone could put a copy of its file up somewhere else and it would look the same. Once it's signed, the app sends anyone who opens a copy to the real one. It needs the co-signer key's words, on this phone, once its website is live.</Text>
+        <Btn label="Say where it lives" onPress={() => go({ name: "lookAfter", words, url: done.links[0].url, job: "home" })} />
+      </View>
+      <Text style={s.note}>Then open it from your Crowdlocks list and sign your own declaration, so you're its member 1.</Text>
 
       <Text style={s.h2}>Add a maintainer</Text>
       <MaintainerAdvice />
@@ -521,20 +526,26 @@ function MaintainerForm({ owner, repo }: { owner: string; repo: string }) {
   </>;
 }
 
-export function LookAfterScreen({ words, url }: { words: string; url: string }) {
+export function LookAfterScreen({ words, url, job }: { words: string; url: string; job?: "home" }) {
   const account = useMemo(() => walletAccount(words), [words]);
   const [c, setC] = useState<Loaded | null>(null);
   const load = useCallback(async () => { setC(await loadCrowdlock(url)); }, [url]);
   useEffect(() => { load(); }, [load]);
   if (!c) return <ActivityIndicator style={{ marginTop: 60 }} />;
-  if (!c.ok) return <Text style={s.error}>This Crowdlock failed its checks, so nothing can be changed from here.</Text>;
+  // Straight after starting one, its website may not be up yet.
+  if (!c.ok) return job
+    ? <View>
+        <Text style={s.p}>Its website isn't live yet. GitHub takes a minute or two to publish a new one.</Text>
+        <Btn label="Try again" onPress={() => { setC(null); load(); }} />
+      </View>
+    : <Text style={s.error}>This Crowdlock failed its checks, so nothing can be changed from here.</Text>;
   return (
     <View>
       <Text style={s.kick}>For its founder and maintainers</Text>
       <Text style={s.h1}>Look after {c.crowdlock.name}</Text>
       <Text style={s.p}>Most members never need this page. Everything here needs the GitHub account of the founder or of a maintainer they have added.</Text>
       {repoFromFileUrl(c.url)
-        ? <LookAfter c={c} account={account} onChange={load} alone />
+        ? <LookAfter c={c} account={account} onChange={load} alone job={job} />
         : <Text style={s.note}>This Crowdlock isn't published from GitHub, so the app can't change it.</Text>}
     </View>
   );
@@ -551,13 +562,13 @@ function LookAfterList({ words, go }: { words: string; go: Go }) {
   return <>{mine.map((c) => <NavRow key={c.url} title={c.crowdlock.name} sub="Updates, co-signer keys, destinations, proposals, maintainers" onPress={() => go({ name: "lookAfter", words, url: c.url })} />)}</>;
 }
 
-function LookAfter({ c, account, onChange, alone }: { c: Extract<Loaded, { ok: true }>; account: any; onChange: () => void; alone?: boolean }) {
+function LookAfter({ c, account, onChange, alone, job: first }: { c: Extract<Loaded, { ok: true }>; account: any; onChange: () => void; alone?: boolean; job?: "home" }) {
   const where = repoFromFileUrl(c.url);
   const [status, setStatus] = useState<string>("unknown");
   const [published, setPublished] = useState<string | null>(null);
   const [open, setOpen] = useState(!!alone);
   // On its own page, each job has a row; this is the one that is open.
-  const [job, setJob] = useState<null | "update" | "keys" | "home" | "destinations" | "proposal" | "maintainers" | "version">(null);
+  const [job, setJob] = useState<null | "update" | "keys" | "home" | "destinations" | "proposal" | "maintainers" | "version">(first ?? null);
   useBack(() => { if (alone && job) { setJob(null); return true; } return false; });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);

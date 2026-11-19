@@ -37,7 +37,7 @@ export type Screen =
   | { name: "allLocks"; words: string; url: string }
   | { name: "allProposals"; words: string; url: string }
   | { name: "share"; words: string; url: string }
-  | { name: "lookAfter"; words: string; url: string }
+  | { name: "lookAfter"; words: string; url: string; job?: "home" }
   | { name: "proposal"; words: string; url: string; hash: string }
   | { name: "commit"; words: string; url: string; hash: string }
   | { name: "takeHome"; words: string; url: string; address?: string; again?: boolean }
