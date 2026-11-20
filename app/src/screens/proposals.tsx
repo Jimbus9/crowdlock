@@ -59,7 +59,7 @@ function readPile(c: Extract<Loaded, { ok: true }>, p: any, account: any): Promi
     fetchPile: () => fetch(resolvePath(pilePath(c.crowdlock.register.proposals, p.hash), baseFor(c.url)), { cache: "no-store" }),
     relayItems: () => fetchCommitments(c.crowdlock, p.hash),
     check: (record: any) => checkCommitment({ record, crowdlock: c.crowdlock, proposal: p, destinations: c.destinations, chain, network: NETWORK }),
-    payment: (record: any) => commitmentPayment({ record, chain, crowdlock: c.crowdlock }),
+    payment: (record: any) => commitmentPayment({ record, chain, crowdlock: c.crowdlock, proposal: p, network: NETWORK }),
     txidOf: commitmentTxid,
     ownerPubkey: account?.publicKey ?? null,
   }) as Promise<Pile>;
@@ -133,7 +133,8 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
   useEffect(() => { refresh(); }, [refresh]);
   // Once the co-signer has paid out the target, the proposal is finished:
   // nothing more can be committed or completed, whatever its dates say.
-  const funded = !!pile && pile.paid >= p.target.sats;
+  // Paid, or sent and waiting for a block: either way nothing more is needed.
+  const funded = !!pile && pile.paid + pile.sent >= p.target.sats;
   const dead = !!pile?.notice && !funded;
   const phase = funded ? "funded" : dead ? "dead" : timePhase;
   const met = pile ? pile.paid + pile.sent + pile.sats >= p.target.sats : false;
@@ -155,7 +156,9 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
             : `Declared dead by the co-signer${pile.notice.published ? ` on ${String(pile.notice.published).slice(0, 10)}` : ""}: it didn't reach its target, and none of its commitments will be completed. Your money stays locked and comes home on its date as usual.`}</Text>
           <Text style={s.note}>The notice is signed by the co-signer's key and checked on this phone.</Text>
         </> : funded ? <>
-          <Text style={s.good}>Funded and paid. {btc(BigInt(pile.paid))} went to the seller in {pile.paidCount} payment{pile.paidCount === 1 ? "" : "s"}, completed by the co-signer and sent. This proposal is closed.</Text>
+          <Text style={s.good}>{pile.sent > 0
+            ? `Funded. ${btc(BigInt(pile.paid + pile.sent))} has been sent to the seller, ${btc(BigInt(pile.sent))} of it still waiting for a block. This proposal needs nothing more.`
+            : `Funded and paid. ${btc(BigInt(pile.paid))} went to the seller in ${pile.paidCount} payment${pile.paidCount === 1 ? "" : "s"}, completed by the co-signer and sent. This proposal is closed.`}</Text>
         </> : <>
           <Text style={s.big}>{btc(BigInt(pile.sats + pile.paid + pile.sent))}</Text>
           <Text style={s.note}>{pile.count} waiting{pile.sentCount ? ` · ${pile.sentCount} sent by the co-signer and waiting for a block (${btc(BigInt(pile.sent))})` : ""}{pile.paidCount ? ` · ${pile.paidCount} paid (${btc(BigInt(pile.paid))})` : ""}, each checked on this phone{pile.refused.length ? ` · ${pile.refused.length} refused` : ""}. {met ? "The target is met." : `${btc(BigInt(Math.max(0, p.target.sats - pile.sats - pile.paid)))} to go.`}</Text>
@@ -165,7 +168,7 @@ function ProposalDetail({ c, p, account, member, onCommit, paused = false }: { c
         {pile.refused.slice(0, 3).map((r, i) => <Text key={i} style={s.note}>Refused: {r}</Text>)}
         {pile.mine.length > 0 && <Text style={s.good}>{pile.mine.some((m) => m.paid) ? "Your commitment was paid: " : pile.mine.some((m) => m.sent) ? "Your commitment was completed and sent, and is waiting for a block: " : "You've committed "}{btc(BigInt(pile.mine.reduce((n, m) => n + m.sats, 0)))}.</Text>}
       </>}
-      {member && phase === "gathering" && !paused && <Btn label={pile && pile.mine.length > 0 ? "Commit more to this purchase" : "Commit to this purchase"} onPress={onCommit} />}
+      {member && phase === "gathering" && !paused && <Btn label={met ? "Commit as a reserve" : pile && pile.mine.length > 0 ? "Commit more to this purchase" : "Commit to this purchase"} onPress={onCommit} />}
       {!member && phase === "gathering" && <Text style={s.note}>Only members can commit. Join this Crowdlock and lock bitcoin first.</Text>}
       {member && phase === "soon" && <Text style={s.note}>You can commit once it opens.</Text>}
       {pile && !paused && (phase === "gathering" || phase === "settling") && <CoSign c={c} p={p} pile={pile} onDone={() => setTimeout(refresh, 3000)} />}

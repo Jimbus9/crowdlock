@@ -449,10 +449,23 @@ export async function commitmentPaid({ record, chain }) {
  * first commitments, the reserve would seem to reach the target by itself,
  * and pressing the button again would pay the seller twice.
  */
-export async function commitmentPayment({ record, chain, crowdlock = null }) {
+export async function commitmentPayment({ record, chain, crowdlock = null, proposal = /** @type {any} */ (null), network = /** @type {any} */ (null) }) {
   let tx;
   try { tx = Transaction.fromHex(record.tx); } catch { return null; }
   if (tx.ins.length !== 1) return null;
+  // Asked about a proposal: only a payment for it counts, read from the
+  // payment itself, which nobody can change once it is in a block. It names
+  // the proposal in its last output, pays the proposal's destination, and
+  // spends a lock this Crowdlock co-signs. Nothing else is asked: rules that
+  // came in later, or a destination revoked since, can't unmake a payment.
+  if (proposal) {
+    const marker = tx.outs[tx.outs.length - 1];
+    if (tx.outs.length < 2 || toHex(marker.script) !== toHex(proposalMarker(proposal.hash)) || BigInt(marker.value) !== 0n) return null;
+    const nets = network ? [typeof network === "string" ? NETWORKS[network].network : (network.network ?? network)] : Object.values(NETWORKS).map((n) => n.network);
+    const pays = nets.some((n) => { try { return toHex(baddress.toOutputScript(canonicalAddress(proposal.destination), n)) === toHex(tx.outs[0].script); } catch { return false; } });
+    if (!pays) return null;
+    if (crowdlock && !isCosignerOf(crowdlock, record.lock?.cosigner_pubkey)) return null;
+  }
   // A lookup that fails is not an answer: read as "never paid", a payment on
   // its way could be overlooked and a reserve completed in its place, paying
   // twice. It comes back { unknown: true }, and the co-signer's screen won't

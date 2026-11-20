@@ -906,6 +906,12 @@ rule("MILESTONE 5: COMMITTING A LOCK TO A PURCHASE");
     const { commitmentPayment } = await import("../src/wallet/core.mjs");
     const settled = await commitmentPayment({ record: good, chain });
     check("…and as in a block; the dressed-up payment is no payment at all", settled?.confirmed === true && settled.sats === 100_000 && (await commitmentPayment({ record: fake, chain })) === null);
+    // Asked about a proposal, a payment counts only for the proposal it names and the seller it pays.
+    const forIt = await commitmentPayment({ record: good, chain, crowdlock: cl, proposal: appProposal, network: net });
+    const forOther = await commitmentPayment({ record: good, chain, crowdlock: cl, proposal: { ...appProposal, hash: "ab".repeat(32) }, network: net });
+    const toOther = await commitmentPayment({ record: good, chain, crowdlock: cl, proposal: { ...appProposal, destination: miner.address }, network: net });
+    check("A payment counts for the proposal it names, never for another, nor for a proposal paying someone else",
+      forIt?.sats === 100_000 && forOther === null && toOther === null, JSON.stringify([forIt, forOther, toOther]));
   }
   const P = await import("../../method/js/proposals.mjs");
   const { memberAddressForOwnerKey } = await import("../../method/js/verify.mjs");

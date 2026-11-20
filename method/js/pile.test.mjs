@@ -78,6 +78,9 @@ check("…one posted a minute before closing does, until the inbox has it", p.co
 // A destination taken off the list after a payment was made to it.
 p = await read([rec(0, "aa")], { results: { aa: { valid: false, reason: "destination not permitted: it was revoked" } }, payments: { aa: { sats: 40000, confirmed: true } } });
 check("A payment made before its destination was revoked still counts as paid", p.paid === 40000 && p.paidCount === 1 && p.refused.length === 0);
+// A rule brought in after a payment was made (the week after settling, 18 November).
+p = await read([rec(0, "aa")], { results: { aa: { valid: false, reason: "the lock opens before the proposal's settling ends, or within a week of it" } }, payments: { aa: { sats: 99085, confirmed: true } } });
+check("A payment made before a later rule still counts as paid", p.paid === 99085 && p.paidCount === 1 && p.refused.length === 0);
 p = await read([rec(0, "aa")], { results: { aa: { valid: false, reason: "destination not permitted: it was revoked" } } });
 check("…and a commitment to it never paid is refused, not counted", p.paid === 0 && p.count === 0 && p.refused.length === 1);
 
